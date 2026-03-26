@@ -62,7 +62,10 @@ def process_products(raw_bytes: bytes) -> pd.DataFrame:
     """Parse uploaded CSV bytes and return an optimised product DataFrame."""
     from io import BytesIO
 
-    df = pd.read_csv(BytesIO(raw_bytes), sep=';', skiprows=1)
+    try:
+        df = pd.read_csv(BytesIO(raw_bytes), sep=';', skiprows=1, encoding='utf-8')
+    except UnicodeDecodeError:
+        df = pd.read_csv(BytesIO(raw_bytes), sep=';', skiprows=1, encoding='latin-1')
 
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing:
