@@ -11,4 +11,4 @@ venv/
 *.xlsx
 
 # Streamlit specific
-.streamlit/
+.streamlit/__pycache__/
