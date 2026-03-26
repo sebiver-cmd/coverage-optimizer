@@ -79,7 +79,9 @@ def process_products(raw_bytes: bytes) -> pd.DataFrame:
     # Identify items needing adjustment
     needs_adjustment = (df['COVERAGE_RATE'] < MIN_COVERAGE_RATE) & (df['BUY_PRICE_NUM'] > 0)
 
-    # Calculate target EX VAT price for the minimum margin
+    # Calculate target EX VAT price for the minimum margin.
+    # beautify_price() rounds up afterwards, so the final margin will always
+    # be slightly above MIN_COVERAGE_RATE — this is intentional.
     df['NEW_PRICE_EX_VAT_NUM'] = df['PRICE_EX_VAT_NUM']
     df.loc[needs_adjustment, 'NEW_PRICE_EX_VAT_NUM'] = (
         df.loc[needs_adjustment, 'BUY_PRICE_NUM'] / MIN_COVERAGE_RATE
