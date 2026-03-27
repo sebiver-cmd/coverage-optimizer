@@ -343,12 +343,13 @@ class DanDomainClient:
                 )
         else:
             # --- base product price ------------------------------------
-            if product.Prices is None:
+            product_prices = getattr(product, "Prices", None)
+            if product_prices is None:
                 raise DanDomainAPIError(
                     f"Product '{product_number}' has no price structure; "
                     "cannot update price"
                 )
-            product.Prices.Amount = new_price
+            product_prices.Amount = new_price
 
         # --- cost / buy price ------------------------------------------
         if buy_price is not None:
@@ -413,7 +414,7 @@ class DanDomainClient:
                 results["success"] += 1
                 if progress_callback:
                     progress_callback(i + 1, total, pnum, True, "")
-            except (DanDomainAPIError, ValueError) as exc:
+            except (DanDomainAPIError, ValueError, AttributeError) as exc:
                 results["failed"] += 1
                 err = str(exc)
                 results["errors"].append({

@@ -790,7 +790,7 @@ if uploaded_file is not None:
                                 f"✅ Connected! Product count: "
                                 f"{info.get('product_count', 'N/A')}"
                             )
-                        except (DanDomainAPIError, ValueError) as exc:
+                        except (DanDomainAPIError, ValueError, AttributeError) as exc:
                             st.error(f"❌ Connection failed: {exc}")
 
                 # Push / simulate button
@@ -950,7 +950,7 @@ if uploaded_file is not None:
                                         hide_index=True,
                                     )
 
-                        except (DanDomainAPIError, ValueError) as exc:
+                        except (DanDomainAPIError, ValueError, AttributeError) as exc:
                             st.error(f"❌ Push failed: {exc}")
                         finally:
                             st.session_state.pop("_push_running", None)
