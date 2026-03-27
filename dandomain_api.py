@@ -297,7 +297,7 @@ class DanDomainClient:
             :class:`DanDomainAPIError` is raised so the caller can
             decide how to proceed.
         buy_price : float, optional
-            When provided the product's *BuyPrice* (cost price) is
+            When provided the product's *BuyingPrice* (cost price) is
             also updated.
         """
         if new_price is None and buy_price is None:
@@ -333,22 +333,22 @@ class DanDomainClient:
                 # Product genuinely has variants — locate the right one.
                 variant_updated = False
                 for var in variant_items:
-                    # Fallback order: VariantId → Id → ""
-                    var_id_attr = getattr(var, "VariantId", None)
+                    # Try ``Id`` first (per HostedShop schema), fall
+                    # back to ``VariantId``, default to empty string.
+                    var_id_attr = getattr(var, "Id", None)
                     if var_id_attr is None:
-                        var_id_attr = getattr(var, "Id", "")
+                        var_id_attr = getattr(var, "VariantId", "")
                     vid = str(var_id_attr)
                     if vid == str(variant_id):
-                        # Update the variant's own price node
-                        var_prices = getattr(var, "Prices", None)
-                        if var_prices is not None:
-                            var_prices.Amount = new_price
-                        else:
-                            # Some schemas expose the price directly
-                            if hasattr(var, "Price"):
-                                var.Price = new_price
-                            elif hasattr(var, "Amount"):
-                                var.Amount = new_price
+                        # Update the variant's own Price field
+                        # (per the HostedShop API schema the field
+                        # is ``Price``, not ``Prices.Amount``).
+                        if not hasattr(var, "Price"):
+                            raise DanDomainAPIError(
+                                f"Variant '{variant_id}' on product "
+                                f"'{product_number}' has no Price field"
+                            )
+                        var.Price = new_price
                         variant_updated = True
                         break
                 if not variant_updated:
@@ -359,19 +359,22 @@ class DanDomainClient:
             else:
                 # No variant_id supplied, or the product has no
                 # variant items — update the base product price.
-                product_prices = getattr(product, "Prices", None)
-                if product_prices is None:
+                # Per the HostedShop API schema the top-level field
+                # is ``Price`` (not ``Prices.Amount``).
+                if not hasattr(product, "Price"):
                     raise DanDomainAPIError(
-                        f"Product '{product_number}' has no price structure; "
+                        f"Product '{product_number}' has no Price field; "
                         "cannot update price"
                     )
-                product_prices.Amount = new_price
+                product.Price = new_price
 
         # --- cost / buy price ------------------------------------------
         if buy_price is not None:
             buy_price = self._validate_price(buy_price)
-            if hasattr(product, "BuyPrice"):
-                product.BuyPrice = buy_price
+            # Per the HostedShop API schema the field is ``BuyingPrice``
+            # (not ``BuyPrice``).
+            if hasattr(product, "BuyingPrice"):
+                product.BuyingPrice = buy_price
 
         result = self._call("Product_Update", ProductData=product)
         return {
