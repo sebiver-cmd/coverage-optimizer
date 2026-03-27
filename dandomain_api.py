@@ -133,9 +133,6 @@ class DanDomainClient:
         # --- HTTP session with security defaults ----------------------------
         self._session = requests.Session()
         self._session.verify = True        # always verify SSL certs
-        self._session.max_redirects = 0    # block redirects — the API key
-        #                                     is in the URL path and must not
-        #                                     leak via a 3xx redirect.
         self._session.headers.update({
             "Accept": "application/json",
             "Content-Type": "application/json",
@@ -192,10 +189,6 @@ class DanDomainClient:
             except requests.exceptions.SSLError:
                 raise DanDomainAPIError(
                     "SSL certificate verification failed"
-                )
-            except requests.exceptions.TooManyRedirects:
-                raise DanDomainAPIError(
-                    "Too many redirects — aborting to protect credentials"
                 )
             except requests.exceptions.ConnectionError:
                 last_error = "Connection failed — check the shop URL"
