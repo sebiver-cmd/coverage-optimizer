@@ -870,22 +870,21 @@ if uploaded_file is not None:
 
         # Show coverage rate change when cost adjustment is active
         if total:
-            # Calculate baseline coverage (without cost_pct) for comparison
+            # Baseline coverage: from original parsed data (no cost adjustment)
             base_ex_vat = parsed_df['PRICE_NUM'] / (1 + VAT_RATE)
             base_coverage = calc_coverage_rate(
                 parsed_df.assign(PRICE_EX_VAT_NUM=base_ex_vat),
                 'PRICE_EX_VAT_NUM', 'BUY_PRICE_NUM',
             )
             base_avg = (base_coverage * 100).mean()
-            # Current average coverage (after cost_pct)
-            adj_ex_vat = work_df['PRICE_NUM'] / (1 + VAT_RATE)
-            adj_buy = work_df['BUY_PRICE_NUM'] * (1 + cost_pct / 100) if cost_pct != 0 else work_df['BUY_PRICE_NUM']
-            adj_coverage = np.where(
-                adj_ex_vat > 0,
-                (adj_ex_vat - adj_buy) / adj_ex_vat,
-                0.0,
+            # Current avg coverage from optimize_prices output (COVERAGE_RATE_%)
+            cov_vals = (
+                final_df['COVERAGE_RATE_%']
+                .str.replace('%', '', regex=False)
+                .str.replace(',', '.', regex=False)
+                .astype(float)
             )
-            adj_avg = float(np.mean(adj_coverage) * 100)
+            adj_avg = float(cov_vals.mean())
             delta = adj_avg - base_avg
             mcol5.metric(
                 "Avg Coverage",
@@ -1076,10 +1075,11 @@ if uploaded_file is not None:
                         # Try to auto-detect currency from data
                         det_currency = 'EUR'
                         if detected['currency'] and detected['currency'] in sup_df.columns:
-                            first_val = sup_df[detected['currency']].dropna().iloc[0] if not sup_df[detected['currency']].dropna().empty else ''
-                            first_val = str(first_val).upper().strip()
-                            if first_val in DEFAULT_CURRENCY_RATES:
-                                det_currency = first_val
+                            cur_vals = sup_df[detected['currency']].dropna()
+                            if not cur_vals.empty:
+                                first_val = str(cur_vals.iloc[0]).upper().strip()
+                                if first_val in DEFAULT_CURRENCY_RATES:
+                                    det_currency = first_val
                         currency_list = list(DEFAULT_CURRENCY_RATES.keys())
                         sup_currency = st.selectbox(
                             "Source currency",
@@ -1214,12 +1214,8 @@ if uploaded_file is not None:
                                     'Product SKU': prod_sku,
                                     'Score': score,
                                     f'Price ({sup_currency})': round(
-                                        price_val / exchange_rate
-                                        * DEFAULT_CURRENCY_RATES.get(
-                                            sup_currency, 1.0
-                                        ),
-                                        2,
-                                    ) if disc_pct > 0 else price_val,
+                                        price_val, 2,
+                                    ),
                                     'Discount %': disc_pct if disc_pct > 0 else '',
                                     'Price (DKK)': round(price_dkk, 2),
                                     'Current Cost': round(current_cost, 2),
@@ -1286,9 +1282,13 @@ if uploaded_file is not None:
                                     if updated:
                                         # Persist edits so they survive
                                         # Streamlit re-runs
-                                        edits = st.session_state.get(
-                                            "_ed_all", {},
-                                        ).get("edited_rows", {})
+                                        if "_ed_all" not in st.session_state:
+                                            st.session_state["_ed_all"] = {
+                                                "edited_rows": {},
+                                            }
+                                        elif "edited_rows" not in st.session_state["_ed_all"]:
+                                            st.session_state["_ed_all"]["edited_rows"] = {}
+                                        edits = st.session_state["_ed_all"]["edited_rows"]
                                         for row in match_rows:
                                             prod_sku = row['_prod_sku']
                                             mask = (
@@ -1302,11 +1302,6 @@ if uploaded_file is not None:
                                                         '_new_cost'
                                                     ],
                                                 }
-                                        if "_ed_all" not in st.session_state:
-                                            st.session_state["_ed_all"] = {}
-                                        st.session_state["_ed_all"][
-                                            "edited_rows"
-                                        ] = edits
                                         st.success(
                                             f"✅ Updated cost prices for "
                                             f"{updated} product row(s). "
