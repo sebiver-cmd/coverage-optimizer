@@ -273,19 +273,20 @@ class DanDomainClient:
     def update_product_price(
         self,
         product_number: str,
-        new_price: float,
+        new_price: "float | None" = None,
         site_id: int = 1,
         variant_id: str = "",
         buy_price: "float | None" = None,
     ) -> dict:
-        """Update the sales price of a single product or variant.
+        """Update the sales price and/or cost price of a product or variant.
 
         Parameters
         ----------
         product_number : str
             Product SKU / item number.
-        new_price : float
-            New sales price **including VAT**.
+        new_price : float, optional
+            New sales price **including VAT**.  When ``None`` the sales
+            price is left unchanged — useful for buy-price-only updates.
         site_id : int
             Language / site ID (default ``1``).
         variant_id : str
@@ -299,57 +300,64 @@ class DanDomainClient:
             When provided the product's *BuyPrice* (cost price) is
             also updated.
         """
-        new_price = self._validate_price(new_price)
+        if new_price is None and buy_price is None:
+            raise ValueError(
+                "At least one of new_price or buy_price must be provided"
+            )
+
+        if new_price is not None:
+            new_price = self._validate_price(new_price)
 
         # Fetch the current product, update its price, and push it back
         product = self._get_product_by_number(product_number)
 
-        # --- variant-specific update -----------------------------------
-        if variant_id:
-            variant_updated = False
-            variants = getattr(product, "Variants", None)
-            if variants:
-                # Variants may be a list-like zeep structure
-                items = (
-                    variants
-                    if isinstance(variants, list)
-                    else getattr(variants, "ProductVariantData", variants)
-                )
-                if not isinstance(items, list):
-                    items = [items]
-                for var in items:
-                    # Fallback order: VariantId → Id → ""
-                    var_id_attr = getattr(var, "VariantId", None)
-                    if var_id_attr is None:
-                        var_id_attr = getattr(var, "Id", "")
-                    vid = str(var_id_attr)
-                    if vid == str(variant_id):
-                        # Update the variant's own price node
-                        var_prices = getattr(var, "Prices", None)
-                        if var_prices is not None:
-                            var_prices.Amount = new_price
-                        else:
-                            # Some schemas expose the price directly
-                            if hasattr(var, "Price"):
-                                var.Price = new_price
-                            elif hasattr(var, "Amount"):
-                                var.Amount = new_price
-                        variant_updated = True
-                        break
-            if not variant_updated:
-                raise DanDomainAPIError(
-                    f"Variant '{variant_id}' not found on product "
-                    f"'{product_number}'"
-                )
-        else:
-            # --- base product price ------------------------------------
-            product_prices = getattr(product, "Prices", None)
-            if product_prices is None:
-                raise DanDomainAPIError(
-                    f"Product '{product_number}' has no price structure; "
-                    "cannot update price"
-                )
-            product_prices.Amount = new_price
+        # --- sales price update (skipped when new_price is None) -------
+        if new_price is not None:
+            if variant_id:
+                variant_updated = False
+                variants = getattr(product, "Variants", None)
+                if variants:
+                    # Variants may be a list-like zeep structure
+                    items = (
+                        variants
+                        if isinstance(variants, list)
+                        else getattr(variants, "ProductVariantData", variants)
+                    )
+                    if not isinstance(items, list):
+                        items = [items]
+                    for var in items:
+                        # Fallback order: VariantId → Id → ""
+                        var_id_attr = getattr(var, "VariantId", None)
+                        if var_id_attr is None:
+                            var_id_attr = getattr(var, "Id", "")
+                        vid = str(var_id_attr)
+                        if vid == str(variant_id):
+                            # Update the variant's own price node
+                            var_prices = getattr(var, "Prices", None)
+                            if var_prices is not None:
+                                var_prices.Amount = new_price
+                            else:
+                                # Some schemas expose the price directly
+                                if hasattr(var, "Price"):
+                                    var.Price = new_price
+                                elif hasattr(var, "Amount"):
+                                    var.Amount = new_price
+                            variant_updated = True
+                            break
+                if not variant_updated:
+                    raise DanDomainAPIError(
+                        f"Variant '{variant_id}' not found on product "
+                        f"'{product_number}'"
+                    )
+            else:
+                # --- base product price --------------------------------
+                product_prices = getattr(product, "Prices", None)
+                if product_prices is None:
+                    raise DanDomainAPIError(
+                        f"Product '{product_number}' has no price structure; "
+                        "cannot update price"
+                    )
+                product_prices.Amount = new_price
 
         # --- cost / buy price ------------------------------------------
         if buy_price is not None:
@@ -402,7 +410,7 @@ class DanDomainClient:
         for i, update in enumerate(updates):
             pid = update.get("product_id", "")
             pnum = update.get("product_number", "")
-            price = update.get("new_price", 0)
+            price = update.get("new_price")
             vid = update.get("variant_id", "")
             buy = update.get("buy_price")
 
