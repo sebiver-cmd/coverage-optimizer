@@ -3,6 +3,13 @@ import pandas as pd
 import numpy as np
 import math
 
+# --- Page Configuration ---
+st.set_page_config(
+    page_title="Coverage Optimizer",
+    page_icon="📊",
+    layout="wide",
+)
+
 # --- Constants ---
 VAT_RATE = 0.25  # 25% Danish VAT
 MIN_COVERAGE_RATE = 0.50  # Minimum acceptable profit margin (50%)
@@ -18,6 +25,28 @@ EXPORT_COLUMNS = [
     'VARIANT_ID', 'VARIANT_TYPES',
     'NEW_PRICE_EX_VAT', 'NEW_PRICE', 'NEW_COVERAGE_RATE_%',
 ]
+ENCODING_OPTIONS = {
+    'Auto-detect': 'auto',
+    'UTF-8': 'utf-8',
+    'Latin-1 (ISO-8859-1)': 'latin-1',
+    'Windows-1252': 'cp1252',
+}
+
+
+def detect_encoding(raw_bytes: bytes) -> str:
+    """Detect the most likely encoding of *raw_bytes*.
+
+    Checks for a UTF-8 BOM first, then tries strict UTF-8 decoding.
+    Falls back to Windows-1252 which is a superset of Latin-1 and
+    covers all Danish characters (Æ, Ø, Å, æ, ø, å).
+    """
+    if raw_bytes.startswith(b'\xef\xbb\xbf'):
+        return 'utf-8-sig'
+    try:
+        raw_bytes.decode('utf-8')
+        return 'utf-8'
+    except UnicodeDecodeError:
+        return 'cp1252'
 
 
 def clean_price(price_str):
@@ -68,14 +97,14 @@ def calc_coverage_rate(df, price_col, buy_col):
 
 
 @st.cache_data
-def process_products(raw_bytes: bytes) -> pd.DataFrame:
+def process_products(raw_bytes: bytes, encoding: str = 'auto') -> tuple:
     """Parse uploaded CSV bytes and return an optimised product DataFrame."""
     from io import BytesIO
 
-    try:
-        df = pd.read_csv(BytesIO(raw_bytes), sep=';', skiprows=1, encoding='utf-8')
-    except UnicodeDecodeError:
-        df = pd.read_csv(BytesIO(raw_bytes), sep=';', skiprows=1, encoding='latin-1')
+    if encoding == 'auto':
+        encoding = detect_encoding(raw_bytes)
+
+    df = pd.read_csv(BytesIO(raw_bytes), sep=';', skiprows=1, encoding=encoding)
 
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing:
@@ -114,14 +143,14 @@ def process_products(raw_bytes: bytes) -> pd.DataFrame:
     # Format original price columns (keep PRICE as-is from CSV)
     df['PRICE_EX_VAT'] = df['PRICE_EX_VAT_NUM'].apply(format_dk)
     df['COVERAGE_RATE_%'] = (
-        (df['COVERAGE_RATE'] * 100).round(2).astype(str).str.replace('.', ',') + '%'
+        (df['COVERAGE_RATE'] * 100).round(2).astype(str).str.replace('.', ',', regex=False) + '%'
     )
 
     # Format new/adjusted price columns (placed at the end)
     df['NEW_PRICE'] = df['FINAL_PRICE_NUM'].apply(format_dk)
     df['NEW_PRICE_EX_VAT'] = df['FINAL_PRICE_EX_VAT'].apply(format_dk)
     df['NEW_COVERAGE_RATE_%'] = (
-        (df['FINAL_COVERAGE_RATE'] * 100).round(2).astype(str).str.replace('.', ',') + '%'
+        (df['FINAL_COVERAGE_RATE'] * 100).round(2).astype(str).str.replace('.', ',', regex=False) + '%'
     )
 
     # Preserve integer formatting for columns like VARIANT_TYPES
@@ -129,14 +158,37 @@ def process_products(raw_bytes: bytes) -> pd.DataFrame:
         if col in df.columns:
             df[col] = df[col].apply(format_int_col)
 
-    return df[EXPORT_COLUMNS], int(needs_adjustment.sum())
+    return df[EXPORT_COLUMNS], int(needs_adjustment.sum()), needs_adjustment.values
 
 
-# --- Streamlit UI ---
-st.title("Product Coverage Rate Optimizer 🚀")
-st.write(
-    "Upload your product CSV file to calculate coverage rates "
-    "and automatically adjust prices to hit at least a 50% margin."
+# --- Sidebar ---
+with st.sidebar:
+    st.header("⚙️ Settings")
+    encoding_label = st.selectbox(
+        "CSV file encoding",
+        options=list(ENCODING_OPTIONS.keys()),
+        index=0,
+        help=(
+            "Choose 'Auto-detect' to let the app guess the encoding, "
+            "or pick a specific one if Danish characters (Æ, Ø, Å) look wrong."
+        ),
+    )
+    selected_encoding = ENCODING_OPTIONS[encoding_label]
+
+    st.divider()
+    st.markdown(
+        "**Coverage Optimizer** v1.0\n\n"
+        "Calculates coverage rates and adjusts product prices to maintain "
+        f"at least a **{int(MIN_COVERAGE_RATE * 100)}%** profit margin. "
+        f"Prices are beautified to end in **{BEAUTIFY_LAST_DIGIT}**."
+    )
+
+# --- Main Content ---
+st.title("📊 Product Coverage Optimizer")
+st.markdown(
+    "Upload your product CSV to calculate coverage rates "
+    "and automatically adjust prices to hit at least a "
+    f"**{int(MIN_COVERAGE_RATE * 100)}%** margin."
 )
 
 uploaded_file = st.file_uploader("Upload Product CSV", type=['csv'])
@@ -144,22 +196,41 @@ uploaded_file = st.file_uploader("Upload Product CSV", type=['csv'])
 if uploaded_file is not None:
     try:
         raw_bytes = uploaded_file.getvalue()
-        final_df, adjusted_count = process_products(raw_bytes)
+        final_df, adjusted_count, adjusted_mask = process_products(
+            raw_bytes, selected_encoding,
+        )
     except ValueError as exc:
         st.error(str(exc))
     except Exception as exc:
         st.error(f"Failed to process CSV: {exc}")
     else:
-        st.success(
-            f"Successfully processed {len(final_df)} products! "
-            f"Adjusted prices for {adjusted_count} items."
-        )
-        st.dataframe(final_df.head(10))
+        # --- Summary Metrics ---
+        total = len(final_df)
+        unchanged = total - adjusted_count
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Products", f"{total:,}")
+        col2.metric("Prices Adjusted", f"{adjusted_count:,}")
+        col3.metric("Unchanged", f"{unchanged:,}")
 
-        csv_data = "PRODUCTS\n" + final_df.to_csv(sep=';', index=False)
+        # --- Data Tabs ---
+        tab_all, tab_adjusted = st.tabs(["All Products", "Adjusted Only"])
+
+        with tab_all:
+            st.dataframe(final_df, use_container_width=True)
+
+        with tab_adjusted:
+            adjusted_df = final_df[adjusted_mask]
+            if adjusted_df.empty:
+                st.info("No products needed price adjustment.")
+            else:
+                st.dataframe(adjusted_df, use_container_width=True)
+
+        # --- Download ---
+        st.divider()
+        csv_data = "\ufeff" + "PRODUCTS\n" + final_df.to_csv(sep=';', index=False)
         st.download_button(
-            label="Download Updated Products CSV",
+            label="📥 Download Updated Products CSV",
             data=csv_data.encode('utf-8'),
             file_name="updated_products.csv",
-            mime="text/csv",
+            mime="text/csv; charset=utf-8",
         )
