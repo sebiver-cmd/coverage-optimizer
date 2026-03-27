@@ -29,10 +29,10 @@ html, body, [class*="css"] {
 
 /* ---- Sidebar ---- */
 section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%);
+    background: linear-gradient(180deg, #E3F2FD 0%, #BBDEFB 100%);
 }
 section[data-testid="stSidebar"] * {
-    color: #cbd5e1 !important;
+    color: #0D47A1 !important;
 }
 section[data-testid="stSidebar"] .stSelectbox label,
 section[data-testid="stSidebar"] .stNumberInput label,
@@ -42,10 +42,10 @@ section[data-testid="stSidebar"] .stTextInput label {
     font-size: 0.82rem;
     letter-spacing: 0.03em;
     text-transform: uppercase;
-    color: #94a3b8 !important;
+    color: #1565C0 !important;
 }
 section[data-testid="stSidebar"] .stCaption {
-    color: #64748b !important;
+    color: #1976D2 !important;
     font-weight: 700;
     letter-spacing: 0.08em;
 }
@@ -53,27 +53,27 @@ section[data-testid="stSidebar"] .stCaption {
 /* ---- Metrics cards ---- */
 div[data-testid="stMetric"] {
     background: #ffffff;
-    border: 1px solid #e2e8f0;
+    border: 1px solid #B3E5FC;
     border-radius: 16px;
     padding: 1.25rem 1.5rem;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.03);
+    box-shadow: 0 1px 3px rgba(2,136,209,0.06), 0 4px 12px rgba(2,136,209,0.04);
     transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 div[data-testid="stMetric"]:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+    box-shadow: 0 4px 16px rgba(2,136,209,0.12);
 }
 div[data-testid="stMetric"] label {
     font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     font-weight: 600;
-    color: #64748b !important;
+    color: #546E7A !important;
 }
 div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
     font-weight: 700;
     font-size: 2rem;
-    color: #0f172a !important;
+    color: #01579B !important;
 }
 
 /* ---- Buttons ---- */
@@ -88,10 +88,10 @@ div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
 }
 .stButton > button:hover {
     transform: translateY(-1px);
-    box-shadow: 0 6px 20px rgba(67,97,238,0.20);
+    box-shadow: 0 6px 20px rgba(2,136,209,0.20);
 }
 .stButton > button[kind="primary"] {
-    background: linear-gradient(135deg, #4361ee 0%, #3730a3 100%);
+    background: linear-gradient(135deg, #29B6F6 0%, #0288D1 100%);
     color: #fff !important;
 }
 
@@ -100,29 +100,29 @@ div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
     border-radius: 10px;
     font-weight: 600;
     font-size: 0.88rem;
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    color: #334155 !important;
+    background: #E1F5FE;
+    border: 1px solid #B3E5FC;
+    color: #01579B !important;
     transition: all 0.15s ease;
 }
 .stDownloadButton > button:hover {
-    background: #f1f5f9;
-    border-color: #cbd5e1;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    background: #B3E5FC;
+    border-color: #81D4FA;
+    box-shadow: 0 2px 8px rgba(2,136,209,0.10);
 }
 
 /* ---- Expanders ---- */
 .streamlit-expanderHeader {
     font-weight: 600;
     font-size: 0.95rem;
-    color: #1e293b;
+    color: #01579B;
     border-radius: 12px;
 }
 
 /* ---- Tabs ---- */
 .stTabs [data-baseweb="tab-list"] {
     gap: 0.25rem;
-    background: #f8fafc;
+    background: #E1F5FE;
     border-radius: 12px;
     padding: 0.25rem;
 }
@@ -131,47 +131,47 @@ div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
     font-weight: 600;
     font-size: 0.88rem;
     padding: 0.5rem 1.5rem;
-    color: #64748b;
+    color: #546E7A;
     transition: all 0.15s ease;
 }
 .stTabs [data-baseweb="tab"][aria-selected="true"] {
     background: #ffffff !important;
-    color: #0f172a !important;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    color: #01579B !important;
+    box-shadow: 0 1px 3px rgba(2,136,209,0.12);
 }
 
 /* ---- Dataframes ---- */
 .stDataFrame {
     border-radius: 12px;
     overflow: hidden;
-    border: 1px solid #e2e8f0;
+    border: 1px solid #B3E5FC;
 }
 
 /* ---- Dividers ---- */
 hr {
     border: none;
-    border-top: 1px solid #e2e8f0;
+    border-top: 1px solid #B3E5FC;
     margin: 2rem 0;
 }
 
 /* ---- File uploader ---- */
 section[data-testid="stFileUploader"] {
-    border: 2px dashed #cbd5e1;
+    border: 2px dashed #81D4FA;
     border-radius: 16px;
     padding: 1rem;
-    background: #f8fafc;
+    background: #E1F5FE;
     transition: all 0.2s ease;
 }
 section[data-testid="stFileUploader"]:hover {
-    border-color: #4361ee;
-    background: #eff6ff;
+    border-color: #0288D1;
+    background: #B3E5FC;
 }
 
 /* ---- Section headers ---- */
 .section-header {
     font-size: 1.15rem;
     font-weight: 700;
-    color: #0f172a;
+    color: #01579B;
     margin-bottom: 0.75rem;
     display: flex;
     align-items: center;
@@ -199,41 +199,41 @@ section[data-testid="stFileUploader"]:hover {
     letter-spacing: 0.03em;
 }
 .status-pill.live { background: #fee2e2; color: #991b1b; }
-.status-pill.dry  { background: #dbeafe; color: #1e40af; }
+.status-pill.dry  { background: #B3E5FC; color: #01579B; }
 
 /* ---- Hero header ---- */
 .hero-header {
     margin-bottom: 0.25rem;
     font-size: 2rem;
     font-weight: 800;
-    color: #0f172a;
+    color: #01579B;
     letter-spacing: -0.02em;
 }
 .hero-sub {
-    color: #64748b;
+    color: #546E7A;
     margin-top: 0;
     font-size: 1.05rem;
     line-height: 1.5;
     max-width: 700px;
 }
-.hero-sub strong { color: #4361ee; }
+.hero-sub strong { color: #0288D1; }
 
 /* ---- Info cards ---- */
 .info-card {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
+    background: #E1F5FE;
+    border: 1px solid #B3E5FC;
     border-radius: 14px;
     padding: 1.25rem 1.5rem;
     margin-bottom: 0.75rem;
 }
 .info-card h4 {
     margin: 0 0 0.4rem 0;
-    color: #0f172a;
+    color: #01579B;
     font-size: 0.95rem;
 }
 .info-card p {
     margin: 0;
-    color: #64748b;
+    color: #546E7A;
     font-size: 0.88rem;
     line-height: 1.5;
 }
@@ -245,7 +245,7 @@ section[data-testid="stFileUploader"]:hover {
     font-size: 0.72rem;
     padding: 0.5rem;
     border-radius: 8px;
-    background: rgba(255,255,255,0.05);
+    background: rgba(2,136,209,0.08);
 }
 </style>
 """, unsafe_allow_html=True)
@@ -555,7 +555,7 @@ with st.sidebar:
     st.divider()
     st.markdown(
         '<div class="version-badge">'
-        "Coverage Optimizer v1.3<br>"
+        "Coverage Optimizer v1.4<br>"
         f"Min margin {int(MIN_COVERAGE_RATE * 100)}% · "
         f"Prices end in {BEAUTIFY_LAST_DIGIT}"
         "</div>",
@@ -587,43 +587,31 @@ if uploaded_file is not None:
     except Exception as exc:
         st.error(f"Failed to process CSV: {exc}")
     else:
-        # --- Per-line BUY_PRICE editing ---
-        with st.expander("✏️ BUY_PRICE – Per-Line Adjustment", expanded=False):
-            st.caption(
-                "Edit individual BUY_PRICE values to cross-check with "
-                "current supplier cost prices. Changes are reflected in "
-                "the coverage calculation below."
-            )
-            edit_cols = ['PRODUCT_ID', 'TITLE_DK', 'NUMBER',
-                         'BUY_PRICE_NUM', 'PRICE_NUM']
-            edit_df = parsed_df[edit_cols].copy()
-            edit_df = edit_df.rename(columns={
-                'BUY_PRICE_NUM': 'BUY_PRICE',
-                'PRICE_NUM': 'PRICE (ref)',
-            })
-            edited = st.data_editor(
-                edit_df,
-                disabled=['PRODUCT_ID', 'TITLE_DK', 'NUMBER', 'PRICE (ref)'],
-                column_config={
-                    "BUY_PRICE": st.column_config.NumberColumn(
-                        "BUY_PRICE",
-                        help="Cost price – edit to match current supplier price",
-                        format="%.2f",
-                        min_value=0.0,
-                    ),
-                    "PRICE (ref)": st.column_config.NumberColumn(
-                        "PRICE (ref)",
-                        help="Current sales price (read-only reference)",
-                        format="%.2f",
-                    ),
-                },
-                use_container_width=True,
-                hide_index=True,
-            )
-
-        # Apply edited buy prices (use index-based assignment to keep alignment)
+        # --- Apply persisted BUY_PRICE edits from data-editor state ---
         work_df = parsed_df.copy()
-        work_df['BUY_PRICE_NUM'] = edited['BUY_PRICE']
+        for key in ("_ed_all", "_ed_adj", "_ed_imp"):
+            for row_str, changes in (
+                st.session_state.get(key, {}).get("edited_rows", {}).items()
+            ):
+                if "BUY_PRICE" not in changes:
+                    continue
+                row_idx = int(row_str)
+                # For filtered editors the positional index must be
+                # mapped back to the original DataFrame index.
+                if key == "_ed_adj" and "_adj_index_map" in st.session_state:
+                    idx_map = st.session_state["_adj_index_map"]
+                    if row_idx < len(idx_map):
+                        row_idx = idx_map[row_idx]
+                    else:
+                        continue
+                if key == "_ed_imp" and "_imp_index_map" in st.session_state:
+                    idx_map = st.session_state["_imp_index_map"]
+                    if row_idx < len(idx_map):
+                        row_idx = idx_map[row_idx]
+                    else:
+                        continue
+                if row_idx in work_df.index:
+                    work_df.at[row_idx, 'BUY_PRICE_NUM'] = changes["BUY_PRICE"]
 
         final_df, adjusted_count, adjusted_mask, import_df = optimize_prices(
             work_df, price_pct, original_buy_prices=parsed_df['BUY_PRICE_NUM'],
@@ -642,6 +630,24 @@ if uploaded_file is not None:
         st.markdown("")
 
         # --- Data Tabs ---
+        # Build display DataFrames with a numeric BUY_PRICE column
+        # so that the data editor can provide inline editing.
+        _buy_price_col = "BUY_PRICE"
+        _display_all = final_df.copy()
+        _display_all[_buy_price_col] = work_df['BUY_PRICE_NUM']
+
+        _disabled_cols = [
+            c for c in _display_all.columns if c != _buy_price_col
+        ]
+        _col_config = {
+            _buy_price_col: st.column_config.NumberColumn(
+                "BUY_PRICE",
+                help="Cost price – edit to match current supplier price",
+                format="%.2f",
+                min_value=0.0,
+            ),
+        }
+
         tab_all, tab_adjusted, tab_import = st.tabs([
             "📋 All Products",
             "⚡ Adjusted Only",
@@ -649,20 +655,42 @@ if uploaded_file is not None:
         ])
 
         with tab_all:
-            st.dataframe(final_df, use_container_width=True, hide_index=True)
+            st.data_editor(
+                _display_all,
+                disabled=_disabled_cols,
+                column_config=_col_config,
+                use_container_width=True,
+                hide_index=True,
+                key="_ed_all",
+            )
 
         with tab_adjusted:
-            adjusted_df = final_df[adjusted_mask]
-            if adjusted_df.empty:
+            _display_adj = _display_all[adjusted_mask].reset_index(drop=True)
+            # Store the original-index mapping so edits can be applied
+            st.session_state["_adj_index_map"] = list(
+                _display_all.index[adjusted_mask]
+            )
+            if _display_adj.empty:
                 st.info("✅ All products already meet the minimum margin — no adjustments needed.")
             else:
-                st.dataframe(adjusted_df, use_container_width=True, hide_index=True)
+                st.data_editor(
+                    _display_adj,
+                    disabled=_disabled_cols,
+                    column_config=_col_config,
+                    use_container_width=True,
+                    hide_index=True,
+                    key="_ed_adj",
+                )
 
         with tab_import:
             if import_df.empty:
                 st.info("✅ No products needed adjustment — nothing to import.")
             else:
-                adjusted_full = final_df[adjusted_mask]
+                adjusted_full = _display_all[adjusted_mask]
+                # Store the original-index mapping for import preview edits
+                st.session_state["_imp_index_map"] = list(
+                    _display_all.index[adjusted_mask]
+                )
                 st.markdown(
                     f"**{adjusted_count}** product"
                     f"{'s' if adjusted_count != 1 else ''} "
@@ -674,6 +702,7 @@ if uploaded_file is not None:
                     'Product ID': adjusted_full['PRODUCT_ID'].values,
                     'Title': adjusted_full['TITLE_DK'].values,
                     'Number': adjusted_full['NUMBER'].values,
+                    'BUY_PRICE': adjusted_full[_buy_price_col].values,
                     'Variant ID': adjusted_full['VARIANT_ID'].values,
                     'Variant Types': adjusted_full['VARIANT_TYPES'].values,
                     'Old Price': adjusted_full['PRICE'].values,
@@ -681,14 +710,24 @@ if uploaded_file is not None:
                     'Old Coverage': adjusted_full['COVERAGE_RATE_%'].values,
                     'New Coverage': adjusted_full['NEW_COVERAGE_RATE_%'].values,
                 })
-                st.dataframe(
+                st.data_editor(
                     preview_df,
+                    disabled=[
+                        c for c in preview_df.columns if c != _buy_price_col
+                    ],
                     use_container_width=True,
                     hide_index=True,
+                    key="_ed_imp",
                     column_config={
                         'Product ID': st.column_config.TextColumn(width='small'),
                         'Title': st.column_config.TextColumn(width='medium'),
                         'Number': st.column_config.TextColumn(width='small'),
+                        _buy_price_col: st.column_config.NumberColumn(
+                            "BUY_PRICE",
+                            help="Cost price – edit to match current supplier price",
+                            format="%.2f",
+                            min_value=0.0,
+                        ),
                         'Variant ID': st.column_config.TextColumn(width='small'),
                         'Variant Types': st.column_config.TextColumn(width='small'),
                         'Old Price': st.column_config.TextColumn(
