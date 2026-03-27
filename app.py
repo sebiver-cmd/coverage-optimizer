@@ -16,109 +16,162 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------------------------
-# Custom CSS — modern, professional theme
+# Custom CSS — modern, polished UI theme
 # ---------------------------------------------------------------------------
 st.markdown("""
 <style>
 /* ---- Global ---- */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+html, body, [class*="css"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+                 Roboto, sans-serif;
+}
+
+/* ---- Sidebar ---- */
 section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+    background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%);
 }
 section[data-testid="stSidebar"] * {
-    color: #e0e0e0 !important;
+    color: #cbd5e1 !important;
 }
 section[data-testid="stSidebar"] .stSelectbox label,
 section[data-testid="stSidebar"] .stNumberInput label,
 section[data-testid="stSidebar"] .stCheckbox label,
 section[data-testid="stSidebar"] .stTextInput label {
     font-weight: 600;
-    font-size: 0.85rem;
-    letter-spacing: 0.02em;
+    font-size: 0.82rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: #94a3b8 !important;
+}
+section[data-testid="stSidebar"] .stCaption {
+    color: #64748b !important;
+    font-weight: 700;
+    letter-spacing: 0.08em;
 }
 
-/* ---- Metrics ---- */
+/* ---- Metrics cards ---- */
 div[data-testid="stMetric"] {
-    background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
-    border: 1px solid #e9ecef;
-    border-radius: 12px;
-    padding: 1rem 1.25rem;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    padding: 1.25rem 1.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.03);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+div[data-testid="stMetric"]:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.08);
 }
 div[data-testid="stMetric"] label {
-    font-size: 0.8rem;
+    font-size: 0.72rem;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: #6c757d !important;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+    color: #64748b !important;
 }
 div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
     font-weight: 700;
-    font-size: 1.8rem;
-    color: #212529 !important;
+    font-size: 2rem;
+    color: #0f172a !important;
 }
 
 /* ---- Buttons ---- */
 .stButton > button {
-    border-radius: 8px;
+    border-radius: 10px;
     font-weight: 600;
+    font-size: 0.88rem;
     letter-spacing: 0.02em;
-    transition: all 0.15s ease;
+    padding: 0.6rem 1.25rem;
+    transition: all 0.2s cubic-bezier(.4,0,.2,1);
+    border: 1px solid transparent;
 }
 .stButton > button:hover {
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.10);
+    box-shadow: 0 6px 20px rgba(67,97,238,0.20);
+}
+.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, #4361ee 0%, #3730a3 100%);
+    color: #fff !important;
 }
 
 /* ---- Download buttons ---- */
 .stDownloadButton > button {
-    border-radius: 8px;
+    border-radius: 10px;
     font-weight: 600;
+    font-size: 0.88rem;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    color: #334155 !important;
+    transition: all 0.15s ease;
+}
+.stDownloadButton > button:hover {
+    background: #f1f5f9;
+    border-color: #cbd5e1;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
 }
 
 /* ---- Expanders ---- */
 .streamlit-expanderHeader {
     font-weight: 600;
     font-size: 0.95rem;
+    color: #1e293b;
+    border-radius: 12px;
 }
 
 /* ---- Tabs ---- */
 .stTabs [data-baseweb="tab-list"] {
-    gap: 0.5rem;
+    gap: 0.25rem;
+    background: #f8fafc;
+    border-radius: 12px;
+    padding: 0.25rem;
 }
 .stTabs [data-baseweb="tab"] {
-    border-radius: 8px 8px 0 0;
+    border-radius: 10px;
     font-weight: 600;
-    padding: 0.5rem 1.25rem;
+    font-size: 0.88rem;
+    padding: 0.5rem 1.5rem;
+    color: #64748b;
+    transition: all 0.15s ease;
+}
+.stTabs [data-baseweb="tab"][aria-selected="true"] {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
 }
 
 /* ---- Dataframes ---- */
 .stDataFrame {
-    border-radius: 8px;
+    border-radius: 12px;
     overflow: hidden;
+    border: 1px solid #e2e8f0;
 }
 
 /* ---- Dividers ---- */
 hr {
     border: none;
-    border-top: 1px solid #e9ecef;
-    margin: 1.5rem 0;
+    border-top: 1px solid #e2e8f0;
+    margin: 2rem 0;
 }
 
 /* ---- File uploader ---- */
 section[data-testid="stFileUploader"] {
-    border: 2px dashed #dee2e6;
-    border-radius: 12px;
-    padding: 0.5rem;
-    transition: border-color 0.15s ease;
+    border: 2px dashed #cbd5e1;
+    border-radius: 16px;
+    padding: 1rem;
+    background: #f8fafc;
+    transition: all 0.2s ease;
 }
 section[data-testid="stFileUploader"]:hover {
     border-color: #4361ee;
+    background: #eff6ff;
 }
 
 /* ---- Section headers ---- */
 .section-header {
-    font-size: 1.1rem;
+    font-size: 1.15rem;
     font-weight: 700;
-    color: #212529;
+    color: #0f172a;
     margin-bottom: 0.75rem;
     display: flex;
     align-items: center;
@@ -127,13 +180,73 @@ section[data-testid="stFileUploader"]:hover {
 
 /* ---- Confirmation banner ---- */
 .confirm-banner {
-    background: #fff3cd;
-    border: 1px solid #ffc107;
-    border-radius: 10px;
-    padding: 1rem 1.25rem;
+    background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+    border: 1px solid #f59e0b;
+    border-left: 4px solid #f59e0b;
+    border-radius: 12px;
+    padding: 1.25rem 1.5rem;
     margin-bottom: 1rem;
 }
-.confirm-banner strong { color: #856404; }
+.confirm-banner strong { color: #92400e; }
+
+/* ---- Status pill ---- */
+.status-pill {
+    display: inline-block;
+    padding: 0.2rem 0.75rem;
+    border-radius: 20px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+}
+.status-pill.live { background: #fee2e2; color: #991b1b; }
+.status-pill.dry  { background: #dbeafe; color: #1e40af; }
+
+/* ---- Hero header ---- */
+.hero-header {
+    margin-bottom: 0.25rem;
+    font-size: 2rem;
+    font-weight: 800;
+    color: #0f172a;
+    letter-spacing: -0.02em;
+}
+.hero-sub {
+    color: #64748b;
+    margin-top: 0;
+    font-size: 1.05rem;
+    line-height: 1.5;
+    max-width: 700px;
+}
+.hero-sub strong { color: #4361ee; }
+
+/* ---- Info cards ---- */
+.info-card {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 14px;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 0.75rem;
+}
+.info-card h4 {
+    margin: 0 0 0.4rem 0;
+    color: #0f172a;
+    font-size: 0.95rem;
+}
+.info-card p {
+    margin: 0;
+    color: #64748b;
+    font-size: 0.88rem;
+    line-height: 1.5;
+}
+
+/* ---- Sidebar version badge ---- */
+.version-badge {
+    text-align: center;
+    opacity: 0.7;
+    font-size: 0.72rem;
+    padding: 0.5rem;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.05);
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -327,7 +440,7 @@ def optimize_prices(df: pd.DataFrame, price_pct: float = 0.0) -> tuple:
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
 
-    st.caption("FILE IMPORT")
+    st.caption("📁 FILE IMPORT")
     encoding_label = st.selectbox(
         "CSV file encoding",
         options=list(ENCODING_OPTIONS.keys()),
@@ -340,7 +453,7 @@ with st.sidebar:
     selected_encoding = ENCODING_OPTIONS[encoding_label]
 
     st.divider()
-    st.caption("PRICE RULES")
+    st.caption("💰 PRICE RULES")
     price_pct = st.number_input(
         "Adjust PRICE (%)",
         min_value=-50.0,
@@ -365,7 +478,7 @@ with st.sidebar:
 
     # --- DanDomain API Settings ---
     st.divider()
-    st.caption("API CONNECTION")
+    st.caption("🔌 API CONNECTION")
 
     # Credential loading priority: secrets.toml > env var > sidebar input
     try:
@@ -417,8 +530,8 @@ with st.sidebar:
 
     st.divider()
     st.markdown(
-        "<div style='text-align:center;opacity:0.6;font-size:0.78rem;'>"
-        "Coverage Optimizer v1.2<br>"
+        '<div class="version-badge">'
+        "Coverage Optimizer v1.3<br>"
         f"Min margin {int(MIN_COVERAGE_RATE * 100)}% · "
         f"Prices end in {BEAUTIFY_LAST_DIGIT}"
         "</div>",
@@ -427,13 +540,14 @@ with st.sidebar:
 
 # --- Main Content ---
 st.markdown(
-    "<h1 style='margin-bottom:0.2rem;'>📊 Product Coverage Optimizer</h1>",
+    '<h1 class="hero-header">📊 Product Coverage Optimizer</h1>',
     unsafe_allow_html=True,
 )
 st.markdown(
-    f"<p style='color:#6c757d;margin-top:0;font-size:1.05rem;'>"
-    f"Upload your product CSV to calculate coverage rates and adjust prices "
-    f"to at least a <strong>{int(MIN_COVERAGE_RATE * 100)}%</strong> margin."
+    f'<p class="hero-sub">'
+    f"Upload your product CSV to calculate coverage rates and automatically "
+    f"adjust prices to at least a <strong>{int(MIN_COVERAGE_RATE * 100)}%</strong> "
+    f"profit margin. Variant-aware — handles products with multiple variants correctly."
     f"</p>",
     unsafe_allow_html=True,
 )
@@ -494,30 +608,84 @@ if uploaded_file is not None:
         # --- Summary Metrics ---
         total = len(final_df)
         unchanged = total - adjusted_count
-        st.markdown("")  # spacing
-        col1, col2, col3 = st.columns(3)
+        st.markdown("")
+        col1, col2, col3, col4 = st.columns(4)
         col1.metric("Total Products", f"{total:,}")
         col2.metric("Prices Adjusted", f"{adjusted_count:,}")
         col3.metric("Unchanged", f"{unchanged:,}")
-        st.markdown("")  # spacing
+        adj_pct = (adjusted_count / total * 100) if total else 0
+        col4.metric("Adjusted %", f"{adj_pct:.1f}%")
+        st.markdown("")
 
         # --- Data Tabs ---
-        tab_all, tab_adjusted = st.tabs(["All Products", "Adjusted Only"])
+        tab_all, tab_adjusted, tab_import = st.tabs([
+            "📋 All Products",
+            "⚡ Adjusted Only",
+            "📦 Import Preview",
+        ])
 
         with tab_all:
-            st.dataframe(final_df, use_container_width=True)
+            st.dataframe(final_df, use_container_width=True, hide_index=True)
 
         with tab_adjusted:
             adjusted_df = final_df[adjusted_mask]
             if adjusted_df.empty:
-                st.info("No products needed price adjustment.")
+                st.info("✅ All products already meet the minimum margin — no adjustments needed.")
             else:
-                st.dataframe(adjusted_df, use_container_width=True)
+                st.dataframe(adjusted_df, use_container_width=True, hide_index=True)
+
+        with tab_import:
+            if import_df.empty:
+                st.info("✅ No products needed adjustment — nothing to import.")
+            else:
+                adjusted_full = final_df[adjusted_mask]
+                st.markdown(
+                    f"**{adjusted_count}** product"
+                    f"{'s' if adjusted_count != 1 else ''} "
+                    "will be included in the import file. "
+                    "Variant ID and Variant Types are included to ensure "
+                    "the correct product/variant is targeted."
+                )
+                preview_df = pd.DataFrame({
+                    'Product ID': adjusted_full['PRODUCT_ID'].values,
+                    'Title': adjusted_full['TITLE_DK'].values,
+                    'Number': adjusted_full['NUMBER'].values,
+                    'Variant ID': adjusted_full['VARIANT_ID'].values,
+                    'Variant Types': adjusted_full['VARIANT_TYPES'].values,
+                    'Old Price': adjusted_full['PRICE'].values,
+                    'New Price': adjusted_full['NEW_PRICE'].values,
+                    'Old Coverage': adjusted_full['COVERAGE_RATE_%'].values,
+                    'New Coverage': adjusted_full['NEW_COVERAGE_RATE_%'].values,
+                })
+                st.dataframe(
+                    preview_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        'Product ID': st.column_config.TextColumn(width='small'),
+                        'Title': st.column_config.TextColumn(width='medium'),
+                        'Number': st.column_config.TextColumn(width='small'),
+                        'Variant ID': st.column_config.TextColumn(width='small'),
+                        'Variant Types': st.column_config.TextColumn(width='small'),
+                        'Old Price': st.column_config.TextColumn(
+                            'Old Price 💰', width='small',
+                        ),
+                        'New Price': st.column_config.TextColumn(
+                            'New Price ✅', width='small',
+                        ),
+                        'Old Coverage': st.column_config.TextColumn(
+                            'Old Coverage', width='small',
+                        ),
+                        'New Coverage': st.column_config.TextColumn(
+                            'New Coverage ✅', width='small',
+                        ),
+                    },
+                )
 
         # --- Downloads ---
         st.divider()
         st.markdown(
-            '<div class="section-header">📥 Downloads</div>',
+            '<div class="section-header">📥 Download Reports</div>',
             unsafe_allow_html=True,
         )
         dl_col1, dl_col2 = st.columns(2)
@@ -560,47 +728,6 @@ if uploaded_file is not None:
                     mime="text/csv; charset=utf-8",
                 )
 
-        # --- Import Preview ---
-        if not import_df.empty:
-            adjusted_full = final_df[adjusted_mask]
-            with st.expander(
-                f"🔍 Preview Import Changes ({adjusted_count} product"
-                f"{'s' if adjusted_count != 1 else ''})",
-                expanded=False,
-            ):
-                preview_df = pd.DataFrame({
-                    'Product ID': adjusted_full['PRODUCT_ID'].values,
-                    'Title': adjusted_full['TITLE_DK'].values,
-                    'Number': adjusted_full['NUMBER'].values,
-                    'Old Price': adjusted_full['PRICE'].values,
-                    'New Price': adjusted_full['NEW_PRICE'].values,
-                    'Old Coverage': adjusted_full['COVERAGE_RATE_%'].values,
-                    'New Coverage': adjusted_full['NEW_COVERAGE_RATE_%'].values,
-                })
-
-                st.dataframe(
-                    preview_df,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        'Product ID': st.column_config.TextColumn(width='small'),
-                        'Title': st.column_config.TextColumn(width='medium'),
-                        'Number': st.column_config.TextColumn(width='small'),
-                        'Old Price': st.column_config.TextColumn(
-                            'Old Price 💰', width='small',
-                        ),
-                        'New Price': st.column_config.TextColumn(
-                            'New Price ✅', width='small',
-                        ),
-                        'Old Coverage': st.column_config.TextColumn(
-                            'Old Coverage', width='small',
-                        ),
-                        'New Coverage': st.column_config.TextColumn(
-                            'New Coverage ✅', width='small',
-                        ),
-                    },
-                )
-
         # --- Push to Shop via API ---
         if not import_df.empty:
             st.divider()
@@ -610,17 +737,30 @@ if uploaded_file is not None:
             )
 
             if not api_ready:
-                st.info(
-                    "Configure your DanDomain API credentials in the "
-                    "sidebar to enable direct price updates."
+                st.markdown(
+                    '<div class="info-card">'
+                    "<h4>🔌 API Not Connected</h4>"
+                    "<p>Configure your DanDomain API credentials in the sidebar "
+                    "to enable direct price updates to your live webshop.</p>"
+                    "</div>",
+                    unsafe_allow_html=True,
                 )
             else:
-                mode_label = "dry-run" if dry_run else "**LIVE**"
+                mode_pill = (
+                    '<span class="status-pill dry">🧪 DRY-RUN</span>'
+                    if dry_run
+                    else '<span class="status-pill live">⚡ LIVE</span>'
+                )
                 st.markdown(
-                    f"**{adjusted_count}** product"
-                    f"{'s' if adjusted_count != 1 else ''} "
-                    f"will be updated via **SOAP** API "
-                    f"({mode_label})."
+                    f'<div class="info-card">'
+                    f"<h4>{mode_pill} &nbsp; "
+                    f"{adjusted_count} product"
+                    f"{'s' if adjusted_count != 1 else ''} queued</h4>"
+                    f"<p>Prices will be pushed via the <strong>SOAP API</strong>. "
+                    f"Variant ID and Variant Types are included to ensure "
+                    f"the correct product/variant is updated.</p>"
+                    f"</div>",
+                    unsafe_allow_html=True,
                 )
 
                 # Connection test
@@ -654,10 +794,14 @@ if uploaded_file is not None:
                         pnum = str(row['NUMBER']).strip()
                         new_price_str = str(row['NEW_PRICE'])
                         new_price_val = clean_price(new_price_str)
+                        vid = str(row.get('VARIANT_ID', '')).strip()
+                        vtypes = str(row.get('VARIANT_TYPES', '')).strip()
                         if pnum and new_price_val > 0:
                             updates.append({
                                 "product_number": pnum,
                                 "new_price": new_price_val,
+                                "variant_id": vid,
+                                "variant_types": vtypes,
                             })
 
                     if not updates:
@@ -669,7 +813,10 @@ if uploaded_file is not None:
                             "sidebar to push for real."
                         )
                         dry_df = pd.DataFrame(updates)
-                        dry_df.columns = ['Product Number', 'New Price']
+                        dry_df.columns = [
+                            'Product Number', 'New Price',
+                            'Variant ID', 'Variant Types',
+                        ]
                         st.dataframe(dry_df, use_container_width=True, hide_index=True)
                     else:
                         # --- Two-step confirmation for live push --------
@@ -722,12 +869,19 @@ if uploaded_file is not None:
                                 idx / total,
                                 text=f"Updating {idx}/{total}: {pnum}",
                             )
-                            log_entries.append({
+                            # Include variant info in the log entry
+                            entry = {
                                 "product_number": pnum,
                                 "status": "✅" if ok else "❌",
                                 "error": err,
                                 "timestamp": time.strftime("%H:%M:%S"),
-                            })
+                            }
+                            # Attach variant details from the update payload
+                            if idx - 1 < len(pending_updates):
+                                u = pending_updates[idx - 1]
+                                entry["variant_id"] = u.get("variant_id", "")
+                                entry["variant_types"] = u.get("variant_types", "")
+                            log_entries.append(entry)
 
                         try:
                             with DanDomainClient(api_username, api_password) as client:

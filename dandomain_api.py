@@ -275,8 +275,9 @@ class DanDomainClient:
         product_number: str,
         new_price: float,
         site_id: int = 1,
+        variant_id: str = "",
     ) -> dict:
-        """Update the sales price of a single product.
+        """Update the sales price of a single product or variant.
 
         Parameters
         ----------
@@ -286,22 +287,68 @@ class DanDomainClient:
             New sales price **including VAT**.
         site_id : int
             Language / site ID (default ``1``).
+        variant_id : str
+            Optional variant ID.  When provided the method tries to
+            locate the matching variant inside the product object and
+            update **its** price instead of the base product price.
+            If the variant cannot be found a
+            :class:`DanDomainAPIError` is raised so the caller can
+            decide how to proceed.
         """
         new_price = self._validate_price(new_price)
 
         # Fetch the current product, update its price, and push it back
         product = self._get_product_by_number(product_number)
 
-        # Set the new sales price — guard against a missing Prices node
-        if product.Prices is None:
-            raise DanDomainAPIError(
-                f"Product '{product_number}' has no price structure; "
-                "cannot update price"
-            )
-        product.Prices.Amount = new_price
+        # --- variant-specific update -----------------------------------
+        if variant_id:
+            variant_updated = False
+            variants = getattr(product, "Variants", None)
+            if variants:
+                # Variants may be a list-like zeep structure
+                items = (
+                    variants
+                    if isinstance(variants, list)
+                    else getattr(variants, "ProductVariantData", variants)
+                )
+                if not isinstance(items, list):
+                    items = [items]
+                for var in items:
+                    vid = str(getattr(var, "VariantId", getattr(var, "Id", "")))
+                    if vid == str(variant_id):
+                        # Update the variant's own price node
+                        var_prices = getattr(var, "Prices", None)
+                        if var_prices is not None:
+                            var_prices.Amount = new_price
+                        else:
+                            # Some schemas expose the price directly
+                            if hasattr(var, "Price"):
+                                var.Price = new_price
+                            elif hasattr(var, "Amount"):
+                                var.Amount = new_price
+                        variant_updated = True
+                        break
+            if not variant_updated:
+                raise DanDomainAPIError(
+                    f"Variant '{variant_id}' not found on product "
+                    f"'{product_number}'"
+                )
+        else:
+            # --- base product price ------------------------------------
+            if product.Prices is None:
+                raise DanDomainAPIError(
+                    f"Product '{product_number}' has no price structure; "
+                    "cannot update price"
+                )
+            product.Prices.Amount = new_price
 
         result = self._call("Product_Update", ProductData=product)
-        return {"updated": True, "product_number": product_number, "result": result}
+        return {
+            "updated": True,
+            "product_number": product_number,
+            "variant_id": variant_id,
+            "result": result,
+        }
 
     def update_prices_batch(
         self,
@@ -315,7 +362,8 @@ class DanDomainClient:
         ----------
         updates : list[dict]
             Each dict must contain ``product_number`` (str) and
-            ``new_price`` (float).
+            ``new_price`` (float).  Optionally include
+            ``variant_id`` (str) to target a specific variant.
         site_id : int
             Language / site ID (default ``1``).
         progress_callback : callable, optional
@@ -333,9 +381,12 @@ class DanDomainClient:
         for i, update in enumerate(updates):
             pnum = update.get("product_number", "")
             price = update.get("new_price", 0)
+            vid = update.get("variant_id", "")
 
             try:
-                self.update_product_price(pnum, price, site_id)
+                self.update_product_price(
+                    pnum, price, site_id, variant_id=vid,
+                )
                 results["success"] += 1
                 if progress_callback:
                     progress_callback(i + 1, total, pnum, True, "")
@@ -343,7 +394,7 @@ class DanDomainClient:
                 results["failed"] += 1
                 err = str(exc)
                 results["errors"].append(
-                    {"product_number": pnum, "error": err}
+                    {"product_number": pnum, "variant_id": vid, "error": err}
                 )
                 if progress_callback:
                     progress_callback(i + 1, total, pnum, False, err)
