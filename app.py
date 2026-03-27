@@ -819,12 +819,15 @@ if uploaded_file is not None:
                     adjusted_full = final_df[adjusted_mask]
                     updates = []
                     for idx, row in adjusted_full.iterrows():
-                        pid = str(row.get('PRODUCT_ID', '')).strip()
+                        pid_raw = row.get('PRODUCT_ID', '')
+                        pid = '' if pd.isna(pid_raw) else str(pid_raw).strip()
                         pnum = str(row['NUMBER']).strip()
                         new_price_val = clean_price(str(row['NEW_PRICE']))
                         orig_price_val = clean_price(str(row['PRICE']))
-                        vid = str(row.get('VARIANT_ID', '')).strip()
-                        vtypes = str(row.get('VARIANT_TYPES', '')).strip()
+                        vid_raw = row.get('VARIANT_ID', '')
+                        vid = '' if pd.isna(vid_raw) else str(vid_raw).strip()
+                        vtypes_raw = row.get('VARIANT_TYPES', '')
+                        vtypes = '' if pd.isna(vtypes_raw) else str(vtypes_raw).strip()
                         sales_price_changed = (
                             abs(new_price_val - orig_price_val) > PRICE_EPSILON
                         )

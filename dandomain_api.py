@@ -313,44 +313,52 @@ class DanDomainClient:
 
         # --- sales price update (skipped when new_price is None) -------
         if new_price is not None:
-            if variant_id:
-                variant_updated = False
-                variants = getattr(product, "Variants", None)
-                if variants:
-                    # Variants may be a list-like zeep structure
-                    items = (
-                        variants
-                        if isinstance(variants, list)
-                        else getattr(variants, "ProductVariantData", variants)
+            # Determine whether the product actually carries variant
+            # items so we can decide between a variant-level and a
+            # base-product-level price update.
+            variant_items: list = []
+            variants_attr = getattr(product, "Variants", None)
+            if variants_attr:
+                raw = (
+                    variants_attr
+                    if isinstance(variants_attr, list)
+                    else getattr(
+                        variants_attr, "ProductVariantData", variants_attr
                     )
-                    if not isinstance(items, list):
-                        items = [items]
-                    for var in items:
-                        # Fallback order: VariantId → Id → ""
-                        var_id_attr = getattr(var, "VariantId", None)
-                        if var_id_attr is None:
-                            var_id_attr = getattr(var, "Id", "")
-                        vid = str(var_id_attr)
-                        if vid == str(variant_id):
-                            # Update the variant's own price node
-                            var_prices = getattr(var, "Prices", None)
-                            if var_prices is not None:
-                                var_prices.Amount = new_price
-                            else:
-                                # Some schemas expose the price directly
-                                if hasattr(var, "Price"):
-                                    var.Price = new_price
-                                elif hasattr(var, "Amount"):
-                                    var.Amount = new_price
-                            variant_updated = True
-                            break
+                )
+                if raw is not None:
+                    variant_items = raw if isinstance(raw, list) else [raw]
+
+            if variant_id and variant_items:
+                # Product genuinely has variants — locate the right one.
+                variant_updated = False
+                for var in variant_items:
+                    # Fallback order: VariantId → Id → ""
+                    var_id_attr = getattr(var, "VariantId", None)
+                    if var_id_attr is None:
+                        var_id_attr = getattr(var, "Id", "")
+                    vid = str(var_id_attr)
+                    if vid == str(variant_id):
+                        # Update the variant's own price node
+                        var_prices = getattr(var, "Prices", None)
+                        if var_prices is not None:
+                            var_prices.Amount = new_price
+                        else:
+                            # Some schemas expose the price directly
+                            if hasattr(var, "Price"):
+                                var.Price = new_price
+                            elif hasattr(var, "Amount"):
+                                var.Amount = new_price
+                        variant_updated = True
+                        break
                 if not variant_updated:
                     raise DanDomainAPIError(
                         f"Variant '{variant_id}' not found on product "
                         f"'{product_number}'"
                     )
             else:
-                # --- base product price --------------------------------
+                # No variant_id supplied, or the product has no
+                # variant items — update the base product price.
                 product_prices = getattr(product, "Prices", None)
                 if product_prices is None:
                     raise DanDomainAPIError(
