@@ -279,6 +279,80 @@ class DanDomainClient:
         count = len(result) if isinstance(result, list) else 0
         return {"status": "connected", "product_count": count}
 
+    def get_products_batch(
+        self,
+        batch_size: int = 100,
+        progress_callback: Optional[Callable] = None,
+    ) -> list[dict]:
+        """Fetch all products via paginated ``Product_GetAllWithLimit``.
+
+        Configures extended output fields (``Title``, ``Producer``,
+        ``ProducerId``, ``CategoryId``) for the duration of the call,
+        then restores the default fields.
+
+        Parameters
+        ----------
+        batch_size : int
+            Number of products to retrieve per API call (default 100).
+        progress_callback : callable, optional
+            Called after each batch with ``(fetched_so_far,)``.
+
+        Returns
+        -------
+        list[dict]
+            Plain-dict representations of each product, including
+            ``Id``, ``ItemNumber``, ``Title``, ``Price``,
+            ``BuyingPrice``, ``Producer``, ``Variants``, etc.
+        """
+        # Temporarily request extended product fields
+        extended_fields = [
+            "Id", "ItemNumber", "Title", "Price", "BuyingPrice",
+            "Producer", "ProducerId", "CategoryId", "Variants",
+            "VariantTypes", "Online",
+        ]
+        extended_variant_fields = [
+            "Id", "ItemNumber", "Title", "Price", "BuyingPrice",
+        ]
+        try:
+            self._call("Product_SetFields", Fields=extended_fields)
+        except DanDomainAPIError:
+            logger.warning("Could not set extended product output fields")
+        try:
+            self._call(
+                "Product_SetVariantFields", Fields=extended_variant_fields,
+            )
+        except DanDomainAPIError:
+            logger.warning("Could not set extended variant output fields")
+
+        products: list[dict] = []
+        start = 0
+
+        while True:
+            batch = self._call(
+                "Product_GetAllWithLimit",
+                Start=start, Length=batch_size,
+            )
+            if batch is None or (isinstance(batch, list) and len(batch) == 0):
+                break
+
+            items = batch if isinstance(batch, list) else [batch]
+            for item in items:
+                products.append(serialize_object(item, dict))
+
+            fetched = len(items)
+            if progress_callback:
+                progress_callback(len(products))
+
+            if fetched < batch_size:
+                break
+            start += fetched
+            time.sleep(BATCH_DELAY)
+
+        # Restore default output fields
+        self._set_output_fields()
+
+        return products
+
     def _get_product_by_number(self, product_number: str) -> Any:
         """Fetch a raw zeep product object by item number.
 
