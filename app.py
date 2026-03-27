@@ -176,7 +176,7 @@ def optimize_prices(df: pd.DataFrame, price_pct: float = 0.0) -> tuple:
     df['FINAL_PRICE_EX_VAT'] = df['FINAL_PRICE_NUM'] / (1 + VAT_RATE)
     df['FINAL_COVERAGE_RATE'] = calc_coverage_rate(df, 'FINAL_PRICE_EX_VAT', 'BUY_PRICE_NUM')
 
-    # Format original price columns (keep PRICE as-is from CSV unless adjusted)
+    # Format original price columns (PRICE may reflect the global % adjustment)
     df['PRICE_EX_VAT'] = df['PRICE_EX_VAT_NUM'].apply(format_dk)
     df['COVERAGE_RATE_%'] = (
         (df['COVERAGE_RATE'] * 100).round(2).astype(str).str.replace('.', ',', regex=False) + '%'
@@ -295,9 +295,9 @@ if uploaded_file is not None:
                 hide_index=True,
             )
 
-        # Apply edited buy prices
+        # Apply edited buy prices (use index-based assignment to keep alignment)
         work_df = parsed_df.copy()
-        work_df['BUY_PRICE_NUM'] = edited['BUY_PRICE'].values
+        work_df['BUY_PRICE_NUM'] = edited['BUY_PRICE']
 
         final_df, adjusted_count, adjusted_mask, import_df = optimize_prices(
             work_df, price_pct,
