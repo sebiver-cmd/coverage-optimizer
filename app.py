@@ -254,6 +254,7 @@ section[data-testid="stFileUploader"]:hover {
 VAT_RATE = 0.25  # 25% Danish VAT
 MIN_COVERAGE_RATE = 0.50  # Minimum acceptable profit margin (50%)
 BEAUTIFY_LAST_DIGIT = 9  # Prices are rounded up to end in this digit
+PRICE_EPSILON = 0.001  # Tolerance for floating-point price comparisons
 REQUIRED_COLUMNS = [
     'PRODUCT_ID', 'TITLE_DK', 'NUMBER',
     'BUY_PRICE', 'PRICE',
@@ -825,7 +826,7 @@ if uploaded_file is not None:
                         vid = str(row.get('VARIANT_ID', '')).strip()
                         vtypes = str(row.get('VARIANT_TYPES', '')).strip()
                         sales_price_changed = (
-                            abs(new_price_val - orig_price_val) > 0.001
+                            abs(new_price_val - orig_price_val) > PRICE_EPSILON
                         )
                         has_buy_change = bp_changed.loc[idx]
                         if pnum and (sales_price_changed or has_buy_change):
