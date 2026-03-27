@@ -160,6 +160,9 @@ class DanDomainClient:
         # Authenticate the SOAP session
         self._connect()
 
+        # Ensure subsequent GET responses include the fields we need.
+        self._set_output_fields()
+
     # -- internal helpers ----------------------------------------------------
 
     def _connect(self) -> None:
@@ -179,6 +182,28 @@ class DanDomainClient:
             raise DanDomainAPIError(
                 f"Connection failed: {type(exc).__name__}"
             ) from exc
+
+    def _set_output_fields(self) -> None:
+        """Configure which fields product GET responses include.
+
+        ``Product_SetFields`` and ``Product_SetVariantFields`` are
+        *output-format setters* — they control which attributes appear
+        in the objects returned by ``Product_GetByItemNumber``,
+        ``Product_GetVariantsByItemNumber``, etc.
+
+        We request at least ``Id`` (needed for updates), ``ItemNumber``
+        and ``Variants`` so that lookups always return enough data.
+        """
+        product_fields = ["Id", "ItemNumber", "Price", "BuyingPrice", "Variants"]
+        variant_fields = ["Id", "ItemNumber", "Price", "BuyingPrice"]
+        try:
+            self._call("Product_SetFields", Fields=product_fields)
+        except DanDomainAPIError:
+            logger.warning("Could not set product output fields")
+        try:
+            self._call("Product_SetVariantFields", Fields=variant_fields)
+        except DanDomainAPIError:
+            logger.warning("Could not set variant output fields")
 
     def _call(self, operation: str, **kwargs) -> Any:
         """Execute a SOAP operation with retry / back-off."""
@@ -268,6 +293,37 @@ class DanDomainClient:
             )
         return result
 
+    def _lookup_variant_by_item_number(self, item_number: str) -> "int | None":
+        """Resolve a variant SKU to its internal variant ``Id``.
+
+        Calls ``Product_GetVariantsByItemNumber`` which returns the
+        ``ProductVariant`` object(s) matching *item_number*.  The
+        variant's ``Id`` is the primary key required by
+        ``Product_UpdateVariant``.
+
+        Returns the numeric variant ``Id``, or ``None`` when the SKU
+        cannot be resolved (e.g. it is not a variant, or the API does
+        not support the call).
+        """
+        try:
+            result = self._call(
+                "Product_GetVariantsByItemNumber",
+                ItemNumber=item_number,
+            )
+        except DanDomainAPIError:
+            return None
+
+        if result is None:
+            return None
+
+        # The response may be a single variant or a list of variants.
+        items = result if isinstance(result, list) else [result]
+        for variant in items:
+            vid = getattr(variant, "Id", None)
+            if vid is not None:
+                return int(vid)
+        return None
+
     def get_product(
         self,
         product_number: str,
@@ -285,6 +341,7 @@ class DanDomainClient:
         site_id: int = 1,
         variant_id: str = "",
         buy_price: "float | None" = None,
+        product_id: str = "",
     ) -> dict:
         """Update the sales price and/or cost price of a product or variant.
 
@@ -314,6 +371,10 @@ class DanDomainClient:
         buy_price : float, optional
             When provided the product's *CostPrice* (cost / buying
             price) is also updated.
+        product_id : str
+            Optional product ``Id`` from the import file.  When
+            provided it is used directly for ``Product_Update``,
+            avoiding an extra ``Product_GetByItemNumber`` round-trip.
         """
         if new_price is None and buy_price is None:
             raise ValueError(
@@ -335,6 +396,14 @@ class DanDomainClient:
             except (ValueError, OverflowError):
                 pass
 
+        # Normalise product_id the same way ("823.0" → "823", zero → "").
+        if product_id:
+            try:
+                n = float(product_id)
+                product_id = "" if n == 0 else str(int(n))
+            except (ValueError, OverflowError):
+                pass
+
         if variant_id:
             # ----------------------------------------------------------
             # Variant-level partial update via Product_UpdateVariant.
@@ -352,21 +421,54 @@ class DanDomainClient:
         else:
             # ----------------------------------------------------------
             # Base-product partial update via Product_Update.
-            # Fetch the product first to validate that it exists and
-            # to obtain its numeric Id (Product_Update would create a
-            # new product if the ItemNumber is not found).
-            # Then send a minimal ProductUpdate with only Id + the
-            # price fields — nothing else is overwritten.
+            # If product_id was supplied in the import data, use it
+            # directly — this avoids a Product_GetByItemNumber
+            # round-trip and the risk that the response omits the Id
+            # field.  Otherwise fall back to an API lookup.
             # ----------------------------------------------------------
-            product = self._get_product_by_number(product_number)
-            product_id = getattr(product, "Id", None)
-            if product_id is None:
+            resolved_id: "int | None" = None
+
+            if product_id:
+                resolved_id = int(product_id)
+            else:
+                product = self._get_product_by_number(product_number)
+                fetched_id = getattr(product, "Id", None)
+                if fetched_id is not None:
+                    resolved_id = int(fetched_id)
+                else:
+                    # Last resort: the SKU might reference a variant.
+                    resolved_id = self._lookup_variant_by_item_number(
+                        product_number,
+                    )
+                    if resolved_id is not None:
+                        # Update as variant instead of base product.
+                        vdata: dict[str, Any] = {
+                            "Id": resolved_id,
+                        }
+                        if new_price is not None:
+                            vdata["Price"] = new_price
+                        if buy_price is not None:
+                            vdata["CostPrice"] = buy_price
+                        result = self._call(
+                            "Product_UpdateVariant",
+                            VariantData=vdata,
+                        )
+                        variant_id = str(resolved_id)
+                        return {
+                            "updated": True,
+                            "product_number": product_number,
+                            "variant_id": variant_id,
+                            "result": result,
+                        }
+
+            if resolved_id is None:
                 raise DanDomainAPIError(
-                    f"Product '{product_number}' has no Id field; "
+                    f"Product '{product_number}' has no Id field "
+                    "and no matching variant was found; "
                     "cannot update price"
                 )
 
-            product_data: dict[str, Any] = {"Id": product_id}
+            product_data: dict[str, Any] = {"Id": resolved_id}
             if new_price is not None:
                 product_data["Price"] = new_price
             if buy_price is not None:
@@ -436,7 +538,7 @@ class DanDomainClient:
             try:
                 self.update_product_price(
                     pnum, price, site_id, variant_id=vid,
-                    buy_price=buy,
+                    buy_price=buy, product_id=pid,
                 )
                 results["success"] += 1
                 if progress_callback:
