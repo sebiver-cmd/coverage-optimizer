@@ -35,11 +35,12 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import requests
 from zeep import Client as ZeepClient
 from zeep.exceptions import Fault as SoapFault, Error as ZeepError
+from zeep.helpers import serialize_object
 from zeep.transports import Transport
 
 logger = logging.getLogger(__name__)
@@ -171,7 +172,7 @@ class DanDomainClient:
                 f"Connection failed: {type(exc).__name__}"
             ) from exc
 
-    def _call(self, operation: str, **kwargs):
+    def _call(self, operation: str, **kwargs) -> Any:
         """Execute a SOAP operation with retry / back-off."""
         last_error: Optional[str] = None
 
@@ -231,22 +232,23 @@ class DanDomainClient:
     def test_connection(self) -> dict:
         """Test the API connection.
 
-        Calls ``Product_GetAll`` to verify the session is authenticated
-        and the API is reachable.  Returns a dict with ``status`` and
-        the product count.
+        Fetches a single product to verify the session is authenticated
+        and the API is reachable.  Returns a dict with ``status``.
 
         Raises :class:`DanDomainAPIError` on failure.
         """
-        result = self._call("Product_GetAll")
-        products = result if isinstance(result, list) else []
-        return {"status": "connected", "product_count": len(products)}
+        # Use a lightweight call — fetch a limited product batch instead
+        # of the full catalogue.
+        result = self._call("Product_GetAllWithLimit", Start=0, Length=1)
+        count = len(result) if isinstance(result, list) else 0
+        return {"status": "connected", "product_count": count}
 
-    def get_product(
-        self,
-        product_number: str,
-        site_id: int = 1,
-    ) -> dict:
-        """Fetch a single product by its item number."""
+    def _get_product_by_number(self, product_number: str) -> Any:
+        """Fetch a raw zeep product object by item number.
+
+        Returns the SOAP response object; raises
+        :class:`DanDomainAPIError` if the product is not found.
+        """
         product_number = self._validate_product_number(product_number)
         result = self._call(
             "Product_GetByItemNumber",
@@ -256,8 +258,17 @@ class DanDomainClient:
             raise DanDomainAPIError(
                 f"Product '{product_number}' not found"
             )
-        # Convert zeep object to a plain dict for consistency
-        return dict(result) if hasattr(result, "__iter__") else {"data": result}
+        return result
+
+    def get_product(
+        self,
+        product_number: str,
+        site_id: int = 1,
+    ) -> dict:
+        """Fetch a single product by its item number."""
+        result = self._get_product_by_number(product_number)
+        # Convert zeep CompoundValue to a plain dict for consistency
+        return serialize_object(result, dict)
 
     def update_product_price(
         self,
@@ -276,20 +287,17 @@ class DanDomainClient:
         site_id : int
             Language / site ID (default ``1``).
         """
-        product_number = self._validate_product_number(product_number)
         new_price = self._validate_price(new_price)
 
         # Fetch the current product, update its price, and push it back
-        product = self._call(
-            "Product_GetByItemNumber",
-            ItemNumber=product_number,
-        )
-        if product is None:
-            raise DanDomainAPIError(
-                f"Product '{product_number}' not found"
-            )
+        product = self._get_product_by_number(product_number)
 
-        # Build update payload — set the new sales price
+        # Set the new sales price — guard against a missing Prices node
+        if product.Prices is None:
+            raise DanDomainAPIError(
+                f"Product '{product_number}' has no price structure; "
+                "cannot update price"
+            )
         product.Prices.Amount = new_price
 
         result = self._call("Product_Update", ProductData=product)
