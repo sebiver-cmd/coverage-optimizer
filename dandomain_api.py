@@ -3,7 +3,7 @@
 Uses the HostedShop SOAP API (``https://api.hostedshop.dk/service.wsdl``)
 to read and update product data on a DanDomain webshop.
 
-Price updates use **partial updates** — only ``Price`` and ``CostPrice``
+Price updates use **partial updates** — only ``Price`` and ``BuyingPrice``
 are sent so that other product data is never accidentally overwritten:
 
 *   Base products → ``Product_Update`` with a minimal ``ProductUpdate``
@@ -41,6 +41,7 @@ See https://webshop-help.dandomain.dk/integration-via-api/
 from __future__ import annotations
 
 import logging
+import math
 import re
 import time
 from typing import Any, Callable, Optional
@@ -232,7 +233,7 @@ class DanDomainClient:
             except requests.exceptions.Timeout:
                 last_error = "Request timed out"
             except Exception as exc:
-                last_error = f"Unexpected error: {type(exc).__name__}"
+                last_error = f"Unexpected error: {type(exc).__name__}: {exc}"
 
             if attempt < MAX_RETRIES - 1:
                 time.sleep(RETRY_BASE_DELAY * (2 ** attempt))
@@ -254,6 +255,8 @@ class DanDomainClient:
     def _validate_price(price: float) -> float:
         if not isinstance(price, (int, float)):
             raise ValueError("Price must be a number")
+        if math.isnan(price) or math.isinf(price):
+            raise ValueError("Price must be a finite number")
         if price < 0:
             raise ValueError("Price must be non-negative")
         if price > _MAX_PRICE:
@@ -345,7 +348,7 @@ class DanDomainClient:
     ) -> dict:
         """Update the sales price and/or cost price of a product or variant.
 
-        Uses **partial updates** so that only ``Price`` and ``CostPrice``
+        Uses **partial updates** so that only ``Price`` and ``BuyingPrice``
         are transmitted — other product data (title, description, stock,
         SEO settings …) is never touched.
 
@@ -369,7 +372,7 @@ class DanDomainClient:
             variant directly via ``Product_UpdateVariant`` instead of
             the base product.
         buy_price : float, optional
-            When provided the product's *CostPrice* (cost / buying
+            When provided the product's *BuyingPrice* (cost / buying
             price) is also updated.
         product_id : str
             Optional product ``Id`` from the import file.  When
@@ -414,7 +417,7 @@ class DanDomainClient:
             if new_price is not None:
                 variant_data["Price"] = new_price
             if buy_price is not None:
-                variant_data["CostPrice"] = buy_price
+                variant_data["BuyingPrice"] = buy_price
             result = self._call(
                 "Product_UpdateVariant", VariantData=variant_data,
             )
@@ -448,7 +451,7 @@ class DanDomainClient:
                         if new_price is not None:
                             vdata["Price"] = new_price
                         if buy_price is not None:
-                            vdata["CostPrice"] = buy_price
+                            vdata["BuyingPrice"] = buy_price
                         result = self._call(
                             "Product_UpdateVariant",
                             VariantData=vdata,
@@ -472,7 +475,7 @@ class DanDomainClient:
             if new_price is not None:
                 product_data["Price"] = new_price
             if buy_price is not None:
-                product_data["CostPrice"] = buy_price
+                product_data["BuyingPrice"] = buy_price
             result = self._call(
                 "Product_Update", ProductData=product_data,
             )
@@ -492,7 +495,7 @@ class DanDomainClient:
     ) -> dict:
         """Batch-update product prices using partial updates.
 
-        Each update sends only the ``Price`` and/or ``CostPrice`` fields
+        Each update sends only the ``Price`` and/or ``BuyingPrice`` fields
         to avoid accidentally overwriting other product data.
 
         *   Base products are updated via ``Product_Update`` with a
@@ -543,7 +546,7 @@ class DanDomainClient:
                 results["success"] += 1
                 if progress_callback:
                     progress_callback(i + 1, total, pnum, True, "")
-            except (DanDomainAPIError, ValueError, AttributeError) as exc:
+            except (DanDomainAPIError, ValueError, TypeError, AttributeError) as exc:
                 results["failed"] += 1
                 err = str(exc)
                 results["errors"].append({
