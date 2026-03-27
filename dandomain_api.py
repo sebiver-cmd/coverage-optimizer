@@ -311,6 +311,16 @@ class DanDomainClient:
         # Fetch the current product, update its price, and push it back
         product = self._get_product_by_number(product_number)
 
+        # Normalise variant_id: strip float suffixes ("123.0" → "123")
+        # and treat zero / empty as "no variant" so we fall through
+        # to the base-product price update instead of raising an error.
+        if variant_id:
+            try:
+                n = float(variant_id)
+                variant_id = "" if n == 0 else str(int(n))
+            except (ValueError, OverflowError):
+                pass
+
         # --- sales price update (skipped when new_price is None) -------
         if new_price is not None:
             # Determine whether the product actually carries variant
