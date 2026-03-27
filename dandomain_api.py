@@ -333,7 +333,8 @@ class DanDomainClient:
                 # Product genuinely has variants — locate the right one.
                 variant_updated = False
                 for var in variant_items:
-                    # Fallback order: Id → VariantId → ""
+                    # Try ``Id`` first (per HostedShop schema), fall
+                    # back to ``VariantId``, default to empty string.
                     var_id_attr = getattr(var, "Id", None)
                     if var_id_attr is None:
                         var_id_attr = getattr(var, "VariantId", "")
@@ -342,6 +343,11 @@ class DanDomainClient:
                         # Update the variant's own Price field
                         # (per the HostedShop API schema the field
                         # is ``Price``, not ``Prices.Amount``).
+                        if not hasattr(var, "Price"):
+                            raise DanDomainAPIError(
+                                f"Variant '{variant_id}' on product "
+                                f"'{product_number}' has no Price field"
+                            )
                         var.Price = new_price
                         variant_updated = True
                         break
