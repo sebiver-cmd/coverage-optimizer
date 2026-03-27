@@ -299,9 +299,16 @@ def clean_price(price_str):
     if pd.isna(price_str):
         return 0.0
     if isinstance(price_str, str):
+        # Guard against "nan"/"NaN" strings that float() would accept
+        if price_str.strip().lower() == 'nan':
+            return 0.0
         price_str = price_str.replace('.', '').replace(',', '.')
     try:
-        return float(price_str)
+        val = float(price_str)
+        # Reject NaN / Inf that slipped through
+        if math.isnan(val) or math.isinf(val):
+            return 0.0
+        return val
     except (ValueError, TypeError):
         return 0.0
 
