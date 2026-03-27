@@ -825,7 +825,17 @@ if uploaded_file is not None:
                         new_price_val = clean_price(str(row['NEW_PRICE']))
                         orig_price_val = clean_price(str(row['PRICE']))
                         vid_raw = row.get('VARIANT_ID', '')
-                        vid = '' if pd.isna(vid_raw) else str(vid_raw).strip()
+                        if pd.isna(vid_raw) or vid_raw == '':
+                            vid = ''
+                        else:
+                            vid = str(vid_raw).strip()
+                            # Normalise numeric IDs ("123.0" → "123")
+                            # and treat zero as "no variant".
+                            try:
+                                n = float(vid)
+                                vid = '' if n == 0 else str(int(n))
+                            except (ValueError, OverflowError):
+                                pass
                         vtypes_raw = row.get('VARIANT_TYPES', '')
                         vtypes = '' if pd.isna(vtypes_raw) else str(vtypes_raw).strip()
                         sales_price_changed = (

@@ -3,6 +3,14 @@
 Uses the HostedShop SOAP API (``https://api.hostedshop.dk/service.wsdl``)
 to read and update product data on a DanDomain webshop.
 
+Price updates use **partial updates** — only ``Price`` and ``CostPrice``
+are sent so that other product data is never accidentally overwritten:
+
+*   Base products → ``Product_Update`` with a minimal ``ProductUpdate``
+    object (``Id`` + price fields only).
+*   Variants → ``Product_UpdateVariant`` with a minimal
+    ``ProductVariantUpdate`` object (``Id`` + price fields only).
+
 Credentials are **never** logged or hard-coded — they must be supplied
 via Streamlit secrets, environment variables, or a secure input field.
 
@@ -280,6 +288,16 @@ class DanDomainClient:
     ) -> dict:
         """Update the sales price and/or cost price of a product or variant.
 
+        Uses **partial updates** so that only ``Price`` and ``CostPrice``
+        are transmitted — other product data (title, description, stock,
+        SEO settings …) is never touched.
+
+        *   **Base products** → ``Product_Update`` with a minimal
+            ``ProductUpdate`` containing only ``Id`` + the price fields.
+        *   **Variants** → ``Product_UpdateVariant`` with a minimal
+            ``ProductVariantUpdate`` containing only ``Id`` + the price
+            fields.
+
         Parameters
         ----------
         product_number : str
@@ -290,15 +308,12 @@ class DanDomainClient:
         site_id : int
             Language / site ID (default ``1``).
         variant_id : str
-            Optional variant ID.  When provided the method tries to
-            locate the matching variant inside the product object and
-            update **its** price instead of the base product price.
-            If the variant cannot be found a
-            :class:`DanDomainAPIError` is raised so the caller can
-            decide how to proceed.
+            Optional variant ID.  When provided the update targets the
+            variant directly via ``Product_UpdateVariant`` instead of
+            the base product.
         buy_price : float, optional
-            When provided the product's *BuyingPrice* (cost price) is
-            also updated.
+            When provided the product's *CostPrice* (cost / buying
+            price) is also updated.
         """
         if new_price is None and buy_price is None:
             raise ValueError(
@@ -307,76 +322,59 @@ class DanDomainClient:
 
         if new_price is not None:
             new_price = self._validate_price(new_price)
-
-        # Fetch the current product, update its price, and push it back
-        product = self._get_product_by_number(product_number)
-
-        # --- sales price update (skipped when new_price is None) -------
-        if new_price is not None:
-            # Determine whether the product actually carries variant
-            # items so we can decide between a variant-level and a
-            # base-product-level price update.
-            variant_items: list = []
-            variants_attr = getattr(product, "Variants", None)
-            if variants_attr:
-                raw = (
-                    variants_attr
-                    if isinstance(variants_attr, list)
-                    else getattr(
-                        variants_attr, "ProductVariantData", variants_attr
-                    )
-                )
-                if raw is not None:
-                    variant_items = raw if isinstance(raw, list) else [raw]
-
-            if variant_id and variant_items:
-                # Product genuinely has variants — locate the right one.
-                variant_updated = False
-                for var in variant_items:
-                    # Try ``Id`` first (per HostedShop schema), fall
-                    # back to ``VariantId``, default to empty string.
-                    var_id_attr = getattr(var, "Id", None)
-                    if var_id_attr is None:
-                        var_id_attr = getattr(var, "VariantId", "")
-                    vid = str(var_id_attr)
-                    if vid == str(variant_id):
-                        # Update the variant's own Price field
-                        # (per the HostedShop API schema the field
-                        # is ``Price``, not ``Prices.Amount``).
-                        if not hasattr(var, "Price"):
-                            raise DanDomainAPIError(
-                                f"Variant '{variant_id}' on product "
-                                f"'{product_number}' has no Price field"
-                            )
-                        var.Price = new_price
-                        variant_updated = True
-                        break
-                if not variant_updated:
-                    raise DanDomainAPIError(
-                        f"Variant '{variant_id}' not found on product "
-                        f"'{product_number}'"
-                    )
-            else:
-                # No variant_id supplied, or the product has no
-                # variant items — update the base product price.
-                # Per the HostedShop API schema the top-level field
-                # is ``Price`` (not ``Prices.Amount``).
-                if not hasattr(product, "Price"):
-                    raise DanDomainAPIError(
-                        f"Product '{product_number}' has no Price field; "
-                        "cannot update price"
-                    )
-                product.Price = new_price
-
-        # --- cost / buy price ------------------------------------------
         if buy_price is not None:
             buy_price = self._validate_price(buy_price)
-            # Per the HostedShop API schema the field is ``BuyingPrice``
-            # (not ``BuyPrice``).
-            if hasattr(product, "BuyingPrice"):
-                product.BuyingPrice = buy_price
 
-        result = self._call("Product_Update", ProductData=product)
+        # Normalise variant_id: strip float suffixes ("123.0" → "123")
+        # and treat zero / empty as "no variant" so we fall through
+        # to the base-product price update instead of raising an error.
+        if variant_id:
+            try:
+                n = float(variant_id)
+                variant_id = "" if n == 0 else str(int(n))
+            except (ValueError, OverflowError):
+                pass
+
+        if variant_id:
+            # ----------------------------------------------------------
+            # Variant-level partial update via Product_UpdateVariant.
+            # We send a minimal ProductVariantUpdate with only the
+            # variant Id and the price fields we want to change.
+            # ----------------------------------------------------------
+            variant_data: dict[str, Any] = {"Id": int(variant_id)}
+            if new_price is not None:
+                variant_data["Price"] = new_price
+            if buy_price is not None:
+                variant_data["CostPrice"] = buy_price
+            result = self._call(
+                "Product_UpdateVariant", VariantData=variant_data,
+            )
+        else:
+            # ----------------------------------------------------------
+            # Base-product partial update via Product_Update.
+            # Fetch the product first to validate that it exists and
+            # to obtain its numeric Id (Product_Update would create a
+            # new product if the ItemNumber is not found).
+            # Then send a minimal ProductUpdate with only Id + the
+            # price fields — nothing else is overwritten.
+            # ----------------------------------------------------------
+            product = self._get_product_by_number(product_number)
+            product_id = getattr(product, "Id", None)
+            if product_id is None:
+                raise DanDomainAPIError(
+                    f"Product '{product_number}' has no Id field; "
+                    "cannot update price"
+                )
+
+            product_data: dict[str, Any] = {"Id": product_id}
+            if new_price is not None:
+                product_data["Price"] = new_price
+            if buy_price is not None:
+                product_data["CostPrice"] = buy_price
+            result = self._call(
+                "Product_Update", ProductData=product_data,
+            )
+
         return {
             "updated": True,
             "product_number": product_number,
@@ -390,7 +388,16 @@ class DanDomainClient:
         site_id: int = 1,
         progress_callback: Optional[Callable] = None,
     ) -> dict:
-        """Batch-update product prices.
+        """Batch-update product prices using partial updates.
+
+        Each update sends only the ``Price`` and/or ``CostPrice`` fields
+        to avoid accidentally overwriting other product data.
+
+        *   Base products are updated via ``Product_Update`` with a
+            minimal ``ProductUpdate`` (only ``Id`` + price fields).
+        *   Variants are updated via ``Product_UpdateVariant`` with a
+            minimal ``ProductVariantUpdate`` (only ``Id`` + price
+            fields).
 
         Parameters
         ----------
@@ -401,9 +408,10 @@ class DanDomainClient:
             ``variant_types`` (str) and ``buy_price`` (float) to
             mirror the fields that a regular CSV import would carry.
             ``variant_id`` is forwarded to
-            :meth:`update_product_price` to target the correct
-            variant.  ``buy_price``, when present, updates the
-            product's cost price.
+            :meth:`update_product_price` — when present the variant is
+            updated directly via ``Product_UpdateVariant``.
+            ``buy_price``, when present, updates the product's cost
+            price.
         site_id : int
             Language / site ID (default ``1``).
         progress_callback : callable, optional
