@@ -254,6 +254,7 @@ section[data-testid="stFileUploader"]:hover {
 VAT_RATE = 0.25  # 25% Danish VAT
 MIN_COVERAGE_RATE = 0.50  # Minimum acceptable profit margin (50%)
 BEAUTIFY_LAST_DIGIT = 9  # Prices are rounded up to end in this digit
+PRICE_EPSILON = 0.001  # Tolerance for floating-point price comparisons
 REQUIRED_COLUMNS = [
     'PRODUCT_ID', 'TITLE_DK', 'NUMBER',
     'BUY_PRICE', 'PRICE',
@@ -820,19 +821,24 @@ if uploaded_file is not None:
                     for idx, row in adjusted_full.iterrows():
                         pid = str(row.get('PRODUCT_ID', '')).strip()
                         pnum = str(row['NUMBER']).strip()
-                        new_price_str = str(row['NEW_PRICE'])
-                        new_price_val = clean_price(new_price_str)
+                        new_price_val = clean_price(str(row['NEW_PRICE']))
+                        orig_price_val = clean_price(str(row['PRICE']))
                         vid = str(row.get('VARIANT_ID', '')).strip()
                         vtypes = str(row.get('VARIANT_TYPES', '')).strip()
-                        if pnum and new_price_val > 0:
+                        sales_price_changed = (
+                            abs(new_price_val - orig_price_val) > PRICE_EPSILON
+                        )
+                        has_buy_change = bp_changed.loc[idx]
+                        if pnum and (sales_price_changed or has_buy_change):
                             entry = {
                                 "product_id": pid,
                                 "product_number": pnum,
-                                "new_price": new_price_val,
                                 "variant_id": vid,
                                 "variant_types": vtypes,
                             }
-                            if bp_changed.loc[idx]:
+                            if sales_price_changed and new_price_val > 0:
+                                entry["new_price"] = new_price_val
+                            if has_buy_change:
                                 entry["buy_price"] = clean_price(
                                     str(row.get('BUY_PRICE', ''))
                                 )
@@ -847,14 +853,13 @@ if uploaded_file is not None:
                             "sidebar to push for real."
                         )
                         dry_df = pd.DataFrame(updates)
-                        dry_cols = [
-                            'product_id', 'product_number', 'new_price',
-                            'variant_id', 'variant_types',
-                        ]
-                        dry_labels = [
-                            'Product ID', 'Product Number', 'New Price',
-                            'Variant ID', 'Variant Types',
-                        ]
+                        dry_cols = ['product_id', 'product_number']
+                        dry_labels = ['Product ID', 'Product Number']
+                        if 'new_price' in dry_df.columns:
+                            dry_cols.append('new_price')
+                            dry_labels.append('New Price')
+                        dry_cols.extend(['variant_id', 'variant_types'])
+                        dry_labels.extend(['Variant ID', 'Variant Types'])
                         if 'buy_price' in dry_df.columns:
                             dry_cols.append('buy_price')
                             dry_labels.append('Buy Price')
