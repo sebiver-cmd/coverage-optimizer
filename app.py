@@ -101,15 +101,11 @@ def calc_coverage_rate(df, price_col, buy_col):
 
 
 @st.cache_data
-def process_products(raw_bytes: bytes, encoding: str = 'auto',
-                     buy_price_pct: float = 0.0) -> tuple:
-    """Parse uploaded CSV bytes and return an optimised product DataFrame.
+def parse_csv(raw_bytes: bytes, encoding: str = 'auto') -> pd.DataFrame:
+    """Parse uploaded CSV bytes and return a validated DataFrame.
 
-    Parameters
-    ----------
-    buy_price_pct : float
-        Percentage adjustment to apply to all BUY_PRICE values before
-        recalculating coverage (e.g. 5.0 = +5 %).
+    Numeric helper columns ``BUY_PRICE_NUM`` and ``PRICE_NUM`` are added
+    so that downstream code can work with floats directly.
     """
     from io import BytesIO
 
@@ -126,10 +122,33 @@ def process_products(raw_bytes: bytes, encoding: str = 'auto',
     df['BUY_PRICE_NUM'] = df['BUY_PRICE'].apply(clean_price)
     df['PRICE_NUM'] = df['PRICE'].apply(clean_price)
 
-    # Apply optional BUY_PRICE adjustment
-    if buy_price_pct != 0:
-        df['BUY_PRICE_NUM'] = df['BUY_PRICE_NUM'] * (1 + buy_price_pct / 100)
-        df['BUY_PRICE'] = df['BUY_PRICE_NUM'].apply(format_dk)
+    # Preserve integer formatting for columns like VARIANT_TYPES
+    for col in ('VARIANT_TYPES', 'VARIANT_ID', 'PRODUCT_ID'):
+        if col in df.columns:
+            df[col] = df[col].apply(format_int_col)
+
+    return df
+
+
+def optimize_prices(df: pd.DataFrame, price_pct: float = 0.0) -> tuple:
+    """Apply optional PRICE adjustment, calculate coverage and optimise.
+
+    Parameters
+    ----------
+    price_pct : float
+        Percentage adjustment to apply to all PRICE values before
+        recalculating coverage (e.g. 10.0 = +10 %).
+    """
+    df = df.copy()
+
+    # Reformat BUY_PRICE from (possibly per-line edited) numeric values
+    df['BUY_PRICE'] = df['BUY_PRICE_NUM'].apply(format_dk)
+
+    # Apply optional PRICE adjustment
+    if price_pct != 0:
+        df['PRICE_NUM'] = df['PRICE_NUM'] * (1 + price_pct / 100)
+        df['PRICE'] = df['PRICE_NUM'].apply(format_dk)
+
     df['PRICE_EX_VAT_NUM'] = df['PRICE_NUM'] / (1 + VAT_RATE)
 
     # Calculate current coverage rate
@@ -157,7 +176,7 @@ def process_products(raw_bytes: bytes, encoding: str = 'auto',
     df['FINAL_PRICE_EX_VAT'] = df['FINAL_PRICE_NUM'] / (1 + VAT_RATE)
     df['FINAL_COVERAGE_RATE'] = calc_coverage_rate(df, 'FINAL_PRICE_EX_VAT', 'BUY_PRICE_NUM')
 
-    # Format original price columns (keep PRICE as-is from CSV)
+    # Format original price columns (PRICE may reflect the global % adjustment)
     df['PRICE_EX_VAT'] = df['PRICE_EX_VAT_NUM'].apply(format_dk)
     df['COVERAGE_RATE_%'] = (
         (df['COVERAGE_RATE'] * 100).round(2).astype(str).str.replace('.', ',', regex=False) + '%'
@@ -169,11 +188,6 @@ def process_products(raw_bytes: bytes, encoding: str = 'auto',
     df['NEW_COVERAGE_RATE_%'] = (
         (df['FINAL_COVERAGE_RATE'] * 100).round(2).astype(str).str.replace('.', ',', regex=False) + '%'
     )
-
-    # Preserve integer formatting for columns like VARIANT_TYPES
-    for col in ('VARIANT_TYPES', 'VARIANT_ID', 'PRODUCT_ID'):
-        if col in df.columns:
-            df[col] = df[col].apply(format_int_col)
 
     # Build import-ready DataFrame (adjusted rows only, original columns)
     import_df = df.loc[needs_adjustment, REQUIRED_COLUMNS].copy()
@@ -197,22 +211,22 @@ with st.sidebar:
     selected_encoding = ENCODING_OPTIONS[encoding_label]
 
     st.divider()
-    st.subheader("💰 BUY_PRICE Adjustment")
-    buy_price_pct = st.number_input(
-        "Adjust BUY_PRICE (%)",
+    st.subheader("💰 PRICE Adjustment")
+    price_pct = st.number_input(
+        "Adjust PRICE (%)",
         min_value=-50.0,
         max_value=200.0,
         value=0.0,
         step=0.5,
         help=(
-            "Increase or decrease all buy prices by this percentage "
-            "before recalculating coverage rates. For example, enter 5 "
-            "to simulate a 5 % supplier price increase."
+            "Increase or decrease all sales prices by this percentage "
+            "before recalculating coverage rates. For example, enter 10 "
+            "to simulate a 10 % price increase across all products."
         ),
     )
     include_buy_price = st.checkbox(
         "Include BUY_PRICE in import file",
-        value=buy_price_pct != 0,
+        value=False,
         help=(
             "When checked, the import-ready CSV will contain the "
             "BUY_PRICE column so the buy price is also updated on "
@@ -241,14 +255,54 @@ uploaded_file = st.file_uploader("Upload Product CSV", type=['csv'])
 if uploaded_file is not None:
     try:
         raw_bytes = uploaded_file.getvalue()
-        final_df, adjusted_count, adjusted_mask, import_df = process_products(
-            raw_bytes, selected_encoding, buy_price_pct,
-        )
+        parsed_df = parse_csv(raw_bytes, selected_encoding)
     except ValueError as exc:
         st.error(str(exc))
     except Exception as exc:
         st.error(f"Failed to process CSV: {exc}")
     else:
+        # --- Per-line BUY_PRICE editing ---
+        with st.expander("✏️ BUY_PRICE – Per-Line Adjustment", expanded=False):
+            st.caption(
+                "Edit individual BUY_PRICE values to cross-check with "
+                "current supplier cost prices. Changes are reflected in "
+                "the coverage calculation below."
+            )
+            edit_cols = ['PRODUCT_ID', 'TITLE_DK', 'NUMBER',
+                         'BUY_PRICE_NUM', 'PRICE_NUM']
+            edit_df = parsed_df[edit_cols].copy()
+            edit_df = edit_df.rename(columns={
+                'BUY_PRICE_NUM': 'BUY_PRICE',
+                'PRICE_NUM': 'PRICE (ref)',
+            })
+            edited = st.data_editor(
+                edit_df,
+                disabled=['PRODUCT_ID', 'TITLE_DK', 'NUMBER', 'PRICE (ref)'],
+                column_config={
+                    "BUY_PRICE": st.column_config.NumberColumn(
+                        "BUY_PRICE",
+                        help="Cost price – edit to match current supplier price",
+                        format="%.2f",
+                        min_value=0.0,
+                    ),
+                    "PRICE (ref)": st.column_config.NumberColumn(
+                        "PRICE (ref)",
+                        help="Current sales price (read-only reference)",
+                        format="%.2f",
+                    ),
+                },
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        # Apply edited buy prices (use index-based assignment to keep alignment)
+        work_df = parsed_df.copy()
+        work_df['BUY_PRICE_NUM'] = edited['BUY_PRICE']
+
+        final_df, adjusted_count, adjusted_mask, import_df = optimize_prices(
+            work_df, price_pct,
+        )
+
         # --- Summary Metrics ---
         total = len(final_df)
         unchanged = total - adjusted_count
