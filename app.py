@@ -1,7 +1,12 @@
+import os
+import time
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import math
+
+from dandomain_api import DanDomainClient, DanDomainAPIError
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -234,9 +239,65 @@ with st.sidebar:
         ),
     )
 
+    # --- DanDomain API Settings ---
+    st.divider()
+    st.subheader("🔌 DanDomain API")
+
+    # Credential loading priority: secrets.toml > env var > sidebar input
+    _dd_secrets = st.secrets.get("dandomain", {}) if hasattr(st, "secrets") else {}
+
+    api_method = st.selectbox(
+        "API method",
+        options=["rest", "graphql"],
+        index=(
+            ["rest", "graphql"].index(_dd_secrets.get("api_method", "rest"))
+            if _dd_secrets.get("api_method", "rest") in ("rest", "graphql")
+            else 0
+        ),
+        help=(
+            "**REST (v1)** — uses the ProductDataService PATCH endpoint.\n\n"
+            "**GraphQL** — uses the newer mutation-based API."
+        ),
+    )
+    shop_url = st.text_input(
+        "Shop URL",
+        value=_dd_secrets.get("shop_url", os.environ.get("DANDOMAIN_SHOP_URL", "")),
+        placeholder="https://your-shop.webshop.dandomain.dk",
+        help="Must start with https://",
+    )
+    api_key = st.text_input(
+        "API key / secret",
+        value=_dd_secrets.get("api_key", os.environ.get("DANDOMAIN_API_KEY", "")),
+        type="password",
+        help=(
+            "Your DanDomain API key. Found in admin under "
+            "Settings → Integration → API. "
+            "Stored in memory only — never written to disk or logs."
+        ),
+    )
+    site_id = int(
+        st.number_input(
+            "Site ID",
+            min_value=1,
+            max_value=100,
+            value=int(_dd_secrets.get("site_id", 1)),
+            help="Language / site ID in your webshop (default: 1).",
+        )
+    )
+    dry_run = st.checkbox(
+        "🧪 Dry-run (simulate only)",
+        value=True,
+        help=(
+            "When checked, the push-to-shop button shows what would "
+            "be sent but makes **no** API calls."
+        ),
+    )
+
+    api_ready = bool(shop_url and api_key)
+
     st.divider()
     st.markdown(
-        "**Coverage Optimizer** v1.0\n\n"
+        "**Coverage Optimizer** v1.1\n\n"
         "Calculates coverage rates and adjusts product prices to maintain "
         f"at least a **{int(MIN_COVERAGE_RATE * 100)}%** profit margin. "
         f"Prices are beautified to end in **{BEAUTIFY_LAST_DIGIT}**."
@@ -406,3 +467,130 @@ if uploaded_file is not None:
                         ),
                     },
                 )
+
+        # --- Push to Shop via API ---
+        if not import_df.empty:
+            st.divider()
+            st.subheader("🚀 Push to Shop")
+
+            if not api_ready:
+                st.info(
+                    "Configure your DanDomain API credentials in the "
+                    "sidebar to enable direct price updates."
+                )
+            else:
+                st.markdown(
+                    f"**{adjusted_count}** product"
+                    f"{'s' if adjusted_count != 1 else ''} "
+                    f"will be updated via **{api_method.upper()}** API"
+                    + (" *(dry-run — no changes will be made)*" if dry_run else "")
+                    + "."
+                )
+
+                # Connection test
+                test_col, push_col = st.columns(2)
+                with test_col:
+                    if st.button("🔍 Test Connection", use_container_width=True):
+                        try:
+                            client = DanDomainClient(shop_url, api_key, api_method)
+                            info = client.test_connection()
+                            client.close()
+                            st.success(
+                                f"✅ Connected! Product count: "
+                                f"{info.get('product_count', 'N/A')}"
+                            )
+                        except (DanDomainAPIError, ValueError) as exc:
+                            st.error(f"❌ Connection failed: {exc}")
+
+                # Push button
+                with push_col:
+                    push_clicked = st.button(
+                        "🧪 Simulate Push" if dry_run else "⚡ Push Prices Now",
+                        type="primary" if not dry_run else "secondary",
+                        use_container_width=True,
+                    )
+
+                if push_clicked:
+                    # Build the update list from adjusted rows
+                    adjusted_full = final_df[adjusted_mask]
+                    updates = []
+                    for _, row in adjusted_full.iterrows():
+                        pnum = str(row['NUMBER']).strip()
+                        new_price_str = str(row['NEW_PRICE'])
+                        # Convert Danish-format price back to float
+                        new_price_val = clean_price(new_price_str)
+                        if pnum and new_price_val > 0:
+                            updates.append({
+                                "product_number": pnum,
+                                "new_price": new_price_val,
+                            })
+
+                    if not updates:
+                        st.warning("No valid products to update.")
+                    elif dry_run:
+                        st.info(
+                            f"🧪 **Dry-run**: {len(updates)} product(s) "
+                            "would be updated. Disable dry-run in the "
+                            "sidebar to push for real."
+                        )
+                        dry_df = pd.DataFrame(updates)
+                        dry_df.columns = ['Product Number', 'New Price']
+                        st.dataframe(dry_df, use_container_width=True, hide_index=True)
+                    else:
+                        # Live push with progress
+                        progress_bar = st.progress(0, text="Pushing prices…")
+                        status_area = st.empty()
+                        log_entries = []
+
+                        def on_progress(idx, total, pnum, ok, err):
+                            progress_bar.progress(
+                                idx / total,
+                                text=f"Updating {idx}/{total}: {pnum}",
+                            )
+                            log_entries.append({
+                                "product_number": pnum,
+                                "status": "✅" if ok else "❌",
+                                "error": err,
+                                "timestamp": time.strftime("%H:%M:%S"),
+                            })
+
+                        try:
+                            client = DanDomainClient(
+                                shop_url, api_key, api_method,
+                            )
+                            results = client.update_prices_batch(
+                                updates,
+                                site_id=site_id,
+                                progress_callback=on_progress,
+                            )
+                            client.close()
+
+                            progress_bar.progress(1.0, text="Done!")
+
+                            # Summary
+                            res_c1, res_c2 = st.columns(2)
+                            res_c1.metric("✅ Succeeded", results["success"])
+                            res_c2.metric("❌ Failed", results["failed"])
+
+                            if results["errors"]:
+                                with st.expander("⚠️ Errors", expanded=True):
+                                    err_df = pd.DataFrame(results["errors"])
+                                    st.dataframe(
+                                        err_df,
+                                        use_container_width=True,
+                                        hide_index=True,
+                                    )
+
+                        except (DanDomainAPIError, ValueError) as exc:
+                            st.error(f"❌ Push failed: {exc}")
+
+                        # Audit log download
+                        if log_entries:
+                            log_df = pd.DataFrame(log_entries)
+                            log_csv = log_df.to_csv(index=False)
+                            st.download_button(
+                                label="📋 Download Audit Log",
+                                data=log_csv.encode("utf-8"),
+                                file_name="api_push_log.csv",
+                                mime="text/csv",
+                            )
