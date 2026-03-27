@@ -373,32 +373,27 @@ with st.sidebar:
     except Exception:
         _dd_secrets = {}
 
-    api_method = st.selectbox(
-        "API method",
-        options=["rest", "graphql"],
-        index=(
-            ["rest", "graphql"].index(_dd_secrets.get("api_method", "rest"))
-            if _dd_secrets.get("api_method", "rest") in ("rest", "graphql")
-            else 0
-        ),
+    st.markdown(
+        "Uses the [HostedShop SOAP API]"
+        "(https://webshop-help.dandomain.dk/integration-via-api/). "
+        "Create an API employee under **Settings → Employees** and "
+        "enable SOAP access under **Settings → API: SOAP**."
+    )
+    api_username = st.text_input(
+        "API username",
+        value=_dd_secrets.get("username", os.environ.get("DANDOMAIN_API_USERNAME", "")),
+        placeholder="api-user@example.com",
         help=(
-            "**REST (v1)** — uses the ProductDataService PATCH endpoint.\n\n"
-            "**GraphQL** — uses the newer mutation-based API."
+            "The email / username of the API employee created in your "
+            "DanDomain admin under Settings → Employees."
         ),
     )
-    shop_url = st.text_input(
-        "Shop URL",
-        value=_dd_secrets.get("shop_url", os.environ.get("DANDOMAIN_SHOP_URL", "")),
-        placeholder="https://your-shop.webshop.dandomain.dk",
-        help="Must start with https://",
-    )
-    api_key = st.text_input(
-        "API key / secret",
-        value=_dd_secrets.get("api_key", os.environ.get("DANDOMAIN_API_KEY", "")),
+    api_password = st.text_input(
+        "API password",
+        value=_dd_secrets.get("password", os.environ.get("DANDOMAIN_API_PASSWORD", "")),
         type="password",
         help=(
-            "Your DanDomain API key. Found in admin under "
-            "Settings → Integration → API. "
+            "Password for the API employee. "
             "Stored in memory only — never written to disk or logs."
         ),
     )
@@ -418,7 +413,7 @@ with st.sidebar:
         ),
     )
 
-    api_ready = bool(shop_url and api_key)
+    api_ready = bool(api_username and api_password)
 
     st.divider()
     st.markdown(
@@ -624,7 +619,7 @@ if uploaded_file is not None:
                 st.markdown(
                     f"**{adjusted_count}** product"
                     f"{'s' if adjusted_count != 1 else ''} "
-                    f"will be updated via **{api_method.upper()}** API "
+                    f"will be updated via **SOAP** API "
                     f"({mode_label})."
                 )
 
@@ -633,7 +628,7 @@ if uploaded_file is not None:
                 with test_col:
                     if st.button("🔍 Test Connection", use_container_width=True):
                         try:
-                            with DanDomainClient(shop_url, api_key, api_method) as client:
+                            with DanDomainClient(api_username, api_password) as client:
                                 info = client.test_connection()
                             st.success(
                                 f"✅ Connected! Product count: "
@@ -735,7 +730,7 @@ if uploaded_file is not None:
                             })
 
                         try:
-                            with DanDomainClient(shop_url, api_key, api_method) as client:
+                            with DanDomainClient(api_username, api_password) as client:
                                 results = client.update_prices_batch(
                                     pending_updates,
                                     site_id=site_id,

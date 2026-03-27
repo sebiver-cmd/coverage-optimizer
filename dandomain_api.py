@@ -1,25 +1,33 @@
-"""Secure DanDomain webshop API client.
+"""Secure DanDomain webshop SOAP API client.
 
-Supports both REST (v1) and GraphQL endpoints for updating product
-prices on a DanDomain webshop.  Credentials are **never** logged or
-hard-coded — they must be supplied via Streamlit secrets, environment
-variables, or a secure input field.
+Uses the HostedShop SOAP API (``https://api.hostedshop.dk/service.wsdl``)
+to read and update product data on a DanDomain webshop.
+
+Credentials are **never** logged or hard-coded — they must be supplied
+via Streamlit secrets, environment variables, or a secure input field.
 
 Security layers
 ---------------
-1. HTTPS enforcement — HTTP URLs are rejected outright.
-2. SSL certificate verification — always enabled, never disabled.
-3. Credential isolation — the API key is kept in memory only; it is
-   never written to disk, included in log output, or cached by
-   Streamlit.  A logging filter scrubs keys from any log message.
-4. Input validation — product numbers, prices, and URLs are validated
-   before any request is made.
-5. Retry with exponential back-off — transient failures and 429
-   (rate-limit) responses are retried up to *MAX_RETRIES* times.
-6. Sanitised error messages — raw API responses and internal URLs are
-   never exposed to the caller.
-7. Redirect protection — redirects are disabled so that the API key
-   embedded in the URL path cannot leak to a non-HTTPS destination.
+1. HTTPS — the WSDL and all SOAP calls use HTTPS exclusively.
+2. SSL certificate verification — always enabled via the underlying
+   ``requests.Session``.
+3. Credential isolation — username and password are kept in memory
+   only; a logging filter scrubs them from any log message.
+4. Input validation — product numbers and prices are validated before
+   any request is made.
+5. Retry with exponential back-off — transient SOAP faults are retried
+   up to *MAX_RETRIES* times.
+6. Sanitised error messages — raw SOAP faults are never exposed to the
+   caller.
+
+Setup
+-----
+1. Log into your DanDomain admin panel.
+2. Go to **Settings → API: SOAP** and enable API access.
+3. Under **Settings → Employees** create an API user (email + password).
+4. Enter that email (username) and password in the app sidebar.
+
+See https://webshop-help.dandomain.dk/integration-via-api/
 """
 
 from __future__ import annotations
@@ -28,59 +36,63 @@ import logging
 import re
 import time
 from typing import Any, Callable, Optional
-from urllib.parse import quote as urlquote
 
 import requests
+from zeep import Client as ZeepClient
+from zeep.exceptions import Fault as SoapFault, Error as ZeepError
+from zeep.helpers import serialize_object
+from zeep.transports import Transport
 
 logger = logging.getLogger(__name__)
 
 
-class _KeyScrubFilter(logging.Filter):
-    """Prevent API keys from leaking into log output."""
+class _CredentialScrubFilter(logging.Filter):
+    """Prevent credentials from leaking into log output."""
 
-    def __init__(self, key: str = ""):
+    def __init__(self) -> None:
         super().__init__()
-        self._key = key
+        self._secrets: list[str] = []
 
-    def set_key(self, key: str) -> None:
-        self._key = key
+    def add_secret(self, secret: str) -> None:
+        if secret and secret not in self._secrets:
+            self._secrets.append(secret)
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if self._key and self._key in str(record.msg):
-            record.msg = str(record.msg).replace(self._key, "***")
-        if hasattr(record, "args") and record.args:
-            args_str = str(record.args)
-            if self._key and self._key in args_str:
-                record.args = tuple(
-                    str(a).replace(self._key, "***") if isinstance(a, str) else a
-                    for a in (record.args if isinstance(record.args, tuple) else (record.args,))
-                )
+        for secret in self._secrets:
+            if secret in str(record.msg):
+                record.msg = str(record.msg).replace(secret, "***")
+            if hasattr(record, "args") and record.args:
+                if secret in str(record.args):
+                    record.args = tuple(
+                        str(a).replace(secret, "***") if isinstance(a, str) else a
+                        for a in (
+                            record.args
+                            if isinstance(record.args, tuple)
+                            else (record.args,)
+                        )
+                    )
         return True
 
 
-_key_filter = _KeyScrubFilter()
-logger.addFilter(_key_filter)
+_cred_filter = _CredentialScrubFilter()
+logger.addFilter(_cred_filter)
 
 # ---------------------------------------------------------------------------
 # Connection defaults
 # ---------------------------------------------------------------------------
-CONNECT_TIMEOUT = 10   # seconds
-READ_TIMEOUT = 30      # seconds
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 1.0  # doubles on each retry
-BATCH_DELAY = 0.2      # seconds between successive batch requests
+BATCH_DELAY = 0.2       # seconds between successive batch requests
+SOAP_TIMEOUT = 30       # seconds for SOAP operations
 
 # ---------------------------------------------------------------------------
-# DanDomain endpoint paths (v1 REST / JSON)
+# DanDomain SOAP endpoint
 # ---------------------------------------------------------------------------
-PRODUCT_DATA_SERVICE = "/admin/WEBAPI/Endpoints/v1_0/ProductDataService"
-PRODUCT_SERVICE = "/admin/WEBAPI/Endpoints/v1_0/ProductService"
-GRAPHQL_ENDPOINT = "/admin/WEBAPI/Endpoints/v1_0/GraphQL"
+WSDL_URL = "https://api.hostedshop.dk/service.wsdl"
 
 # ---------------------------------------------------------------------------
 # Validation helpers
 # ---------------------------------------------------------------------------
-_HTTPS_URL_RE = re.compile(r"^https://[a-zA-Z0-9][\w.-]*\.\w{2,}")
 _SAFE_PRODUCT_NUMBER_RE = re.compile(r"^[\w./ -]+$")
 _MAX_PRICE = 999_999.0
 
@@ -93,111 +105,101 @@ class DanDomainAPIError(Exception):
 # Client
 # ---------------------------------------------------------------------------
 class DanDomainClient:
-    """Secure HTTP client for the DanDomain webshop API.
+    """Secure SOAP client for the DanDomain / HostedShop API.
 
     Parameters
     ----------
-    shop_url : str
-        Shop base URL — **must** start with ``https://``.
-    api_key : str
-        DanDomain API key or app secret.
-    method : ``"rest"`` | ``"graphql"``
-        Which API flavour to use.
+    username : str
+        API employee username (email) created in the DanDomain admin
+        panel under Settings → Employees.
+    password : str
+        Password for the API employee.
     """
 
-    def __init__(self, shop_url: str, api_key: str, method: str = "rest"):
+    def __init__(self, username: str, password: str):
         # --- validate inputs ------------------------------------------------
-        if not shop_url or not isinstance(shop_url, str):
-            raise ValueError("Shop URL is required")
+        if not username or not isinstance(username, str):
+            raise ValueError("API username is required")
+        if not password or not isinstance(password, str):
+            raise ValueError("API password is required")
 
-        shop_url = shop_url.strip().rstrip("/")
-        if not shop_url.startswith("https://"):
-            raise ValueError("Shop URL must use HTTPS for security")
-        if not _HTTPS_URL_RE.match(shop_url):
-            raise ValueError("Invalid shop URL format")
+        self._username = username.strip()
+        self._password = password
 
-        if not api_key or not isinstance(api_key, str):
-            raise ValueError("API key is required")
+        # Register credentials with the log-scrub filter so that even
+        # debug / third-party logging can never leak them.
+        _cred_filter.add_secret(self._password)
 
-        if method not in ("rest", "graphql"):
-            raise ValueError("Method must be 'rest' or 'graphql'")
+        # --- SOAP client with secure transport ------------------------------
+        session = requests.Session()
+        session.verify = True  # always verify SSL certs
+        session.headers.update({"User-Agent": "CoverageOptimizer/1.0"})
+        self._session = session
 
-        self._shop_url = shop_url
-        self._api_key = api_key
-        self._method = method
+        transport = Transport(
+            session=session,
+            timeout=SOAP_TIMEOUT,
+            operation_timeout=SOAP_TIMEOUT,
+        )
 
-        # Register the API key with the log-scrub filter so that even
-        # debug / third-party logging can never leak it.
-        _key_filter.set_key(api_key)
+        try:
+            self._soap = ZeepClient(wsdl=WSDL_URL, transport=transport)
+        except Exception as exc:
+            raise DanDomainAPIError(
+                f"Failed to load SOAP service definition: {type(exc).__name__}"
+            ) from exc
 
-        # --- HTTP session with security defaults ----------------------------
-        self._session = requests.Session()
-        self._session.verify = True        # always verify SSL certs
-        self._session.headers.update({
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "User-Agent": "CoverageOptimizer/1.0",
-        })
+        # Authenticate the SOAP session
+        self._connect()
 
     # -- internal helpers ----------------------------------------------------
 
-    def _rest_url(self, service: str, path: str) -> str:
-        """Build a v1 REST URL with the API key embedded."""
-        return f"{self._shop_url}{service}/{self._api_key}{path}"
+    def _connect(self) -> None:
+        """Authenticate with ``Solution_Connect``."""
+        try:
+            self._soap.service.Solution_Connect(
+                Username=self._username,
+                Password=self._password,
+            )
+        except SoapFault as exc:
+            raise DanDomainAPIError(
+                "Authentication failed — check your API username and password. "
+                "Ensure SOAP API access is enabled under Settings → API: SOAP "
+                "and that the employee has API permissions."
+            ) from exc
+        except Exception as exc:
+            raise DanDomainAPIError(
+                f"Connection failed: {type(exc).__name__}"
+            ) from exc
 
-    def _graphql_url(self) -> str:
-        return f"{self._shop_url}{GRAPHQL_ENDPOINT}"
-
-    def _request(
-        self,
-        method: str,
-        url: str,
-        json_body: Any = None,
-    ) -> dict:
-        """Execute an HTTP request with retry / back-off."""
+    def _call(self, operation: str, **kwargs) -> Any:
+        """Execute a SOAP operation with retry / back-off."""
         last_error: Optional[str] = None
 
         for attempt in range(MAX_RETRIES):
             try:
-                resp = self._session.request(
-                    method,
-                    url,
-                    json=json_body,
-                    timeout=(CONNECT_TIMEOUT, READ_TIMEOUT),
-                    allow_redirects=False,  # never follow redirects
-                )
-
-                # Reject any redirect — the URL contains the API key
-                if 300 <= resp.status_code < 400:
+                method = getattr(self._soap.service, operation)
+                return method(**kwargs)
+            except SoapFault as exc:
+                fault_str = str(exc)
+                # Authentication / authorisation faults — don't retry
+                if "auth" in fault_str.lower() or "denied" in fault_str.lower():
                     raise DanDomainAPIError(
-                        "API returned a redirect — aborting to protect credentials"
-                    )
-
-                # Rate-limited — wait and retry
-                if resp.status_code == 429:
-                    wait = RETRY_BASE_DELAY * (2 ** attempt)
-                    time.sleep(wait)
-                    continue
-
-                if resp.status_code >= 400:
-                    raise DanDomainAPIError(
-                        f"API returned HTTP {resp.status_code}"
-                    )
-
-                return resp.json()
-
+                        "Access denied — check API user permissions"
+                    ) from exc
+                last_error = f"SOAP fault on {operation}"
+            except ZeepError as exc:
+                last_error = f"SOAP error: {type(exc).__name__}"
             except requests.exceptions.SSLError:
                 raise DanDomainAPIError(
                     "SSL certificate verification failed"
                 )
             except requests.exceptions.ConnectionError:
-                last_error = "Connection failed — check the shop URL"
+                last_error = "Connection failed — check your network"
             except requests.exceptions.Timeout:
                 last_error = "Request timed out"
-            except DanDomainAPIError:
-                raise
-            except requests.exceptions.RequestException as exc:
-                last_error = f"Request error: {type(exc).__name__}"
+            except Exception as exc:
+                last_error = f"Unexpected error: {type(exc).__name__}"
 
             if attempt < MAX_RETRIES - 1:
                 time.sleep(RETRY_BASE_DELAY * (2 ** attempt))
@@ -230,45 +232,43 @@ class DanDomainClient:
     def test_connection(self) -> dict:
         """Test the API connection.
 
-        Returns a dict with ``status`` and extra info on success; raises
-        :class:`DanDomainAPIError` on failure.
-        """
-        if self._method == "rest":
-            url = self._rest_url(PRODUCT_DATA_SERVICE, "/ProductCount")
-            result = self._request("GET", url)
-            # The endpoint may return a bare integer or a JSON object
-            count = result if isinstance(result, int) else result
-            return {"status": "connected", "product_count": count}
+        Fetches a single product to verify the session is authenticated
+        and the API is reachable.  Returns a dict with ``status``.
 
-        # GraphQL — lightweight introspection
-        query = {"query": "{ __schema { queryType { name } } }"}
-        result = self._request("POST", self._graphql_url(), json_body=query)
-        return {"status": "connected", "schema": result}
+        Raises :class:`DanDomainAPIError` on failure.
+        """
+        # Use a lightweight call — fetch a limited product batch instead
+        # of the full catalogue.
+        result = self._call("Product_GetAllWithLimit", Start=0, Length=1)
+        count = len(result) if isinstance(result, list) else 0
+        return {"status": "connected", "product_count": count}
+
+    def _get_product_by_number(self, product_number: str) -> Any:
+        """Fetch a raw zeep product object by item number.
+
+        Returns the SOAP response object; raises
+        :class:`DanDomainAPIError` if the product is not found.
+        """
+        product_number = self._validate_product_number(product_number)
+        result = self._call(
+            "Product_GetByItemNumber",
+            ItemNumber=product_number,
+        )
+        if result is None:
+            raise DanDomainAPIError(
+                f"Product '{product_number}' not found"
+            )
+        return result
 
     def get_product(
         self,
         product_number: str,
         site_id: int = 1,
     ) -> dict:
-        """Fetch a single product by its product number."""
-        product_number = self._validate_product_number(product_number)
-        encoded = urlquote(product_number, safe="")
-
-        if self._method == "rest":
-            url = self._rest_url(PRODUCT_DATA_SERVICE, f"/{encoded}")
-            return self._request("GET", url)
-
-        query = {
-            "query": (
-                "query GetProduct($number: String!) {"
-                "  product(number: $number) {"
-                "    id number salesPrice costPrice"
-                "  }"
-                "}"
-            ),
-            "variables": {"number": product_number},
-        }
-        return self._request("POST", self._graphql_url(), json_body=query)
+        """Fetch a single product by its item number."""
+        result = self._get_product_by_number(product_number)
+        # Convert zeep CompoundValue to a plain dict for consistency
+        return serialize_object(result, dict)
 
     def update_product_price(
         self,
@@ -281,48 +281,27 @@ class DanDomainClient:
         Parameters
         ----------
         product_number : str
-            Product SKU / number.
+            Product SKU / item number.
         new_price : float
             New sales price **including VAT**.
         site_id : int
             Language / site ID (default ``1``).
         """
-        product_number = self._validate_product_number(product_number)
         new_price = self._validate_price(new_price)
-        encoded = urlquote(product_number, safe="")
 
-        if self._method == "rest":
-            url = self._rest_url(PRODUCT_DATA_SERVICE, f"/{encoded}")
-            body = [{"Key": "SalesPrice", "Value": str(new_price)}]
-            return self._request("PATCH", url, json_body=body)
+        # Fetch the current product, update its price, and push it back
+        product = self._get_product_by_number(product_number)
 
-        # GraphQL mutation
-        query = {
-            "query": (
-                "mutation UpdatePrice($input: ProductUpdateInput!) {"
-                "  updateProduct(input: $input) {"
-                "    product { id number salesPrice }"
-                "    userErrors { field message }"
-                "  }"
-                "}"
-            ),
-            "variables": {
-                "input": {
-                    "number": product_number,
-                    "salesPrice": new_price,
-                },
-            },
-        }
-        result = self._request("POST", self._graphql_url(), json_body=query)
+        # Set the new sales price — guard against a missing Prices node
+        if product.Prices is None:
+            raise DanDomainAPIError(
+                f"Product '{product_number}' has no price structure; "
+                "cannot update price"
+            )
+        product.Prices.Amount = new_price
 
-        # Surface GraphQL-level errors
-        data = result.get("data", {}).get("updateProduct", {})
-        errors = data.get("userErrors", [])
-        if errors:
-            msg = errors[0].get("message", "Unknown error")
-            raise DanDomainAPIError(f"Update failed: {msg}")
-
-        return result
+        result = self._call("Product_Update", ProductData=product)
+        return {"updated": True, "product_number": product_number, "result": result}
 
     def update_prices_batch(
         self,
