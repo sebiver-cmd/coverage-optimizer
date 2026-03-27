@@ -180,8 +180,18 @@ class DanDomainClient:
                     continue
 
                 if resp.status_code >= 400:
+                    hint = {
+                        401: " — invalid API key",
+                        403: " — access denied; check API key permissions",
+                        404: (
+                            " — endpoint not found; verify that the"
+                            " shop URL and API key are correct and"
+                            " that the API is enabled for your shop"
+                        ),
+                        500: " — server error on the DanDomain side",
+                    }.get(resp.status_code, "")
                     raise DanDomainAPIError(
-                        f"API returned HTTP {resp.status_code}"
+                        f"API returned HTTP {resp.status_code}{hint}"
                     )
 
                 return resp.json()
