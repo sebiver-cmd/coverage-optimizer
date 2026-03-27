@@ -25,6 +25,10 @@ EXPORT_COLUMNS = [
     'VARIANT_ID', 'VARIANT_TYPES',
     'NEW_PRICE_EX_VAT', 'NEW_PRICE', 'NEW_COVERAGE_RATE_%',
 ]
+IMPORT_COLUMNS_BASE = [
+    'PRODUCT_ID', 'TITLE_DK', 'NUMBER',
+    'PRICE', 'VARIANT_ID', 'VARIANT_TYPES',
+]
 ENCODING_OPTIONS = {
     'Auto-detect': 'auto',
     'UTF-8': 'utf-8',
@@ -97,8 +101,16 @@ def calc_coverage_rate(df, price_col, buy_col):
 
 
 @st.cache_data
-def process_products(raw_bytes: bytes, encoding: str = 'auto') -> tuple:
-    """Parse uploaded CSV bytes and return an optimised product DataFrame."""
+def process_products(raw_bytes: bytes, encoding: str = 'auto',
+                     buy_price_pct: float = 0.0) -> tuple:
+    """Parse uploaded CSV bytes and return an optimised product DataFrame.
+
+    Parameters
+    ----------
+    buy_price_pct : float
+        Percentage adjustment to apply to all BUY_PRICE values before
+        recalculating coverage (e.g. 5.0 = +5 %).
+    """
     from io import BytesIO
 
     if encoding == 'auto':
@@ -113,6 +125,11 @@ def process_products(raw_bytes: bytes, encoding: str = 'auto') -> tuple:
     # Clean the prices
     df['BUY_PRICE_NUM'] = df['BUY_PRICE'].apply(clean_price)
     df['PRICE_NUM'] = df['PRICE'].apply(clean_price)
+
+    # Apply optional BUY_PRICE adjustment
+    if buy_price_pct != 0:
+        df['BUY_PRICE_NUM'] = df['BUY_PRICE_NUM'] * (1 + buy_price_pct / 100)
+        df['BUY_PRICE'] = df['BUY_PRICE_NUM'].apply(format_dk)
     df['PRICE_EX_VAT_NUM'] = df['PRICE_NUM'] / (1 + VAT_RATE)
 
     # Calculate current coverage rate
@@ -158,7 +175,11 @@ def process_products(raw_bytes: bytes, encoding: str = 'auto') -> tuple:
         if col in df.columns:
             df[col] = df[col].apply(format_int_col)
 
-    return df[EXPORT_COLUMNS], int(needs_adjustment.sum()), needs_adjustment.values
+    # Build import-ready DataFrame (adjusted rows only, original columns)
+    import_df = df.loc[needs_adjustment, REQUIRED_COLUMNS].copy()
+    import_df['PRICE'] = df.loc[needs_adjustment, 'FINAL_PRICE_NUM'].apply(format_dk)
+
+    return df[EXPORT_COLUMNS], int(needs_adjustment.sum()), needs_adjustment.values, import_df
 
 
 # --- Sidebar ---
@@ -174,6 +195,30 @@ with st.sidebar:
         ),
     )
     selected_encoding = ENCODING_OPTIONS[encoding_label]
+
+    st.divider()
+    st.subheader("💰 BUY_PRICE Adjustment")
+    buy_price_pct = st.number_input(
+        "Adjust BUY_PRICE (%)",
+        min_value=-50.0,
+        max_value=200.0,
+        value=0.0,
+        step=0.5,
+        help=(
+            "Increase or decrease all buy prices by this percentage "
+            "before recalculating coverage rates. For example, enter 5 "
+            "to simulate a 5 % supplier price increase."
+        ),
+    )
+    include_buy_price = st.checkbox(
+        "Include BUY_PRICE in import file",
+        value=buy_price_pct != 0,
+        help=(
+            "When checked, the import-ready CSV will contain the "
+            "BUY_PRICE column so the buy price is also updated on "
+            "re-import."
+        ),
+    )
 
     st.divider()
     st.markdown(
@@ -196,8 +241,8 @@ uploaded_file = st.file_uploader("Upload Product CSV", type=['csv'])
 if uploaded_file is not None:
     try:
         raw_bytes = uploaded_file.getvalue()
-        final_df, adjusted_count, adjusted_mask = process_products(
-            raw_bytes, selected_encoding,
+        final_df, adjusted_count, adjusted_mask, import_df = process_products(
+            raw_bytes, selected_encoding, buy_price_pct,
         )
     except ValueError as exc:
         st.error(str(exc))
@@ -225,12 +270,44 @@ if uploaded_file is not None:
             else:
                 st.dataframe(adjusted_df, use_container_width=True)
 
-        # --- Download ---
+        # --- Downloads ---
         st.divider()
-        csv_data = "\ufeff" + "PRODUCTS\n" + final_df.to_csv(sep=';', index=False)
-        st.download_button(
-            label="📥 Download Updated Products CSV",
-            data=csv_data.encode('utf-8'),
-            file_name="updated_products.csv",
-            mime="text/csv; charset=utf-8",
-        )
+        dl_col1, dl_col2 = st.columns(2)
+
+        # Preview – full report with all analysis columns
+        csv_preview = "\ufeff" + "PRODUCTS\n" + final_df.to_csv(sep=';', index=False)
+        with dl_col1:
+            st.download_button(
+                label="📥 Preview – Full Report CSV",
+                data=csv_preview.encode('utf-8'),
+                file_name="preview_products.csv",
+                mime="text/csv; charset=utf-8",
+            )
+
+        # Import-ready – only adjusted rows, importable columns
+        import_cols = IMPORT_COLUMNS_BASE.copy()
+        if include_buy_price:
+            import_cols.insert(3, 'BUY_PRICE')
+
+        if import_df.empty:
+            with dl_col2:
+                st.download_button(
+                    label="📥 Import-Ready CSV",
+                    data="",
+                    file_name="import_products.csv",
+                    mime="text/csv; charset=utf-8",
+                    disabled=True,
+                )
+                st.caption("No products needed adjustment.")
+        else:
+            csv_import = (
+                "\ufeff" + "PRODUCTS\n"
+                + import_df[import_cols].to_csv(sep=';', index=False)
+            )
+            with dl_col2:
+                st.download_button(
+                    label="📥 Import-Ready CSV",
+                    data=csv_import.encode('utf-8'),
+                    file_name="import_products.csv",
+                    mime="text/csv; charset=utf-8",
+                )
