@@ -11,13 +11,15 @@ Security layers
 2. SSL certificate verification — always enabled, never disabled.
 3. Credential isolation — the API key is kept in memory only; it is
    never written to disk, included in log output, or cached by
-   Streamlit.
+   Streamlit.  A logging filter scrubs keys from any log message.
 4. Input validation — product numbers, prices, and URLs are validated
    before any request is made.
 5. Retry with exponential back-off — transient failures and 429
    (rate-limit) responses are retried up to *MAX_RETRIES* times.
 6. Sanitised error messages — raw API responses and internal URLs are
    never exposed to the caller.
+7. Redirect protection — redirects are disabled so that the API key
+   embedded in the URL path cannot leak to a non-HTTPS destination.
 """
 
 from __future__ import annotations
@@ -31,6 +33,33 @@ from urllib.parse import quote as urlquote
 import requests
 
 logger = logging.getLogger(__name__)
+
+
+class _KeyScrubFilter(logging.Filter):
+    """Prevent API keys from leaking into log output."""
+
+    def __init__(self, key: str = ""):
+        super().__init__()
+        self._key = key
+
+    def set_key(self, key: str) -> None:
+        self._key = key
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if self._key and self._key in str(record.msg):
+            record.msg = str(record.msg).replace(self._key, "***")
+        if hasattr(record, "args") and record.args:
+            args_str = str(record.args)
+            if self._key and self._key in args_str:
+                record.args = tuple(
+                    str(a).replace(self._key, "***") if isinstance(a, str) else a
+                    for a in (record.args if isinstance(record.args, tuple) else (record.args,))
+                )
+        return True
+
+
+_key_filter = _KeyScrubFilter()
+logger.addFilter(_key_filter)
 
 # ---------------------------------------------------------------------------
 # Connection defaults
@@ -97,9 +126,16 @@ class DanDomainClient:
         self._api_key = api_key
         self._method = method
 
+        # Register the API key with the log-scrub filter so that even
+        # debug / third-party logging can never leak it.
+        _key_filter.set_key(api_key)
+
         # --- HTTP session with security defaults ----------------------------
         self._session = requests.Session()
         self._session.verify = True        # always verify SSL certs
+        self._session.max_redirects = 0    # block redirects — the API key
+        #                                     is in the URL path and must not
+        #                                     leak via a 3xx redirect.
         self._session.headers.update({
             "Accept": "application/json",
             "Content-Type": "application/json",
@@ -131,7 +167,14 @@ class DanDomainClient:
                     url,
                     json=json_body,
                     timeout=(CONNECT_TIMEOUT, READ_TIMEOUT),
+                    allow_redirects=False,  # never follow redirects
                 )
+
+                # Reject any redirect — the URL contains the API key
+                if 300 <= resp.status_code < 400:
+                    raise DanDomainAPIError(
+                        "API returned a redirect — aborting to protect credentials"
+                    )
 
                 # Rate-limited — wait and retry
                 if resp.status_code == 429:
@@ -149,6 +192,10 @@ class DanDomainClient:
             except requests.exceptions.SSLError:
                 raise DanDomainAPIError(
                     "SSL certificate verification failed"
+                )
+            except requests.exceptions.TooManyRedirects:
+                raise DanDomainAPIError(
+                    "Too many redirects — aborting to protect credentials"
                 )
             except requests.exceptions.ConnectionError:
                 last_error = "Connection failed — check the shop URL"
@@ -338,3 +385,9 @@ class DanDomainClient:
     def close(self) -> None:
         """Close the underlying HTTP session."""
         self._session.close()
+
+    def __enter__(self) -> "DanDomainClient":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
