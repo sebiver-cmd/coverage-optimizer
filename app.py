@@ -370,7 +370,11 @@ def parse_csv(raw_bytes: bytes, encoding: str = 'auto') -> pd.DataFrame:
     return df
 
 
-def optimize_prices(df: pd.DataFrame, price_pct: float = 0.0) -> tuple:
+def optimize_prices(
+    df: pd.DataFrame,
+    price_pct: float = 0.0,
+    original_buy_prices: "pd.Series | None" = None,
+) -> tuple:
     """Apply optional PRICE adjustment, calculate coverage and optimise.
 
     Parameters
@@ -378,6 +382,11 @@ def optimize_prices(df: pd.DataFrame, price_pct: float = 0.0) -> tuple:
     price_pct : float
         Percentage adjustment to apply to all PRICE values before
         recalculating coverage (e.g. 10.0 = +10 %).
+    original_buy_prices : pd.Series, optional
+        Original ``BUY_PRICE_NUM`` values before per-line editing.
+        When supplied, products whose BUY_PRICE was changed are
+        included in the import / push set even when their coverage
+        rate already meets the minimum threshold.
     """
     df = df.copy()
 
@@ -429,11 +438,18 @@ def optimize_prices(df: pd.DataFrame, price_pct: float = 0.0) -> tuple:
         (df['FINAL_COVERAGE_RATE'] * 100).round(2).astype(str).str.replace('.', ',', regex=False) + '%'
     )
 
-    # Build import-ready DataFrame (adjusted rows only, original columns)
-    import_df = df.loc[needs_adjustment, REQUIRED_COLUMNS].copy()
-    import_df['PRICE'] = df.loc[needs_adjustment, 'FINAL_PRICE_NUM'].apply(format_dk)
+    # Determine the full set of products for import / push:
+    # products needing a price adjustment + products with manually changed BUY_PRICE
+    in_import_set = needs_adjustment.copy()
+    if original_buy_prices is not None:
+        buy_price_changed = df['BUY_PRICE_NUM'] != original_buy_prices
+        in_import_set = in_import_set | buy_price_changed
 
-    return df[EXPORT_COLUMNS], int(needs_adjustment.sum()), needs_adjustment.values, import_df
+    # Build import-ready DataFrame
+    import_df = df.loc[in_import_set, REQUIRED_COLUMNS].copy()
+    import_df['PRICE'] = df.loc[in_import_set, 'FINAL_PRICE_NUM'].apply(format_dk)
+
+    return df[EXPORT_COLUMNS], int(in_import_set.sum()), in_import_set.values, import_df
 
 
 # --- Sidebar ---
@@ -602,7 +618,7 @@ if uploaded_file is not None:
         work_df['BUY_PRICE_NUM'] = edited['BUY_PRICE']
 
         final_df, adjusted_count, adjusted_mask, import_df = optimize_prices(
-            work_df, price_pct,
+            work_df, price_pct, original_buy_prices=parsed_df['BUY_PRICE_NUM'],
         )
 
         # --- Summary Metrics ---
@@ -792,9 +808,16 @@ if uploaded_file is not None:
                     # would carry: PRODUCT_ID, NUMBER, VARIANT_ID,
                     # VARIANT_TYPES — this ensures the correct
                     # product / variant is targeted.
+                    #
+                    # buy_price is included when the user edited the
+                    # BUY_PRICE for a product so that the cost price
+                    # is also pushed to the shop.
+                    bp_changed = (
+                        parsed_df['BUY_PRICE_NUM'] != work_df['BUY_PRICE_NUM']
+                    )
                     adjusted_full = final_df[adjusted_mask]
                     updates = []
-                    for _, row in adjusted_full.iterrows():
+                    for idx, row in adjusted_full.iterrows():
                         pid = str(row.get('PRODUCT_ID', '')).strip()
                         pnum = str(row['NUMBER']).strip()
                         new_price_str = str(row['NEW_PRICE'])
@@ -802,13 +825,18 @@ if uploaded_file is not None:
                         vid = str(row.get('VARIANT_ID', '')).strip()
                         vtypes = str(row.get('VARIANT_TYPES', '')).strip()
                         if pnum and new_price_val > 0:
-                            updates.append({
+                            entry = {
                                 "product_id": pid,
                                 "product_number": pnum,
                                 "new_price": new_price_val,
                                 "variant_id": vid,
                                 "variant_types": vtypes,
-                            })
+                            }
+                            if bp_changed.loc[idx]:
+                                entry["buy_price"] = clean_price(
+                                    str(row.get('BUY_PRICE', ''))
+                                )
+                            updates.append(entry)
 
                     if not updates:
                         st.warning("No valid products to update.")
@@ -818,14 +846,20 @@ if uploaded_file is not None:
                             "would be updated. Disable dry-run in the "
                             "sidebar to push for real."
                         )
-                        dry_df = pd.DataFrame(updates)[
-                            ['product_id', 'product_number', 'new_price',
-                             'variant_id', 'variant_types']
+                        dry_df = pd.DataFrame(updates)
+                        dry_cols = [
+                            'product_id', 'product_number', 'new_price',
+                            'variant_id', 'variant_types',
                         ]
-                        dry_df.columns = [
+                        dry_labels = [
                             'Product ID', 'Product Number', 'New Price',
                             'Variant ID', 'Variant Types',
                         ]
+                        if 'buy_price' in dry_df.columns:
+                            dry_cols.append('buy_price')
+                            dry_labels.append('Buy Price')
+                        dry_df = dry_df[dry_cols]
+                        dry_df.columns = dry_labels
                         st.dataframe(dry_df, use_container_width=True, hide_index=True)
                     else:
                         # --- Two-step confirmation for live push --------

@@ -276,6 +276,7 @@ class DanDomainClient:
         new_price: float,
         site_id: int = 1,
         variant_id: str = "",
+        buy_price: "float | None" = None,
     ) -> dict:
         """Update the sales price of a single product or variant.
 
@@ -294,6 +295,9 @@ class DanDomainClient:
             If the variant cannot be found a
             :class:`DanDomainAPIError` is raised so the caller can
             decide how to proceed.
+        buy_price : float, optional
+            When provided the product's *BuyPrice* (cost price) is
+            also updated.
         """
         new_price = self._validate_price(new_price)
 
@@ -346,6 +350,12 @@ class DanDomainClient:
                 )
             product.Prices.Amount = new_price
 
+        # --- cost / buy price ------------------------------------------
+        if buy_price is not None:
+            buy_price = self._validate_price(buy_price)
+            if hasattr(product, "BuyPrice"):
+                product.BuyPrice = buy_price
+
         result = self._call("Product_Update", ProductData=product)
         return {
             "updated": True,
@@ -367,11 +377,13 @@ class DanDomainClient:
         updates : list[dict]
             Each dict must contain ``product_number`` (str) and
             ``new_price`` (float).  Optionally include
-            ``product_id`` (str), ``variant_id`` (str) and
-            ``variant_types`` (str) to mirror the fields that a
-            regular CSV import would carry.  ``variant_id`` is
-            forwarded to :meth:`update_product_price` to target
-            the correct variant.
+            ``product_id`` (str), ``variant_id`` (str),
+            ``variant_types`` (str) and ``buy_price`` (float) to
+            mirror the fields that a regular CSV import would carry.
+            ``variant_id`` is forwarded to
+            :meth:`update_product_price` to target the correct
+            variant.  ``buy_price``, when present, updates the
+            product's cost price.
         site_id : int
             Language / site ID (default ``1``).
         progress_callback : callable, optional
@@ -391,10 +403,12 @@ class DanDomainClient:
             pnum = update.get("product_number", "")
             price = update.get("new_price", 0)
             vid = update.get("variant_id", "")
+            buy = update.get("buy_price")
 
             try:
                 self.update_product_price(
                     pnum, price, site_id, variant_id=vid,
+                    buy_price=buy,
                 )
                 results["success"] += 1
                 if progress_callback:
