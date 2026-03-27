@@ -365,3 +365,44 @@ if uploaded_file is not None:
                     file_name="import_products.csv",
                     mime="text/csv; charset=utf-8",
                 )
+
+        # --- Import Preview ---
+        if not import_df.empty:
+            adjusted_full = final_df[adjusted_mask]
+            with st.expander(
+                f"🔍 Preview Import Changes ({adjusted_count} product"
+                f"{'s' if adjusted_count != 1 else ''})",
+                expanded=False,
+            ):
+                preview_df = pd.DataFrame({
+                    'Product ID': adjusted_full['PRODUCT_ID'].values,
+                    'Title': adjusted_full['TITLE_DK'].values,
+                    'Number': adjusted_full['NUMBER'].values,
+                    'Old Price': adjusted_full['PRICE'].values,
+                    'New Price': adjusted_full['NEW_PRICE'].values,
+                    'Old Coverage': adjusted_full['COVERAGE_RATE_%'].values,
+                    'New Coverage': adjusted_full['NEW_COVERAGE_RATE_%'].values,
+                })
+
+                st.dataframe(
+                    preview_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        'Product ID': st.column_config.TextColumn(width='small'),
+                        'Title': st.column_config.TextColumn(width='medium'),
+                        'Number': st.column_config.TextColumn(width='small'),
+                        'Old Price': st.column_config.TextColumn(
+                            'Old Price 💰', width='small',
+                        ),
+                        'New Price': st.column_config.TextColumn(
+                            'New Price ✅', width='small',
+                        ),
+                        'Old Coverage': st.column_config.TextColumn(
+                            'Old Coverage', width='small',
+                        ),
+                        'New Coverage': st.column_config.TextColumn(
+                            'New Coverage ✅', width='small',
+                        ),
+                    },
+                )
