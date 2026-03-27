@@ -244,7 +244,10 @@ with st.sidebar:
     st.subheader("🔌 DanDomain API")
 
     # Credential loading priority: secrets.toml > env var > sidebar input
-    _dd_secrets = st.secrets.get("dandomain", {}) if hasattr(st, "secrets") else {}
+    try:
+        _dd_secrets = st.secrets.get("dandomain", {})
+    except Exception:
+        _dd_secrets = {}
 
     api_method = st.selectbox(
         "API method",
@@ -275,14 +278,12 @@ with st.sidebar:
             "Stored in memory only — never written to disk or logs."
         ),
     )
-    site_id = int(
-        st.number_input(
-            "Site ID",
-            min_value=1,
-            max_value=100,
-            value=int(_dd_secrets.get("site_id", 1)),
-            help="Language / site ID in your webshop (default: 1).",
-        )
+    site_id = st.number_input(
+        "Site ID",
+        min_value=1,
+        max_value=100,
+        value=_dd_secrets.get("site_id", 1),
+        help="Language / site ID in your webshop (default: 1).",
     )
     dry_run = st.checkbox(
         "🧪 Dry-run (simulate only)",

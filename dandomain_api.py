@@ -51,7 +51,7 @@ GRAPHQL_ENDPOINT = "/admin/WEBAPI/Endpoints/v1_0/GraphQL"
 # ---------------------------------------------------------------------------
 # Validation helpers
 # ---------------------------------------------------------------------------
-_HTTPS_URL_RE = re.compile(r"^https://[\w.-]+\.\w{2,}")
+_HTTPS_URL_RE = re.compile(r"^https://[a-zA-Z0-9][\w.-]*\.\w{2,}")
 _SAFE_PRODUCT_NUMBER_RE = re.compile(r"^[\w./ -]+$")
 _MAX_PRICE = 999_999.0
 
@@ -195,7 +195,9 @@ class DanDomainClient:
         """
         if self._method == "rest":
             url = self._rest_url(PRODUCT_DATA_SERVICE, "/ProductCount")
-            count = self._request("GET", url)
+            result = self._request("GET", url)
+            # The endpoint may return a bare integer or a JSON object
+            count = result if isinstance(result, int) else result
             return {"status": "connected", "product_count": count}
 
         # GraphQL — lightweight introspection
