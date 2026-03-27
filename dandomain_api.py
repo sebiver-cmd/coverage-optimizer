@@ -314,7 +314,11 @@ class DanDomainClient:
                 if not isinstance(items, list):
                     items = [items]
                 for var in items:
-                    vid = str(getattr(var, "VariantId", getattr(var, "Id", "")))
+                    # Fallback order: VariantId → Id → ""
+                    var_id_attr = getattr(var, "VariantId", None)
+                    if var_id_attr is None:
+                        var_id_attr = getattr(var, "Id", "")
+                    vid = str(var_id_attr)
                     if vid == str(variant_id):
                         # Update the variant's own price node
                         var_prices = getattr(var, "Prices", None)
@@ -363,7 +367,11 @@ class DanDomainClient:
         updates : list[dict]
             Each dict must contain ``product_number`` (str) and
             ``new_price`` (float).  Optionally include
-            ``variant_id`` (str) to target a specific variant.
+            ``product_id`` (str), ``variant_id`` (str) and
+            ``variant_types`` (str) to mirror the fields that a
+            regular CSV import would carry.  ``variant_id`` is
+            forwarded to :meth:`update_product_price` to target
+            the correct variant.
         site_id : int
             Language / site ID (default ``1``).
         progress_callback : callable, optional
@@ -379,6 +387,7 @@ class DanDomainClient:
         total = len(updates)
 
         for i, update in enumerate(updates):
+            pid = update.get("product_id", "")
             pnum = update.get("product_number", "")
             price = update.get("new_price", 0)
             vid = update.get("variant_id", "")
@@ -393,9 +402,12 @@ class DanDomainClient:
             except (DanDomainAPIError, ValueError) as exc:
                 results["failed"] += 1
                 err = str(exc)
-                results["errors"].append(
-                    {"product_number": pnum, "variant_id": vid, "error": err}
-                )
+                results["errors"].append({
+                    "product_id": pid,
+                    "product_number": pnum,
+                    "variant_id": vid,
+                    "error": err,
+                })
                 if progress_callback:
                     progress_callback(i + 1, total, pnum, False, err)
 

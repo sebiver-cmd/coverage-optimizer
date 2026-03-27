@@ -614,7 +614,7 @@ if uploaded_file is not None:
         col2.metric("Prices Adjusted", f"{adjusted_count:,}")
         col3.metric("Unchanged", f"{unchanged:,}")
         adj_pct = (adjusted_count / total * 100) if total else 0
-        col4.metric("Adjusted %", f"{adj_pct:.1f}%")
+        col4.metric("Adjusted %", f"{adj_pct:.1f}%" if total else "—")
         st.markdown("")
 
         # --- Data Tabs ---
@@ -787,10 +787,15 @@ if uploaded_file is not None:
                     )
 
                 if push_clicked:
-                    # Build the update list from adjusted rows
+                    # Build the update list from adjusted rows.
+                    # Include every identifier that a regular CSV import
+                    # would carry: PRODUCT_ID, NUMBER, VARIANT_ID,
+                    # VARIANT_TYPES — this ensures the correct
+                    # product / variant is targeted.
                     adjusted_full = final_df[adjusted_mask]
                     updates = []
                     for _, row in adjusted_full.iterrows():
+                        pid = str(row.get('PRODUCT_ID', '')).strip()
                         pnum = str(row['NUMBER']).strip()
                         new_price_str = str(row['NEW_PRICE'])
                         new_price_val = clean_price(new_price_str)
@@ -798,6 +803,7 @@ if uploaded_file is not None:
                         vtypes = str(row.get('VARIANT_TYPES', '')).strip()
                         if pnum and new_price_val > 0:
                             updates.append({
+                                "product_id": pid,
                                 "product_number": pnum,
                                 "new_price": new_price_val,
                                 "variant_id": vid,
@@ -812,9 +818,12 @@ if uploaded_file is not None:
                             "would be updated. Disable dry-run in the "
                             "sidebar to push for real."
                         )
-                        dry_df = pd.DataFrame(updates)
+                        dry_df = pd.DataFrame(updates)[
+                            ['product_id', 'product_number', 'new_price',
+                             'variant_id', 'variant_types']
+                        ]
                         dry_df.columns = [
-                            'Product Number', 'New Price',
+                            'Product ID', 'Product Number', 'New Price',
                             'Variant ID', 'Variant Types',
                         ]
                         st.dataframe(dry_df, use_container_width=True, hide_index=True)
@@ -869,16 +878,17 @@ if uploaded_file is not None:
                                 idx / total,
                                 text=f"Updating {idx}/{total}: {pnum}",
                             )
-                            # Include variant info in the log entry
+                            # Include all identifiers in the log entry
+                            # (mirrors a regular CSV import row)
                             entry = {
                                 "product_number": pnum,
                                 "status": "✅" if ok else "❌",
                                 "error": err,
                                 "timestamp": time.strftime("%H:%M:%S"),
                             }
-                            # Attach variant details from the update payload
                             if idx - 1 < len(pending_updates):
                                 u = pending_updates[idx - 1]
+                                entry["product_id"] = u.get("product_id", "")
                                 entry["variant_id"] = u.get("variant_id", "")
                                 entry["variant_types"] = u.get("variant_types", "")
                             log_entries.append(entry)
