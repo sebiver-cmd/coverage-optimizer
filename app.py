@@ -16,6 +16,7 @@ EXPORT_COLUMNS = [
     'PRODUCT_ID', 'TITLE_DK', 'NUMBER',
     'BUY_PRICE', 'PRICE_EX_VAT', 'PRICE', 'COVERAGE_RATE_%',
     'VARIANT_ID', 'VARIANT_TYPES',
+    'NEW_PRICE_EX_VAT', 'NEW_PRICE', 'NEW_COVERAGE_RATE_%',
 ]
 
 
@@ -43,6 +44,15 @@ def beautify_price(price):
 def format_dk(num):
     """Format a number into Danish locale style (e.g. 1.234,56)."""
     return f"{num:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+
+
+def format_int_col(value):
+    """Format a value as an integer string, handling NaN and float-cast integers."""
+    if pd.isna(value):
+        return ''
+    if isinstance(value, float) and value == int(value):
+        return str(int(value))
+    return str(value)
 
 
 def calc_coverage_rate(df, price_col, buy_col):
@@ -101,12 +111,23 @@ def process_products(raw_bytes: bytes) -> pd.DataFrame:
     df['FINAL_PRICE_EX_VAT'] = df['FINAL_PRICE_NUM'] / (1 + VAT_RATE)
     df['FINAL_COVERAGE_RATE'] = calc_coverage_rate(df, 'FINAL_PRICE_EX_VAT', 'BUY_PRICE_NUM')
 
-    # Format the outputs
-    df['PRICE'] = df['FINAL_PRICE_NUM'].apply(format_dk)
-    df['PRICE_EX_VAT'] = df['FINAL_PRICE_EX_VAT'].apply(format_dk)
+    # Format original price columns (keep PRICE as-is from CSV)
+    df['PRICE_EX_VAT'] = df['PRICE_EX_VAT_NUM'].apply(format_dk)
     df['COVERAGE_RATE_%'] = (
+        (df['COVERAGE_RATE'] * 100).round(2).astype(str).str.replace('.', ',') + '%'
+    )
+
+    # Format new/adjusted price columns (placed at the end)
+    df['NEW_PRICE'] = df['FINAL_PRICE_NUM'].apply(format_dk)
+    df['NEW_PRICE_EX_VAT'] = df['FINAL_PRICE_EX_VAT'].apply(format_dk)
+    df['NEW_COVERAGE_RATE_%'] = (
         (df['FINAL_COVERAGE_RATE'] * 100).round(2).astype(str).str.replace('.', ',') + '%'
     )
+
+    # Preserve integer formatting for columns like VARIANT_TYPES
+    for col in ('VARIANT_TYPES', 'VARIANT_ID', 'PRODUCT_ID'):
+        if col in df.columns:
+            df[col] = df[col].apply(format_int_col)
 
     return df[EXPORT_COLUMNS], int(needs_adjustment.sum())
 
