@@ -15,6 +15,128 @@ st.set_page_config(
     layout="wide",
 )
 
+# ---------------------------------------------------------------------------
+# Custom CSS — modern, professional theme
+# ---------------------------------------------------------------------------
+st.markdown("""
+<style>
+/* ---- Global ---- */
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+}
+section[data-testid="stSidebar"] * {
+    color: #e0e0e0 !important;
+}
+section[data-testid="stSidebar"] .stSelectbox label,
+section[data-testid="stSidebar"] .stNumberInput label,
+section[data-testid="stSidebar"] .stCheckbox label,
+section[data-testid="stSidebar"] .stTextInput label {
+    font-weight: 600;
+    font-size: 0.85rem;
+    letter-spacing: 0.02em;
+}
+
+/* ---- Metrics ---- */
+div[data-testid="stMetric"] {
+    background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+    border: 1px solid #e9ecef;
+    border-radius: 12px;
+    padding: 1rem 1.25rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+div[data-testid="stMetric"] label {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #6c757d !important;
+}
+div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+    font-weight: 700;
+    font-size: 1.8rem;
+    color: #212529 !important;
+}
+
+/* ---- Buttons ---- */
+.stButton > button {
+    border-radius: 8px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    transition: all 0.15s ease;
+}
+.stButton > button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.10);
+}
+
+/* ---- Download buttons ---- */
+.stDownloadButton > button {
+    border-radius: 8px;
+    font-weight: 600;
+}
+
+/* ---- Expanders ---- */
+.streamlit-expanderHeader {
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+/* ---- Tabs ---- */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 0.5rem;
+}
+.stTabs [data-baseweb="tab"] {
+    border-radius: 8px 8px 0 0;
+    font-weight: 600;
+    padding: 0.5rem 1.25rem;
+}
+
+/* ---- Dataframes ---- */
+.stDataFrame {
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+/* ---- Dividers ---- */
+hr {
+    border: none;
+    border-top: 1px solid #e9ecef;
+    margin: 1.5rem 0;
+}
+
+/* ---- File uploader ---- */
+section[data-testid="stFileUploader"] {
+    border: 2px dashed #dee2e6;
+    border-radius: 12px;
+    padding: 0.5rem;
+    transition: border-color 0.15s ease;
+}
+section[data-testid="stFileUploader"]:hover {
+    border-color: #4361ee;
+}
+
+/* ---- Section headers ---- */
+.section-header {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #212529;
+    margin-bottom: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+/* ---- Confirmation banner ---- */
+.confirm-banner {
+    background: #fff3cd;
+    border: 1px solid #ffc107;
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1rem;
+}
+.confirm-banner strong { color: #856404; }
+</style>
+""", unsafe_allow_html=True)
+
 # --- Constants ---
 VAT_RATE = 0.25  # 25% Danish VAT
 MIN_COVERAGE_RATE = 0.50  # Minimum acceptable profit margin (50%)
@@ -203,7 +325,9 @@ def optimize_prices(df: pd.DataFrame, price_pct: float = 0.0) -> tuple:
 
 # --- Sidebar ---
 with st.sidebar:
-    st.header("⚙️ Settings")
+    st.markdown("### ⚙️ Settings")
+
+    st.caption("FILE IMPORT")
     encoding_label = st.selectbox(
         "CSV file encoding",
         options=list(ENCODING_OPTIONS.keys()),
@@ -216,7 +340,7 @@ with st.sidebar:
     selected_encoding = ENCODING_OPTIONS[encoding_label]
 
     st.divider()
-    st.subheader("💰 PRICE Adjustment")
+    st.caption("PRICE RULES")
     price_pct = st.number_input(
         "Adjust PRICE (%)",
         min_value=-50.0,
@@ -241,7 +365,7 @@ with st.sidebar:
 
     # --- DanDomain API Settings ---
     st.divider()
-    st.subheader("🔌 DanDomain API")
+    st.caption("API CONNECTION")
 
     # Credential loading priority: secrets.toml > env var > sidebar input
     try:
@@ -298,21 +422,28 @@ with st.sidebar:
 
     st.divider()
     st.markdown(
-        "**Coverage Optimizer** v1.1\n\n"
-        "Calculates coverage rates and adjusts product prices to maintain "
-        f"at least a **{int(MIN_COVERAGE_RATE * 100)}%** profit margin. "
-        f"Prices are beautified to end in **{BEAUTIFY_LAST_DIGIT}**."
+        "<div style='text-align:center;opacity:0.6;font-size:0.78rem;'>"
+        "Coverage Optimizer v1.2<br>"
+        f"Min margin {int(MIN_COVERAGE_RATE * 100)}% · "
+        f"Prices end in {BEAUTIFY_LAST_DIGIT}"
+        "</div>",
+        unsafe_allow_html=True,
     )
 
 # --- Main Content ---
-st.title("📊 Product Coverage Optimizer")
 st.markdown(
-    "Upload your product CSV to calculate coverage rates "
-    "and automatically adjust prices to hit at least a "
-    f"**{int(MIN_COVERAGE_RATE * 100)}%** margin."
+    "<h1 style='margin-bottom:0.2rem;'>📊 Product Coverage Optimizer</h1>",
+    unsafe_allow_html=True,
+)
+st.markdown(
+    f"<p style='color:#6c757d;margin-top:0;font-size:1.05rem;'>"
+    f"Upload your product CSV to calculate coverage rates and adjust prices "
+    f"to at least a <strong>{int(MIN_COVERAGE_RATE * 100)}%</strong> margin."
+    f"</p>",
+    unsafe_allow_html=True,
 )
 
-uploaded_file = st.file_uploader("Upload Product CSV", type=['csv'])
+uploaded_file = st.file_uploader("Upload Product CSV", type=['csv'], label_visibility="collapsed")
 
 if uploaded_file is not None:
     try:
@@ -368,10 +499,12 @@ if uploaded_file is not None:
         # --- Summary Metrics ---
         total = len(final_df)
         unchanged = total - adjusted_count
+        st.markdown("")  # spacing
         col1, col2, col3 = st.columns(3)
         col1.metric("Total Products", f"{total:,}")
         col2.metric("Prices Adjusted", f"{adjusted_count:,}")
         col3.metric("Unchanged", f"{unchanged:,}")
+        st.markdown("")  # spacing
 
         # --- Data Tabs ---
         tab_all, tab_adjusted = st.tabs(["All Products", "Adjusted Only"])
@@ -388,6 +521,10 @@ if uploaded_file is not None:
 
         # --- Downloads ---
         st.divider()
+        st.markdown(
+            '<div class="section-header">📥 Downloads</div>',
+            unsafe_allow_html=True,
+        )
         dl_col1, dl_col2 = st.columns(2)
 
         # Preview – full report with all analysis columns
@@ -472,7 +609,10 @@ if uploaded_file is not None:
         # --- Push to Shop via API ---
         if not import_df.empty:
             st.divider()
-            st.subheader("🚀 Push to Shop")
+            st.markdown(
+                '<div class="section-header">🚀 Push to Shop</div>',
+                unsafe_allow_html=True,
+            )
 
             if not api_ready:
                 st.info(
@@ -480,12 +620,12 @@ if uploaded_file is not None:
                     "sidebar to enable direct price updates."
                 )
             else:
+                mode_label = "dry-run" if dry_run else "**LIVE**"
                 st.markdown(
                     f"**{adjusted_count}** product"
                     f"{'s' if adjusted_count != 1 else ''} "
-                    f"will be updated via **{api_method.upper()}** API"
-                    + (" *(dry-run — no changes will be made)*" if dry_run else "")
-                    + "."
+                    f"will be updated via **{api_method.upper()}** API "
+                    f"({mode_label})."
                 )
 
                 # Connection test
@@ -493,9 +633,8 @@ if uploaded_file is not None:
                 with test_col:
                     if st.button("🔍 Test Connection", use_container_width=True):
                         try:
-                            client = DanDomainClient(shop_url, api_key, api_method)
-                            info = client.test_connection()
-                            client.close()
+                            with DanDomainClient(shop_url, api_key, api_method) as client:
+                                info = client.test_connection()
                             st.success(
                                 f"✅ Connected! Product count: "
                                 f"{info.get('product_count', 'N/A')}"
@@ -503,12 +642,13 @@ if uploaded_file is not None:
                         except (DanDomainAPIError, ValueError) as exc:
                             st.error(f"❌ Connection failed: {exc}")
 
-                # Push button
+                # Push / simulate button
                 with push_col:
                     push_clicked = st.button(
                         "🧪 Simulate Push" if dry_run else "⚡ Push Prices Now",
                         type="primary" if not dry_run else "secondary",
                         use_container_width=True,
+                        disabled=st.session_state.get("_push_running", False),
                     )
 
                 if push_clicked:
@@ -518,7 +658,6 @@ if uploaded_file is not None:
                     for _, row in adjusted_full.iterrows():
                         pnum = str(row['NUMBER']).strip()
                         new_price_str = str(row['NEW_PRICE'])
-                        # Convert Danish-format price back to float
                         new_price_val = clean_price(new_price_str)
                         if pnum and new_price_val > 0:
                             updates.append({
@@ -538,10 +677,50 @@ if uploaded_file is not None:
                         dry_df.columns = ['Product Number', 'New Price']
                         st.dataframe(dry_df, use_container_width=True, hide_index=True)
                     else:
-                        # Live push with progress
+                        # --- Two-step confirmation for live push --------
+                        st.session_state["_push_pending"] = True
+                        st.session_state["_push_updates"] = updates
+
+                # Handle pending live-push confirmation
+                if (
+                    st.session_state.get("_push_pending")
+                    and not dry_run
+                    and not st.session_state.get("_push_running")
+                ):
+                    pending_updates = st.session_state.get("_push_updates", [])
+                    st.markdown(
+                        '<div class="confirm-banner">'
+                        "<strong>⚠️ Confirm Live Push</strong><br>"
+                        f"You are about to update <strong>{len(pending_updates)}</strong> "
+                        "product price(s) on your <strong>live</strong> webshop. "
+                        "This action cannot be undone automatically."
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
+                    confirm_col, cancel_col = st.columns(2)
+                    with confirm_col:
+                        confirmed = st.button(
+                            "✅ Confirm & Push",
+                            type="primary",
+                            use_container_width=True,
+                        )
+                    with cancel_col:
+                        cancelled = st.button(
+                            "❌ Cancel",
+                            use_container_width=True,
+                        )
+
+                    if cancelled:
+                        st.session_state.pop("_push_pending", None)
+                        st.session_state.pop("_push_updates", None)
+                        st.info("Push cancelled.")
+
+                    if confirmed:
+                        st.session_state["_push_running"] = True
+                        st.session_state.pop("_push_pending", None)
+
                         progress_bar = st.progress(0, text="Pushing prices…")
-                        status_area = st.empty()
-                        log_entries = []
+                        log_entries: list[dict] = []
 
                         def on_progress(idx, total, pnum, ok, err):
                             progress_bar.progress(
@@ -556,19 +735,15 @@ if uploaded_file is not None:
                             })
 
                         try:
-                            client = DanDomainClient(
-                                shop_url, api_key, api_method,
-                            )
-                            results = client.update_prices_batch(
-                                updates,
-                                site_id=site_id,
-                                progress_callback=on_progress,
-                            )
-                            client.close()
+                            with DanDomainClient(shop_url, api_key, api_method) as client:
+                                results = client.update_prices_batch(
+                                    pending_updates,
+                                    site_id=site_id,
+                                    progress_callback=on_progress,
+                                )
 
                             progress_bar.progress(1.0, text="Done!")
 
-                            # Summary
                             res_c1, res_c2 = st.columns(2)
                             res_c1.metric("✅ Succeeded", results["success"])
                             res_c2.metric("❌ Failed", results["failed"])
@@ -584,6 +759,9 @@ if uploaded_file is not None:
 
                         except (DanDomainAPIError, ValueError) as exc:
                             st.error(f"❌ Push failed: {exc}")
+                        finally:
+                            st.session_state.pop("_push_running", None)
+                            st.session_state.pop("_push_updates", None)
 
                         # Audit log download
                         if log_entries:
