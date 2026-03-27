@@ -102,7 +102,8 @@ class DanDomainClient:
     api_key : str
         DanDomain API key or app secret.
     method : ``"rest"`` | ``"graphql"``
-        Which API flavour to use.
+        Which API flavour to use.  **Note:** GraphQL does not yet
+        support product data on DanDomain; use ``"rest"``.
     """
 
     def __init__(self, shop_url: str, api_key: str, method: str = "rest"):

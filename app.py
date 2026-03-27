@@ -375,15 +375,13 @@ with st.sidebar:
 
     api_method = st.selectbox(
         "API method",
-        options=["rest", "graphql"],
-        index=(
-            ["rest", "graphql"].index(_dd_secrets.get("api_method", "rest"))
-            if _dd_secrets.get("api_method", "rest") in ("rest", "graphql")
-            else 0
-        ),
+        options=["rest"],
+        index=0,
         help=(
             "**REST (v1)** — uses the ProductDataService PATCH endpoint.\n\n"
-            "**GraphQL** — uses the newer mutation-based API."
+            "GraphQL is not yet available for product data "
+            "([DanDomain roadmap]"
+            "(https://webshop-help.dandomain.dk/roadmap/))."
         ),
     )
     shop_url = st.text_input(
