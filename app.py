@@ -945,8 +945,9 @@ else:  # Import from API
                 value="",
                 placeholder="e.g. Samsung, Apple (leave empty for all)",
                 help=(
-                    "Only include products whose Producer / brand "
-                    "matches this text (case-insensitive, partial match). "
+                    "Only include products whose Producer / brand matches "
+                    "one of the entered terms (case-insensitive, partial match). "
+                    "Separate multiple brands with commas. "
                     "Leave empty to import all products."
                 ),
             )
