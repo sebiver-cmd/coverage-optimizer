@@ -455,7 +455,17 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
         item_number = p.get('ItemNumber', '')
         price = p.get('Price', 0)
         buy_price = p.get('BuyingPrice', 0)
-        producer = p.get('Producer', '')
+        # Producer is a User object in the API; extract the brand name from it.
+        # After serialize_object() it becomes a dict with Company, Firstname, etc.
+        _producer_raw = p.get('Producer')
+        if isinstance(_producer_raw, dict):
+            producer = str(_producer_raw.get('Company', '') or '').strip()
+            if not producer:
+                _fname = str(_producer_raw.get('Firstname', '') or '').strip()
+                _lname = str(_producer_raw.get('Lastname', '') or '').strip()
+                producer = ' '.join(filter(None, [_fname, _lname]))
+        else:
+            producer = str(_producer_raw or '').strip()
 
         variants = p.get('Variants') or []
         if isinstance(variants, dict):
@@ -493,7 +503,7 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
                     'PRICE': format_dk(float(vprice or 0)),
                     'VARIANT_ID': format_int_col(vid),
                     'VARIANT_TYPES': variant_types,
-                    'PRODUCER': str(producer or ''),
+                    'PRODUCER': producer,
                 })
         else:
             rows.append({
@@ -504,7 +514,7 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
                 'PRICE': format_dk(float(price or 0)),
                 'VARIANT_ID': '',
                 'VARIANT_TYPES': '',
-                'PRODUCER': str(producer or ''),
+                'PRODUCER': producer,
             })
 
     if not rows:
@@ -940,14 +950,21 @@ else:  # Import from API
         # Filtering options
         api_filter_col1, api_filter_col2 = st.columns(2)
         with api_filter_col1:
-            brand_filter = st.text_input(
+            _api_brands_available = st.session_state.get("_api_brands", [])
+            selected_brands = st.multiselect(
                 "Filter by brand / producer",
-                value="",
-                placeholder="e.g. Samsung, Apple (leave empty for all)",
+                options=_api_brands_available,
+                default=[],
+                placeholder=(
+                    "All brands (no filter)"
+                    if _api_brands_available
+                    else "Fetch products first to filter by brand"
+                ),
+                disabled=not _api_brands_available,
                 help=(
-                    "Only include products whose Producer / brand "
-                    "matches this text (case-insensitive, partial match). "
-                    "Leave empty to import all products."
+                    "Select one or more brands to include. "
+                    "Leave empty to include all brands. "
+                    "Fetch products from the API first to populate this list."
                 ),
             )
         with api_filter_col2:
@@ -971,13 +988,7 @@ else:  # Import from API
                         )
                     progress_text.empty()
 
-                # Apply filters
-                if brand_filter.strip():
-                    _bf = brand_filter.strip().lower()
-                    raw_products = [
-                        p for p in raw_products
-                        if _bf in str(p.get('Producer', '') or '').lower()
-                    ]
+                # Apply online filter
                 if only_online:
                     raw_products = [
                         p for p in raw_products
@@ -988,19 +999,26 @@ else:  # Import from API
                 if not raw_products:
                     st.warning("No products matched the selected filters.")
                 else:
-                    parsed_df = api_products_to_dataframe(raw_products)
-                    st.session_state["_api_parsed_df"] = parsed_df
+                    raw_df = api_products_to_dataframe(raw_products)
+                    st.session_state["_api_raw_df"] = raw_df
+                    # Extract unique sorted non-empty brand names for the multiselect
+                    brands = sorted({b for b in raw_df["PRODUCER"].tolist() if b})
+                    st.session_state["_api_brands"] = brands
                     st.success(
-                        f"✅ Imported **{len(parsed_df)}** product rows "
+                        f"✅ Loaded **{len(raw_df)}** product rows "
                         f"({len(raw_products)} base products)."
                     )
             except (DanDomainAPIError, ValueError, AttributeError) as exc:
                 st.error(f"❌ API import failed: {exc}")
                 _import_error = True
 
-        # Persist API data across re-runs
-        if parsed_df is None and "_api_parsed_df" in st.session_state:
-            parsed_df = st.session_state["_api_parsed_df"]
+        # Derive parsed_df from cached raw data, applying brand filter from multiselect
+        if "_api_raw_df" in st.session_state:
+            _raw_df = st.session_state["_api_raw_df"]
+            if selected_brands:
+                parsed_df = _raw_df[_raw_df["PRODUCER"].isin(selected_brands)].reset_index(drop=True)
+            else:
+                parsed_df = _raw_df
 
 if parsed_df is not None and not _import_error:
     # --- Apply persisted BUY_PRICE edits from data-editor state ---
