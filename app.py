@@ -455,7 +455,17 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
         item_number = p.get('ItemNumber', '')
         price = p.get('Price', 0)
         buy_price = p.get('BuyingPrice', 0)
-        producer = p.get('Producer', '')
+        # Producer is a User object in the API; extract the brand name from it.
+        # After serialize_object() it becomes a dict with Company, Firstname, etc.
+        _producer_raw = p.get('Producer')
+        if isinstance(_producer_raw, dict):
+            producer = str(_producer_raw.get('Company', '') or '').strip()
+            if not producer:
+                _fname = str(_producer_raw.get('Firstname', '') or '').strip()
+                _lname = str(_producer_raw.get('Lastname', '') or '').strip()
+                producer = ' '.join(filter(None, [_fname, _lname]))
+        else:
+            producer = str(_producer_raw or '').strip()
 
         variants = p.get('Variants') or []
         if isinstance(variants, dict):
@@ -493,7 +503,7 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
                     'PRICE': format_dk(float(vprice or 0)),
                     'VARIANT_ID': format_int_col(vid),
                     'VARIANT_TYPES': variant_types,
-                    'PRODUCER': str(producer or ''),
+                    'PRODUCER': producer,
                 })
         else:
             rows.append({
@@ -504,7 +514,7 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
                 'PRICE': format_dk(float(price or 0)),
                 'VARIANT_ID': '',
                 'VARIANT_TYPES': '',
-                'PRODUCER': str(producer or ''),
+                'PRODUCER': producer,
             })
 
     if not rows:
@@ -992,7 +1002,7 @@ else:  # Import from API
                     raw_df = api_products_to_dataframe(raw_products)
                     st.session_state["_api_raw_df"] = raw_df
                     # Extract unique sorted non-empty brand names for the multiselect
-                    brands = sorted({b for b in raw_df["PRODUCER"].tolist() if b is not None and b != ''})
+                    brands = sorted({b for b in raw_df["PRODUCER"].tolist() if b})
                     st.session_state["_api_brands"] = brands
                     st.success(
                         f"✅ Loaded **{len(raw_df)}** product rows "
