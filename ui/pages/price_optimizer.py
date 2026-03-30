@@ -449,6 +449,109 @@ def _render_filters(
 
 
 # ---------------------------------------------------------------------------
+# Result Summary Panel
+# ---------------------------------------------------------------------------
+
+def _render_result_summary(final_df: pd.DataFrame) -> None:
+    """Render a read-only summary panel of the optimisation result.
+
+    Displays high-level metrics (total products, changed products,
+    average increase/decrease percentages) and top-5 tables for the
+    largest price increases and decreases.
+
+    Parameters
+    ----------
+    final_df
+        The display DataFrame produced by :func:`_build_dataframes_from_response`
+        (or local re-computation).  Must contain at least ``NUMBER``,
+        ``PRICE`` and ``NEW_PRICE`` columns (Danish-formatted strings).
+    """
+    if final_df.empty:
+        return
+
+    # --- Parse formatted prices to numeric values ---
+    old_prices = final_df["PRICE"].apply(clean_price)
+    new_prices = final_df["NEW_PRICE"].apply(clean_price)
+
+    # Percentage change per product (guard against zero old price)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        pct_change = np.where(
+            old_prices != 0,
+            (new_prices - old_prices) / old_prices * 100,
+            0.0,
+        )
+
+    total_products = len(final_df)
+    changed_mask = old_prices != new_prices
+    changed_products = int(changed_mask.sum())
+
+    increased_mask = new_prices > old_prices
+    decreased_mask = new_prices < old_prices
+
+    avg_increase_pct = (
+        float(pct_change[increased_mask].mean())
+        if increased_mask.any()
+        else 0.0
+    )
+    avg_decrease_pct = (
+        float(pct_change[decreased_mask].mean())
+        if decreased_mask.any()
+        else 0.0
+    )
+
+    # --- Metric row ---
+    with st.container():
+        st.markdown("#### Result Summary")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total Products", f"{total_products:,}")
+        m2.metric("Changed Products", f"{changed_products:,}")
+        m3.metric(
+            "Avg Increase",
+            f"{avg_increase_pct:+.2f}%" if increased_mask.any() else "N/A",
+        )
+        m4.metric(
+            "Avg Decrease",
+            f"{avg_decrease_pct:+.2f}%" if decreased_mask.any() else "N/A",
+        )
+
+    # --- Top 5 increases / decreases ---
+    detail_df = pd.DataFrame({
+        "NUMBER": final_df["NUMBER"].values,
+        "Old Price": old_prices.values,
+        "New Price": new_prices.values,
+        "Change %": np.round(pct_change, 2),
+    })
+
+    col_left, col_right = st.columns(2)
+
+    with col_left:
+        st.markdown("**Top 5 Price Increases**")
+        if increased_mask.any():
+            top_inc = (
+                detail_df[increased_mask.values]
+                .nlargest(5, "Change %")
+                .reset_index(drop=True)
+            )
+            st.dataframe(top_inc, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No price increases detected.")
+
+    with col_right:
+        st.markdown("**Top 5 Price Decreases**")
+        if decreased_mask.any():
+            top_dec = (
+                detail_df[decreased_mask.values]
+                .nsmallest(5, "Change %")
+                .reset_index(drop=True)
+            )
+            st.dataframe(top_dec, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No price decreases detected.")
+
+    st.markdown("---")
+
+
+# ---------------------------------------------------------------------------
 # Analysis, Data Tabs, Downloads, Push
 # ---------------------------------------------------------------------------
 
@@ -547,6 +650,9 @@ def _render_analysis(
             delta=f"{delta:+.1f}%" if abs(delta) > 0.01 else None,
         )
     st.markdown("")
+
+    # --- Result Summary Panel ---
+    _render_result_summary(final_df)
 
     # --- Data Tabs ---
     _buy_price_col = "BUY_PRICE"
