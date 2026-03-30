@@ -1136,7 +1136,8 @@ if parsed_df is not None and not _import_error:
     # include PRODUCER – re-attach it so users can see the brand in
     # every tab and verify that brand filtering works.
     if 'PRODUCER' in work_df.columns:
-        final_df.insert(3, 'PRODUCER', work_df['PRODUCER'].values)
+        _pos = final_df.columns.get_loc('NUMBER') + 1
+        final_df.insert(_pos, 'PRODUCER', work_df['PRODUCER'].values)
 
     # --- Summary Metrics ---
     total = len(final_df)
