@@ -5,12 +5,8 @@ from __future__ import annotations
 import streamlit as st
 
 from dandomain_api import DanDomainClient, DanDomainAPIError
-from domain.pricing import (
-    MIN_COVERAGE_RATE,
-    BEAUTIFY_LAST_DIGIT,
-    api_products_to_dataframe,
-    _build_brand_id_map,
-)
+from domain.pricing import MIN_COVERAGE_RATE, BEAUTIFY_LAST_DIGIT
+from domain.product_loader import fetch_products
 
 
 def render(
@@ -71,48 +67,17 @@ def render(
                         progress_text.text(f"Fetched {count} products...")
 
                     with DanDomainClient(api_username, api_password) as client:
-                        raw_products = client.get_products_batch(
+                        raw_df, brand_id_map = fetch_products(
+                            client,
+                            include_variants=True,
                             progress_callback=_api_progress,
-                        )
-
-                        _producer_ids = []
-                        for p in raw_products:
-                            _pid = p.get("ProducerId")
-                            if _pid is not None:
-                                try:
-                                    _producer_ids.append(int(_pid))
-                                except (ValueError, TypeError):
-                                    pass
-                        _brands_map = client.get_all_brands(
-                            producer_ids=_producer_ids,
                         )
 
                     progress_text.empty()
 
-                # Hydrate Producer on each product using the brands map
-                if _brands_map:
-                    for p in raw_products:
-                        pid = p.get("ProducerId")
-                        if pid is not None:
-                            try:
-                                _bname = _brands_map.get(int(pid))
-                                if _bname:
-                                    p["Producer"] = _bname
-                            except (ValueError, TypeError):
-                                pass
-
-                if not raw_products:
+                if raw_df.empty:
                     st.warning("No products found.")
                 else:
-                    raw_df = api_products_to_dataframe(raw_products)
-                    raw_df = raw_df.sort_values(
-                        "PRODUCER", key=lambda s: s.str.lower(),
-                    ).reset_index(drop=True)
-
-                    brand_id_map = _build_brand_id_map(raw_products)
-                    if _brands_map:
-                        brand_id_map = {**brand_id_map, **_brands_map}
-
                     st.session_state["_api_raw_df"] = raw_df
                     st.session_state["_api_brand_id_map"] = brand_id_map
                     st.session_state["_api_brands"] = sorted(
@@ -122,7 +87,7 @@ def render(
 
                     st.success(
                         f"Loaded **{len(raw_df)}** product rows "
-                        f"({len(raw_products)} base products)."
+                        f"({raw_df['PRODUCT_ID'].nunique()} base products)."
                     )
             except (DanDomainAPIError, ValueError, AttributeError) as exc:
                 st.error(f"API import failed: {exc}")

@@ -43,11 +43,10 @@ from dandomain_api import DanDomainClient, DanDomainAPIError
 from domain.pricing import (
     VAT_RATE,
     MIN_COVERAGE_RATE,
-    api_products_to_dataframe,
-    _build_brand_id_map,
     optimize_prices,
     calc_coverage_rate,
 )
+from domain.product_loader import load_products_for_optimization
 
 logger = logging.getLogger(__name__)
 
@@ -194,56 +193,13 @@ def run_optimization(payload: OptimizeRequest) -> OptimizeResponse:
             username=payload.api_username,
             password=payload.api_password,
         ) as client:
-            raw_products = client.get_products_batch()
-
-            # Resolve brand / producer names
-            producer_ids: list[int] = []
-            for p in raw_products:
-                pid = p.get("ProducerId")
-                if pid is not None:
-                    try:
-                        producer_ids.append(int(pid))
-                    except (ValueError, TypeError):
-                        pass
-
-            brands_map = client.get_all_brands(producer_ids=producer_ids)
-
-        # Hydrate Producer on each product using the brands map
-        if brands_map:
-            for p in raw_products:
-                pid = p.get("ProducerId")
-                if pid is not None:
-                    try:
-                        brand_name = brands_map.get(int(pid))
-                        if brand_name:
-                            p["Producer"] = brand_name
-                    except (ValueError, TypeError):
-                        pass
-
-        if not raw_products:
-            raise HTTPException(status_code=404, detail="No products found in the webshop.")
-
-        # When include_variants is False, strip variant data so that
-        # api_products_to_dataframe creates one row per base product
-        # (using the base product's own Price / BuyingPrice).
-        if not payload.include_variants:
-            raw_products = [
-                {**p, "Variants": []} for p in raw_products
-            ]
-
-        # Build DataFrame (same helper the UI uses).  Variants are
-        # expanded into separate rows here — exactly as the Dashboard
-        # does when it stores _api_raw_df in session state.
-        df = api_products_to_dataframe(raw_products)
-        df = df.sort_values("PRODUCER", key=lambda s: s.str.lower()).reset_index(drop=True)
-
-        # --- Apply filters (matching ui/pages/price_optimizer.py) ---
-        # include_offline=False ↔ Streamlit "Only active (online) products" checked
-        if not payload.include_offline and "ONLINE" in df.columns:
-            df = df[df["ONLINE"]].reset_index(drop=True)
-
-        if payload.brand_ids:
-            df = df[df["PRODUCER_ID"].isin(payload.brand_ids)].reset_index(drop=True)
+            df = load_products_for_optimization(
+                client,
+                site_id=payload.site_id,
+                include_offline=payload.include_offline,
+                include_variants=payload.include_variants,
+                brand_ids=payload.brand_ids,
+            )
 
         if df.empty:
             raise HTTPException(
