@@ -463,7 +463,7 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
             if not producer:
                 _fname = str(_producer_raw.get('Firstname', '') or '').strip()
                 _lname = str(_producer_raw.get('Lastname', '') or '').strip()
-                producer = ' '.join(filter(None, [_fname, _lname]))
+                producer = ' '.join(filter(None, [_fname, _lname])).strip()
         else:
             producer = str(_producer_raw or '').strip()
 
@@ -977,7 +977,7 @@ else:  # Import from API
         if not _api_brands_available:
             if st.button("🔄 Load Brands from API", type="secondary"):
                 try:
-                    with st.spinner("Scanning products for brands…"):
+                    with st.spinner("Loading brands…"):
                         _brand_prog = st.empty()
 
                         def _brand_progress(count):
@@ -1001,7 +1001,8 @@ else:  # Import from API
                         st.rerun()
                     else:
                         st.warning(
-                            "No brands / producers found in the shop."
+                            "No brands / producers found in the shop. "
+                            "Check the API logs for details."
                         )
                 except (DanDomainAPIError, ValueError) as exc:
                     st.error(f"❌ Failed to load brands: {exc}")
