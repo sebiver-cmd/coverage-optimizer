@@ -361,21 +361,16 @@ class DanDomainClient:
             name = " ".join(filter(None, [fn, ln])).strip()
         return name
 
-    # -- public API ----------------------------------------------------------
+    # -- private: brand-discovery strategies ---------------------------------
 
-    def get_all_brands(self) -> dict[int, str]:
-        """Fetch all brands (producers) from the *Mærker* user group.
-
-        The ``Producer`` field on products is a complex ``User`` object
-        that is **not** reliably populated by ``Product_SetFields``.
-        This method fetches the producer users directly via
-        ``User_GetByGroup`` so that brand names can be resolved from
-        ``ProducerId``.
+    def _get_brands_via_user_group(self) -> dict[int, str]:
+        """Try to fetch brands from the *Mærker* user group.
 
         Returns
         -------
         dict[int, str]
-            Mapping of ``ProducerId`` → display brand name.
+            Mapping of ``ProducerId`` → display brand name, or empty
+            dict when the user-group call fails / returns nothing.
         """
         try:
             result = self._call(
@@ -402,6 +397,119 @@ class DanDomainClient:
                     brands[int(uid)] = name
                 except (ValueError, TypeError):
                     pass
+        return brands
+
+    def _get_brands_via_products(
+        self,
+        producer_ids: list[int],
+    ) -> dict[int, str]:
+        """Discover brand names by fetching one product per brand.
+
+        For each unique ``ProducerId``, calls ``Product_GetByBrand``
+        with the ``Producer`` field included in ``Product_SetFields``,
+        then extracts the brand name from the first returned product.
+
+        This is a **fallback** for when ``User_GetByGroup`` returns no
+        data.
+
+        Parameters
+        ----------
+        producer_ids : list[int]
+            ``ProducerId`` values collected from already-fetched
+            products.
+
+        Returns
+        -------
+        dict[int, str]
+            Mapping of ``ProducerId`` → display brand name.
+        """
+        if not producer_ids:
+            return {}
+
+        unique_ids = sorted(set(producer_ids))
+
+        # Temporarily include Producer so that brand names are returned.
+        brand_fields = (
+            "Id,ProducerId,Producer"
+        )
+        try:
+            self._call("Product_SetFields", Fields=brand_fields)
+        except DanDomainAPIError:
+            logger.warning(
+                "Could not set brand-discovery product fields"
+            )
+            return {}
+
+        brands: dict[int, str] = {}
+        for pid in unique_ids:
+            try:
+                result = self._call(
+                    "Product_GetByBrand", BrandId=pid,
+                )
+            except DanDomainAPIError:
+                continue
+
+            if result is None:
+                continue
+
+            items = result if isinstance(result, list) else [result]
+            if not items:
+                continue
+
+            # Only need the first product to extract the brand name.
+            product = _fix_mojibake(serialize_object(items[0], dict))
+            producer = product.get("Producer")
+            name = (
+                self._extract_brand_name(producer) if producer else ""
+            )
+            if name:
+                brands[pid] = name
+
+        # Restore default output fields.
+        self._set_output_fields()
+
+        return brands
+
+    # -- public API ----------------------------------------------------------
+
+    def get_all_brands(
+        self,
+        producer_ids: Optional[list[int]] = None,
+    ) -> dict[int, str]:
+        """Fetch all brands (producers).
+
+        Strategy:
+
+        1. **Primary** — ``User_GetByGroup`` on the *Mærker* user
+           group (fast, single call).
+        2. **Fallback** — ``Product_GetByBrand`` per unique
+           ``ProducerId``, extracting the ``Producer`` field from
+           the first returned product.  Only attempted when the
+           primary call returns nothing **and** ``producer_ids``
+           are supplied.
+
+        Parameters
+        ----------
+        producer_ids : list[int], optional
+            ``ProducerId`` values from already-fetched products.
+            Used by the fallback strategy to discover brand names
+            via ``Product_GetByBrand``.
+
+        Returns
+        -------
+        dict[int, str]
+            Mapping of ``ProducerId`` → display brand name.
+        """
+        brands = self._get_brands_via_user_group()
+
+        if not brands and producer_ids:
+            logger.info(
+                "User_GetByGroup returned no brands; falling back "
+                "to Product_GetByBrand for %d unique producer IDs",
+                len(set(producer_ids)),
+            )
+            brands = self._get_brands_via_products(producer_ids)
+
         return brands
 
     def test_connection(self) -> dict:
