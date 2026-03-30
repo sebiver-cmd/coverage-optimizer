@@ -11,7 +11,7 @@ import streamlit as st
 
 from domain.pricing import MIN_COVERAGE_RATE, BEAUTIFY_LAST_DIGIT
 from ui.styles import DASHBOARD_CSS
-from ui.pages import home, coverage_converter, placeholders
+from ui.pages import home, price_optimizer, placeholders
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -25,7 +25,6 @@ st.markdown(DASHBOARD_CSS, unsafe_allow_html=True)
 # --- Navigation pages ---
 _PAGES = [
     "Dashboard",
-    "Coverage Converter",
     "Price Optimizer",
     "Reports",
 ]
@@ -86,11 +85,12 @@ with st.sidebar:
     api_ready = bool(api_username and api_password)
 
     st.divider()
+    _active_beautify = st.session_state.get("_cc_beautify_digit", BEAUTIFY_LAST_DIGIT)
     st.markdown(
         '<div class="version-badge">'
         "SB-Optima v2.0<br>"
         f"Min margin {int(MIN_COVERAGE_RATE * 100)}% · "
-        f"Prices end in {BEAUTIFY_LAST_DIGIT}"
+        f"Prices end in {_active_beautify}"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -99,19 +99,20 @@ with st.sidebar:
 # Page routing
 # ---------------------------------------------------------------------------
 if page == "Dashboard":
-    home.render(api_ready=api_ready)
+    home.render(
+        api_ready=api_ready,
+        api_username=api_username,
+        api_password=api_password,
+    )
 
-elif page == "Coverage Converter":
-    coverage_converter.render(
+elif page == "Price Optimizer":
+    price_optimizer.render(
         api_username=api_username,
         api_password=api_password,
         api_ready=api_ready,
         site_id=site_id,
         dry_run=dry_run,
     )
-
-elif page == "Price Optimizer":
-    placeholders.render_price_optimizer()
 
 elif page == "Reports":
     placeholders.render_reports()

@@ -1,4 +1,4 @@
-"""Coverage Converter module — API import, analysis, and push-to-shop."""
+"""Price Optimizer module — analysis, pricing pipeline, and push-to-shop."""
 
 from __future__ import annotations
 
@@ -15,14 +15,11 @@ from domain.pricing import (
     VAT_RATE,
     MIN_COVERAGE_RATE,
     REQUIRED_COLUMNS,
-    EXPORT_COLUMNS,
     IMPORT_COLUMNS_BASE,
     clean_price,
     format_dk,
     calc_coverage_rate,
     optimize_prices,
-    api_products_to_dataframe,
-    _build_brand_id_map,
 )
 from domain.supplier import (
     DEFAULT_CURRENCY_RATES,
@@ -48,25 +45,25 @@ def render(
     site_id: int,
     dry_run: bool,
 ) -> None:
-    """Render the full Coverage Converter page."""
+    """Render the full Price Optimizer page."""
 
     st.markdown(
-        '<h1 class="hero-header">Coverage Converter</h1>',
+        '<h1 class="hero-header">Price Optimizer</h1>',
         unsafe_allow_html=True,
     )
     st.markdown(
         f'<p class="hero-sub">'
-        f"Import products from the DanDomain API, calculate coverage rates, "
-        f"and automatically adjust prices to at least a "
+        f"Analyse product coverage rates and automatically adjust prices "
+        f"to at least a "
         f"<strong>{int(MIN_COVERAGE_RATE * 100)}%</strong> profit margin. "
         f"Variant-aware — handles products with multiple variants correctly."
         f"</p>",
         unsafe_allow_html=True,
     )
 
-    # --- Price Rules (local to Coverage Converter) ---
+    # --- Price Rules (local to Price Optimizer) ---
     with st.expander("Price Rules", expanded=False):
-        pr_col1, pr_col2 = st.columns(2)
+        pr_col1, pr_col2, pr_col3 = st.columns(3)
         with pr_col1:
             price_pct = st.number_input(
                 "Adjust Sales Price (%)",
@@ -75,12 +72,23 @@ def render(
                 value=0.0,
                 step=0.5,
                 help=(
-                    "Increase or decrease all sales prices by this percentage "
-                    "before recalculating coverage rates."
+                    "Increase or decrease all new sales prices by this "
+                    "percentage after coverage-based adjustment and "
+                    "beautification."
                 ),
                 key="_cc_price_pct",
             )
         with pr_col2:
+            beautify_options = {9: "End in 9", 0: "End in 0", 5: "End in 5"}
+            beautify_digit = st.selectbox(
+                "Beautifier ending",
+                options=list(beautify_options.keys()),
+                format_func=lambda d: beautify_options[d],
+                index=0,
+                help="Round adjusted prices up to the nearest integer ending in this digit.",
+                key="_cc_beautify_digit",
+            )
+        with pr_col3:
             include_buy_price = st.checkbox(
                 "Include BUY_PRICE in import file",
                 value=False,
@@ -89,23 +97,21 @@ def render(
             )
 
     parsed_df = None
-    _import_error = False
 
-    if not api_ready:
+    # Check for loaded data in shared state (fetched on Dashboard)
+    if "_api_raw_df" not in st.session_state:
         st.markdown(
             '<div class="info-card">'
-            "<h4>API Not Connected</h4>"
-            "<p>Configure your DanDomain API credentials in the sidebar "
-            "to import products directly from your webshop.</p>"
+            "<h4>No Products Loaded</h4>"
+            "<p>Go to the <strong>Dashboard</strong> and use "
+            "<em>Fetch Products from API</em> to load product data first.</p>"
             "</div>",
             unsafe_allow_html=True,
         )
     else:
-        parsed_df, _import_error = _render_api_import(
-            api_username, api_password,
-        )
+        parsed_df = _render_filters()
 
-    if parsed_df is not None and not _import_error:
+    if parsed_df is not None:
         _render_analysis(
             parsed_df,
             api_username,
@@ -115,6 +121,7 @@ def render(
             dry_run,
             price_pct,
             include_buy_price,
+            beautify_digit,
         )
 
 
@@ -122,12 +129,8 @@ def render(
 # API Import section
 # ---------------------------------------------------------------------------
 
-def _render_api_import(
-    api_username: str,
-    api_password: str,
-) -> tuple[pd.DataFrame | None, bool]:
-    """Render the API fetch controls and return (parsed_df, error_flag)."""
-    _import_error = False
+def _render_filters() -> pd.DataFrame | None:
+    """Render filter controls and return the filtered DataFrame from shared state."""
     parsed_df = None
 
     _api_brands_available = st.session_state.get("_api_brands", [])
@@ -147,7 +150,7 @@ def _render_api_import(
             placeholder=(
                 "All brands (no filter)"
                 if _api_brands_available
-                else "Fetch products first"
+                else "No brands available"
             ),
             disabled=not _api_brands_available,
             help=(
@@ -159,127 +162,21 @@ def _render_api_import(
         only_online = st.checkbox(
             "Only active (online) products",
             value=True,
-            help="When checked, only products marked as 'online' are imported.",
+            help="When checked, only products marked as 'online' are shown.",
         )
 
-    if st.button("Fetch Products from API", type="primary"):
-        try:
-            with st.spinner("Fetching products from the API…"):
-                progress_text = st.empty()
-
-                def _api_progress(count):
-                    progress_text.text(f"Fetched {count} products…")
-
-                _use_brand_fetch = bool(
-                    selected_brands and _api_brand_id_map
-                )
-
-                with DanDomainClient(api_username, api_password) as client:
-                    if _use_brand_fetch:
-                        raw_products = []
-                        for bid in selected_brands:
-                            raw_products.extend(
-                                client.get_products_by_brand(
-                                    brand_id=bid,
-                                    progress_callback=_api_progress,
-                                )
-                            )
-                    else:
-                        raw_products = client.get_products_batch(
-                            progress_callback=_api_progress,
-                        )
-
-                    _producer_ids = []
-                    for p in raw_products:
-                        _pid = p.get("ProducerId")
-                        if _pid is not None:
-                            try:
-                                _producer_ids.append(int(_pid))
-                            except (ValueError, TypeError):
-                                pass
-                    _brands_map = client.get_all_brands(
-                        producer_ids=_producer_ids,
-                    )
-
-                progress_text.empty()
-
-            # Hydrate Producer on each product using the brands map
-            if _brands_map:
-                for p in raw_products:
-                    pid = p.get("ProducerId")
-                    if pid is not None:
-                        try:
-                            _bname = _brands_map.get(int(pid))
-                            if _bname:
-                                p["Producer"] = _bname
-                        except (ValueError, TypeError):
-                            pass
-
-            if only_online:
-                raw_products = [
-                    p for p in raw_products
-                    if p.get('Status') is not False
-                    and str(p.get('Status', '')).lower()
-                        not in ('false', '0', 'no')
-                ]
-
-            if not raw_products:
-                st.warning("No products matched the selected filters.")
-            else:
-                raw_df = api_products_to_dataframe(raw_products)
-                raw_df = raw_df.sort_values(
-                    "PRODUCER", key=lambda s: s.str.lower(),
-                ).reset_index(drop=True)
-
-                brand_id_map = _build_brand_id_map(raw_products)
-
-                if _use_brand_fetch:
-                    existing = st.session_state.get("_api_raw_df")
-                    if existing is not None:
-                        other = existing[
-                            ~existing["PRODUCER_ID"].isin(
-                                selected_brands
-                            )
-                        ]
-                        raw_df = pd.concat(
-                            [other, raw_df], ignore_index=True,
-                        ).sort_values(
-                            "PRODUCER",
-                            key=lambda s: s.str.lower(),
-                        ).reset_index(drop=True)
-                    prev_map = st.session_state.get(
-                        "_api_brand_id_map", {},
-                    )
-                    brand_id_map = {**prev_map, **brand_id_map}
-
-                st.session_state["_api_raw_df"] = raw_df
-                if _brands_map:
-                    brand_id_map = {**brand_id_map, **_brands_map}
-                st.session_state["_api_brand_id_map"] = brand_id_map
-                st.session_state["_api_brands"] = sorted(
-                    brand_id_map.keys(),
-                    key=lambda pid: brand_id_map[pid].lower(),
-                )
-
-                st.success(
-                    f"Loaded **{len(raw_df)}** product rows "
-                    f"({len(raw_products)} base products)."
-                )
-        except (DanDomainAPIError, ValueError, AttributeError) as exc:
-            st.error(f"API import failed: {exc}")
-            _import_error = True
-
-    # Derive parsed_df from cached data, applying brand filter
+    # Derive parsed_df from cached data, applying filters
     if "_api_raw_df" in st.session_state:
         _raw_df = st.session_state["_api_raw_df"]
+        parsed_df = _raw_df.copy()
+        if only_online and "ONLINE" in parsed_df.columns:
+            parsed_df = parsed_df[parsed_df["ONLINE"]].reset_index(drop=True)
         if selected_brands:
-            parsed_df = _raw_df[
-                _raw_df["PRODUCER_ID"].isin(selected_brands)
+            parsed_df = parsed_df[
+                parsed_df["PRODUCER_ID"].isin(selected_brands)
             ].reset_index(drop=True)
-        else:
-            parsed_df = _raw_df
 
-    return parsed_df, _import_error
+    return parsed_df
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +192,7 @@ def _render_analysis(
     dry_run: bool,
     price_pct: float,
     include_buy_price: bool,
+    beautify_digit: int,
 ) -> None:
     """Render analysis results, data tabs, downloads, and push-to-shop."""
     # --- Apply persisted BUY_PRICE edits from data-editor state ---
@@ -322,7 +220,9 @@ def _render_analysis(
                 work_df.at[row_idx, 'BUY_PRICE_NUM'] = changes["BUY_PRICE"]
 
     final_df, adjusted_count, adjusted_mask, import_df = optimize_prices(
-        work_df, price_pct, original_buy_prices=parsed_df['BUY_PRICE_NUM'],
+        work_df, price_pct,
+        original_buy_prices=parsed_df['BUY_PRICE_NUM'],
+        beautify_digit=beautify_digit,
     )
 
     # Include PRODUCER (brand) column when available (API import).
@@ -349,7 +249,7 @@ def _render_analysis(
         )
         base_avg = (base_coverage * 100).mean()
         cov_vals = (
-            final_df['COVERAGE_RATE_%']
+            final_df['NEW_COVERAGE_RATE_%']
             .str.replace('%', '', regex=False)
             .str.replace(',', '.', regex=False)
             .astype(float)
@@ -359,7 +259,7 @@ def _render_analysis(
         mcol5.metric(
             "Avg Coverage",
             f"{adj_avg:.1f}%",
-            delta=f"{delta:+.1f}%" if price_pct != 0 else None,
+            delta=f"{delta:+.1f}%" if abs(delta) > 0.01 else None,
         )
     st.markdown("")
 
