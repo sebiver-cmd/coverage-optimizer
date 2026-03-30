@@ -21,6 +21,7 @@ from domain.pricing import (
     calc_coverage_rate,
     optimize_prices,
 )
+from domain.product_loader import filter_products
 from domain.supplier import (
     DEFAULT_CURRENCY_RATES,
     ENCODING_OPTIONS,
@@ -168,13 +169,11 @@ def _render_filters() -> pd.DataFrame | None:
     # Derive parsed_df from cached data, applying filters
     if "_api_raw_df" in st.session_state:
         _raw_df = st.session_state["_api_raw_df"]
-        parsed_df = _raw_df.copy()
-        if only_online and "ONLINE" in parsed_df.columns:
-            parsed_df = parsed_df[parsed_df["ONLINE"]].reset_index(drop=True)
-        if selected_brands:
-            parsed_df = parsed_df[
-                parsed_df["PRODUCER_ID"].isin(selected_brands)
-            ].reset_index(drop=True)
+        parsed_df = filter_products(
+            _raw_df,
+            include_offline=not only_online,
+            brand_ids=selected_brands or None,
+        )
 
     return parsed_df
 
