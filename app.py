@@ -977,6 +977,7 @@ else:  # Import from API
                 "Filter by brand / producer",
                 options=_api_brands_available,
                 default=[],
+                key="_brand_filter",
                 placeholder=(
                     "All brands (no filter)"
                     if _api_brands_available
@@ -1054,15 +1055,35 @@ else:  # Import from API
                     raw_df = raw_df.sort_values(
                         "PRODUCER", key=lambda s: s.str.lower(),
                     ).reset_index(drop=True)
+
+                    if _use_brand_fetch:
+                        # Targeted fetch – merge fresh brand data into
+                        # the existing full dataset so that switching to
+                        # a different brand later still works.
+                        existing = st.session_state.get("_api_raw_df")
+                        if existing is not None:
+                            other = existing[
+                                ~existing["PRODUCER"].isin(selected_brands)
+                            ]
+                            raw_df = pd.concat(
+                                [other, raw_df], ignore_index=True,
+                            ).sort_values(
+                                "PRODUCER",
+                                key=lambda s: s.str.lower(),
+                            ).reset_index(drop=True)
+                        # Keep the full brand list and ID map from the
+                        # previous full fetch.
+                    else:
+                        # Full fetch – update brand list and ID map.
+                        brands = sorted(
+                            {b for b in raw_df["PRODUCER"].tolist() if b}
+                        )
+                        st.session_state["_api_brands"] = brands
+                        st.session_state["_api_brand_id_map"] = (
+                            _build_brand_id_map(raw_products)
+                        )
+
                     st.session_state["_api_raw_df"] = raw_df
-                    # Extract unique sorted non-empty brand names for the multiselect
-                    brands = sorted({b for b in raw_df["PRODUCER"].tolist() if b})
-                    st.session_state["_api_brands"] = brands
-                    # Build brand-name → ProducerId mapping so that
-                    # subsequent fetches can use Product_GetByBrand.
-                    st.session_state["_api_brand_id_map"] = _build_brand_id_map(
-                        raw_products,
-                    )
                     st.success(
                         f"✅ Loaded **{len(raw_df)}** product rows "
                         f"({len(raw_products)} base products)."
@@ -1109,6 +1130,13 @@ if parsed_df is not None and not _import_error:
     final_df, adjusted_count, adjusted_mask, import_df = optimize_prices(
         work_df, price_pct, original_buy_prices=parsed_df['BUY_PRICE_NUM'],
     )
+
+    # Include PRODUCER (brand) column when available (API import).
+    # optimize_prices() returns only EXPORT_COLUMNS, which doesn't
+    # include PRODUCER – re-attach it so users can see the brand in
+    # every tab and verify that brand filtering works.
+    if 'PRODUCER' in work_df.columns:
+        final_df.insert(3, 'PRODUCER', work_df['PRODUCER'].values)
 
     # --- Summary Metrics ---
     total = len(final_df)
