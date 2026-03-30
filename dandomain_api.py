@@ -126,6 +126,7 @@ MAX_RETRIES = 3
 RETRY_BASE_DELAY = 1.0  # doubles on each retry
 BATCH_DELAY = 0.2       # seconds between successive batch requests
 SOAP_TIMEOUT = 30       # seconds for SOAP operations
+BRAND_USER_GROUP_ID = 2  # user-group ID for "Mærker" (brands/producers)
 
 # ---------------------------------------------------------------------------
 # DanDomain SOAP endpoint
@@ -351,6 +352,47 @@ class DanDomainClient:
         return name
 
     # -- public API ----------------------------------------------------------
+
+    def get_all_brands(self) -> dict[int, str]:
+        """Fetch all brands (producers) from the *Mærker* user group.
+
+        The ``Producer`` field on products is a complex ``User`` object
+        that is **not** reliably populated by ``Product_SetFields``.
+        This method fetches the producer users directly via
+        ``User_GetByGroup`` so that brand names can be resolved from
+        ``ProducerId``.
+
+        Returns
+        -------
+        dict[int, str]
+            Mapping of ``ProducerId`` → display brand name.
+        """
+        try:
+            result = self._call(
+                "User_GetByGroup", GroupId=BRAND_USER_GROUP_ID,
+            )
+        except DanDomainAPIError:
+            logger.warning(
+                "Could not fetch brands from user group %d",
+                BRAND_USER_GROUP_ID,
+            )
+            return {}
+
+        if result is None:
+            return {}
+
+        items = result if isinstance(result, list) else [result]
+        brands: dict[int, str] = {}
+        for item in items:
+            user = _fix_mojibake(serialize_object(item, dict))
+            uid = user.get("Id")
+            name = self._extract_brand_name(user)
+            if uid and name:
+                try:
+                    brands[int(uid)] = name
+                except (ValueError, TypeError):
+                    pass
+        return brands
 
     def test_connection(self) -> dict:
         """Test the API connection.

@@ -1036,7 +1036,27 @@ else:  # Import from API
                             raw_products = client.get_products_batch(
                                 progress_callback=_api_progress,
                             )
+
+                        # Fetch brands separately — the Producer complex
+                        # User object is not populated by Product_SetFields;
+                        # only ProducerId (scalar) is returned reliably.
+                        _brands_map = client.get_all_brands()
+
                     progress_text.empty()
+
+                # Hydrate Producer on each product using the brands map
+                # so that brand names appear in the PRODUCER column.
+                if _brands_map:
+                    for p in raw_products:
+                        if not p.get("Producer"):
+                            pid = p.get("ProducerId")
+                            if pid is not None:
+                                try:
+                                    p["Producer"] = _brands_map.get(
+                                        int(pid), ""
+                                    )
+                                except (ValueError, TypeError):
+                                    pass
 
                 # Exclude products explicitly marked inactive
                 if only_online:
