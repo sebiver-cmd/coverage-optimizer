@@ -228,7 +228,7 @@ def run_optimization(payload: OptimizeRequest) -> OptimizeResponse:
         # (using the base product's own Price / BuyingPrice).
         if not payload.include_variants:
             raw_products = [
-                {**p, "Variants": None} for p in raw_products
+                {**p, "Variants": []} for p in raw_products
             ]
 
         # Build DataFrame (same helper the UI uses).  Variants are
@@ -270,7 +270,11 @@ def run_optimization(payload: OptimizeRequest) -> OptimizeResponse:
         # Count distinct base products (unique PRODUCT_ID values) in
         # the filtered set — comparable to the "base products" number
         # shown on the Streamlit Dashboard.
-        base_products = int(df["PRODUCT_ID"].nunique()) if "PRODUCT_ID" in df.columns else total
+        if "PRODUCT_ID" in df.columns:
+            base_products = int(df["PRODUCT_ID"].nunique())
+        else:
+            logger.warning("PRODUCT_ID column missing after api_products_to_dataframe; using total row count")
+            base_products = total
 
         base_ex_vat = df["PRICE_NUM"] / (1 + VAT_RATE)
         base_coverage = calc_coverage_rate(
