@@ -1040,7 +1040,20 @@ else:  # Import from API
                         # Fetch brands separately — the Producer complex
                         # User object is not populated by Product_SetFields;
                         # only ProducerId (scalar) is returned reliably.
-                        _brands_map = client.get_all_brands()
+                        # Pass ProducerIds so that get_all_brands() can
+                        # fall back to Product_GetByBrand when the
+                        # User_GetByGroup call returns nothing.
+                        _producer_ids = []
+                        for p in raw_products:
+                            _pid = p.get("ProducerId")
+                            if _pid is not None:
+                                try:
+                                    _producer_ids.append(int(_pid))
+                                except (ValueError, TypeError):
+                                    pass
+                        _brands_map = client.get_all_brands(
+                            producer_ids=_producer_ids,
+                        )
 
                     progress_text.empty()
 
