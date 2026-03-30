@@ -175,7 +175,7 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
 
-    # Create numeric helper columns matching parse_csv() output
+    # Create numeric helper columns
     df['BUY_PRICE_NUM'] = df['BUY_PRICE'].apply(clean_price)
     df['PRICE_NUM'] = df['PRICE'].apply(clean_price)
 
