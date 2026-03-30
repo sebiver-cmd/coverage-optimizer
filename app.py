@@ -1052,9 +1052,9 @@ else:  # Import from API
                             pid = p.get("ProducerId")
                             if pid is not None:
                                 try:
-                                    p["Producer"] = _brands_map.get(
-                                        int(pid), ""
-                                    )
+                                    _bname = _brands_map.get(int(pid))
+                                    if _bname:
+                                        p["Producer"] = _bname
                                 except (ValueError, TypeError):
                                     pass
 
