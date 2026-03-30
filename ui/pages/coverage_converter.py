@@ -374,7 +374,7 @@ def _render_analysis(
     _col_config = {
         _buy_price_col: st.column_config.NumberColumn(
             "BUY_PRICE",
-            help="Cost price -- edit to match current supplier price",
+            help="Cost price \u2013 edit to match current supplier price",
             format="%.2f",
             min_value=0.0,
         ),
@@ -423,7 +423,7 @@ def _render_analysis(
             _display_all.index[adjusted_mask]
         )
         if _display_adj.empty:
-            st.info("All products already meet the minimum margin -- no adjustments needed.")
+            st.info("All products already meet the minimum margin \u2013 no adjustments needed.")
         else:
             st.data_editor(
                 _display_adj,
@@ -436,7 +436,7 @@ def _render_analysis(
 
     with tab_import:
         if import_df.empty:
-            st.info("No products needed adjustment -- nothing to import.")
+            st.info("No products needed adjustment \u2013 nothing to import.")
         else:
             adjusted_full = _display_all[adjusted_mask]
             st.session_state["_imp_index_map"] = list(
@@ -475,7 +475,7 @@ def _render_analysis(
                     'Number': st.column_config.TextColumn(width='small'),
                     _buy_price_col: st.column_config.NumberColumn(
                         "BUY_PRICE",
-                        help="Cost price -- edit to match current supplier price",
+                        help="Cost price \u2013 edit to match current supplier price",
                         format="%.2f",
                         min_value=0.0,
                     ),
@@ -846,7 +846,7 @@ def _render_downloads(final_df, import_df, adjusted_count, include_buy_price):
     csv_preview = "\ufeff" + "PRODUCTS\n" + final_df.to_csv(sep=';', index=False)
     with dl_col1:
         st.download_button(
-            label="Preview -- Full Report CSV",
+            label="Preview \u2013 Full Report CSV",
             data=csv_preview.encode('utf-8'),
             file_name="preview_products.csv",
             mime="text/csv; charset=utf-8",
