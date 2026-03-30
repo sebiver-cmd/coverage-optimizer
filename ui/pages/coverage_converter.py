@@ -33,6 +33,13 @@ from domain.supplier import (
     detect_discount_lines,
 )
 
+# Columns shown in the simplified (default) table view.
+_SIMPLE_COLUMNS = [
+    'TITLE_DK', 'NUMBER', 'PRODUCER',
+    'BUY_PRICE', 'PRICE', 'COVERAGE_RATE_%',
+    'NEW_PRICE', 'NEW_COVERAGE_RATE_%',
+]
+
 
 def render(
     api_username: str,
@@ -40,14 +47,11 @@ def render(
     api_ready: bool,
     site_id: int,
     dry_run: bool,
-    price_pct: float,
-    include_buy_price: bool,
-    selected_encoding: str,
 ) -> None:
     """Render the full Coverage Converter page."""
 
     st.markdown(
-        '<h1 class="hero-header">💱 Coverage Converter</h1>',
+        '<h1 class="hero-header">Coverage Converter</h1>',
         unsafe_allow_html=True,
     )
     st.markdown(
@@ -60,13 +64,37 @@ def render(
         unsafe_allow_html=True,
     )
 
+    # --- Price Rules (local to Coverage Converter) ---
+    with st.expander("Price Rules", expanded=False):
+        pr_col1, pr_col2 = st.columns(2)
+        with pr_col1:
+            price_pct = st.number_input(
+                "Adjust Sales Price (%)",
+                min_value=-50.0,
+                max_value=200.0,
+                value=0.0,
+                step=0.5,
+                help=(
+                    "Increase or decrease all sales prices by this percentage "
+                    "before recalculating coverage rates."
+                ),
+                key="_cc_price_pct",
+            )
+        with pr_col2:
+            include_buy_price = st.checkbox(
+                "Include BUY_PRICE in import file",
+                value=False,
+                help="When checked, the import-ready CSV will contain the BUY_PRICE column.",
+                key="_cc_include_bp",
+            )
+
     parsed_df = None
     _import_error = False
 
     if not api_ready:
         st.markdown(
             '<div class="info-card">'
-            "<h4>🔌 API Not Connected</h4>"
+            "<h4>API Not Connected</h4>"
             "<p>Configure your DanDomain API credentials in the sidebar "
             "to import products directly from your webshop.</p>"
             "</div>",
@@ -87,7 +115,6 @@ def render(
             dry_run,
             price_pct,
             include_buy_price,
-            selected_encoding,
         )
 
 
@@ -135,7 +162,7 @@ def _render_api_import(
             help="When checked, only products marked as 'online' are imported.",
         )
 
-    if st.button("📥 Fetch Products from API", type="primary"):
+    if st.button("Fetch Products from API", type="primary"):
         try:
             with st.spinner("Fetching products from the API…"):
                 progress_text = st.empty()
@@ -235,11 +262,11 @@ def _render_api_import(
                 )
 
                 st.success(
-                    f"✅ Loaded **{len(raw_df)}** product rows "
+                    f"Loaded **{len(raw_df)}** product rows "
                     f"({len(raw_products)} base products)."
                 )
         except (DanDomainAPIError, ValueError, AttributeError) as exc:
-            st.error(f"❌ API import failed: {exc}")
+            st.error(f"API import failed: {exc}")
             _import_error = True
 
     # Derive parsed_df from cached data, applying brand filter
@@ -268,7 +295,6 @@ def _render_analysis(
     dry_run: bool,
     price_pct: float,
     include_buy_price: bool,
-    selected_encoding: str,
 ) -> None:
     """Render analysis results, data tabs, downloads, and push-to-shop."""
     # --- Apply persisted BUY_PRICE edits from data-editor state ---
@@ -348,23 +374,42 @@ def _render_analysis(
     _col_config = {
         _buy_price_col: st.column_config.NumberColumn(
             "BUY_PRICE",
-            help="Cost price – edit to match current supplier price",
+            help="Cost price -- edit to match current supplier price",
             format="%.2f",
             min_value=0.0,
         ),
     }
 
+    # --- Advanced columns toggle ---
+    show_advanced = st.checkbox(
+        "Advanced columns",
+        value=False,
+        help="Show all columns including IDs, ex-VAT prices, and variant details.",
+        key="_show_advanced_cols",
+    )
+
+    # Determine which columns to display
+    if show_advanced:
+        _visible_cols = list(_display_all.columns)
+    else:
+        _visible_cols = [
+            c for c in _SIMPLE_COLUMNS if c in _display_all.columns
+        ]
+        # Always include BUY_PRICE even if not in the simple list
+        if _buy_price_col not in _visible_cols:
+            _visible_cols.insert(0, _buy_price_col)
+
     tab_all, tab_adjusted, tab_import, tab_supplier = st.tabs([
-        "📋 All Products",
-        "⚡ Adjusted Only",
-        "📦 Import Preview",
-        "📄 Supplier Match",
+        "All Products",
+        "Adjusted Only",
+        "Import Preview",
+        "Supplier Match",
     ])
 
     with tab_all:
         st.data_editor(
-            _display_all,
-            disabled=_disabled_cols,
+            _display_all[_visible_cols],
+            disabled=[c for c in _visible_cols if c != _buy_price_col],
             column_config=_col_config,
             use_container_width=True,
             hide_index=True,
@@ -372,16 +417,17 @@ def _render_analysis(
         )
 
     with tab_adjusted:
-        _display_adj = _display_all[adjusted_mask].reset_index(drop=True)
+        _adj_full = _display_all[adjusted_mask]
+        _display_adj = _adj_full[_visible_cols].reset_index(drop=True)
         st.session_state["_adj_index_map"] = list(
             _display_all.index[adjusted_mask]
         )
         if _display_adj.empty:
-            st.info("✅ All products already meet the minimum margin — no adjustments needed.")
+            st.info("All products already meet the minimum margin -- no adjustments needed.")
         else:
             st.data_editor(
                 _display_adj,
-                disabled=_disabled_cols,
+                disabled=[c for c in _visible_cols if c != _buy_price_col],
                 column_config=_col_config,
                 use_container_width=True,
                 hide_index=True,
@@ -390,7 +436,7 @@ def _render_analysis(
 
     with tab_import:
         if import_df.empty:
-            st.info("✅ No products needed adjustment — nothing to import.")
+            st.info("No products needed adjustment -- nothing to import.")
         else:
             adjusted_full = _display_all[adjusted_mask]
             st.session_state["_imp_index_map"] = list(
@@ -429,30 +475,30 @@ def _render_analysis(
                     'Number': st.column_config.TextColumn(width='small'),
                     _buy_price_col: st.column_config.NumberColumn(
                         "BUY_PRICE",
-                        help="Cost price – edit to match current supplier price",
+                        help="Cost price -- edit to match current supplier price",
                         format="%.2f",
                         min_value=0.0,
                     ),
                     'Variant ID': st.column_config.TextColumn(width='small'),
                     'Variant Types': st.column_config.TextColumn(width='small'),
                     'Old Price': st.column_config.TextColumn(
-                        'Old Price 💰', width='small',
+                        'Old Price', width='small',
                     ),
                     'New Price': st.column_config.TextColumn(
-                        'New Price ✅', width='small',
+                        'New Price', width='small',
                     ),
                     'Old Coverage': st.column_config.TextColumn(
                         'Old Coverage', width='small',
                     ),
                     'New Coverage': st.column_config.TextColumn(
-                        'New Coverage ✅', width='small',
+                        'New Coverage', width='small',
                     ),
                 },
             )
 
     # --- Supplier Match Tab ---
     with tab_supplier:
-        _render_supplier_match(work_df, selected_encoding)
+        _render_supplier_match(work_df)
 
     # --- Downloads ---
     _render_downloads(final_df, import_df, adjusted_count, include_buy_price)
@@ -476,7 +522,7 @@ def _render_analysis(
 # Supplier Match
 # ---------------------------------------------------------------------------
 
-def _render_supplier_match(work_df: pd.DataFrame, selected_encoding: str) -> None:
+def _render_supplier_match(work_df: pd.DataFrame) -> None:
     """Render the supplier file match tab."""
     st.markdown(
         "Upload a **supplier price list** (CSV or PDF) to automatically "
@@ -490,6 +536,20 @@ def _render_supplier_match(work_df: pd.DataFrame, selected_encoding: str) -> Non
         key="_supplier_file",
         label_visibility="collapsed",
     )
+
+    # Encoding selection under Advanced (auto-detect by default)
+    with st.expander("Advanced: File Encoding", expanded=False):
+        encoding_label = st.selectbox(
+            "CSV file encoding",
+            options=list(ENCODING_OPTIONS.keys()),
+            index=0,
+            help=(
+                "Choose 'Auto-detect' to let the app guess the encoding, "
+                "or pick a specific one if Danish characters look wrong."
+            ),
+            key="_supplier_encoding",
+        )
+    selected_encoding = ENCODING_OPTIONS[encoding_label]
 
     if sup_file is not None:
         try:
@@ -597,7 +657,7 @@ def _render_supplier_match(work_df: pd.DataFrame, selected_encoding: str) -> Non
 
                 if disc_lines:
                     with st.expander(
-                        f"💰 {len(disc_lines)} discount line(s) detected",
+                        f"{len(disc_lines)} discount line(s) detected",
                         expanded=False,
                     ):
                         disc_df = pd.DataFrame(disc_lines)
@@ -647,7 +707,7 @@ def _render_supplier_match(work_df: pd.DataFrame, selected_encoding: str) -> Non
                         )
 
                         if st.button(
-                            "✅ Update Cost Prices from Supplier",
+                            "Update Cost Prices from Supplier",
                             type="primary",
                             use_container_width=True,
                             key="_apply_supplier",
@@ -660,7 +720,7 @@ def _render_supplier_match(work_df: pd.DataFrame, selected_encoding: str) -> Non
                 )
     else:
         st.info(
-            "📄 Upload a supplier price list (CSV or PDF) to match "
+            "Upload a supplier price list (CSV or PDF) to match "
             "SKUs and update cost prices automatically."
         )
 
@@ -762,7 +822,7 @@ def _apply_supplier_prices(match_rows, work_df):
             for idx in work_df.index[mask]:
                 edits[str(idx)] = {"BUY_PRICE": row['_new_cost']}
         st.success(
-            f"✅ Updated cost prices for {updated} product row(s). "
+            f"Updated cost prices for {updated} product row(s). "
             f"Changes are reflected in all tabs."
         )
         st.rerun()
@@ -778,7 +838,7 @@ def _render_downloads(final_df, import_df, adjusted_count, include_buy_price):
     """Render the download section."""
     st.markdown(
         '<div class="section-header" style="margin-top:1rem;">'
-        '📥 Download Reports</div>',
+        'Download Reports</div>',
         unsafe_allow_html=True,
     )
     dl_col1, dl_col2 = st.columns(2, gap="small")
@@ -786,7 +846,7 @@ def _render_downloads(final_df, import_df, adjusted_count, include_buy_price):
     csv_preview = "\ufeff" + "PRODUCTS\n" + final_df.to_csv(sep=';', index=False)
     with dl_col1:
         st.download_button(
-            label="📥 Preview – Full Report CSV",
+            label="Preview -- Full Report CSV",
             data=csv_preview.encode('utf-8'),
             file_name="preview_products.csv",
             mime="text/csv; charset=utf-8",
@@ -799,7 +859,7 @@ def _render_downloads(final_df, import_df, adjusted_count, include_buy_price):
     if import_df.empty:
         with dl_col2:
             st.download_button(
-                label="📥 Import-Ready CSV",
+                label="Import-Ready CSV",
                 data="",
                 file_name="import_products.csv",
                 mime="text/csv; charset=utf-8",
@@ -813,7 +873,7 @@ def _render_downloads(final_df, import_df, adjusted_count, include_buy_price):
         )
         with dl_col2:
             st.download_button(
-                label="📥 Import-Ready CSV",
+                label="Import-Ready CSV",
                 data=csv_import.encode('utf-8'),
                 file_name="import_products.csv",
                 mime="text/csv; charset=utf-8",
@@ -838,14 +898,14 @@ def _render_push_to_shop(
     """Render the push-to-shop section with safety gates."""
     st.divider()
     st.markdown(
-        '<div class="section-header">🚀 Push to Shop</div>',
+        '<div class="section-header">Push to Shop</div>',
         unsafe_allow_html=True,
     )
 
     if not api_ready:
         st.markdown(
             '<div class="info-card">'
-            "<h4>🔌 API Not Connected</h4>"
+            "<h4>API Not Connected</h4>"
             "<p>Configure your DanDomain API credentials in the sidebar "
             "to enable direct price updates to your live webshop.</p>"
             "</div>",
@@ -863,15 +923,15 @@ def _render_push_to_shop(
 
     if not all_potential_updates:
         st.info(
-            "✅ No products have actual price or cost "
+            "No products have actual price or cost "
             "changes to push."
         )
         return
 
     mode_pill = (
-        '<span class="status-pill dry">🧪 DRY-RUN</span>'
+        '<span class="status-pill dry">DRY-RUN</span>'
         if dry_run
-        else '<span class="status-pill live">⚡ LIVE</span>'
+        else '<span class="status-pill live">LIVE</span>'
     )
 
     # --- Product selection table ---
@@ -957,7 +1017,7 @@ def _render_push_to_shop(
         test_col, push_col = st.columns(2)
         with test_col:
             if st.button(
-                "🔍 Test Connection",
+                "Test Connection",
                 use_container_width=True,
             ):
                 try:
@@ -966,17 +1026,17 @@ def _render_push_to_shop(
                     ) as client:
                         info = client.test_connection()
                     st.success(
-                        f"✅ Connected! Product count: "
+                        f"Connected! Product count: "
                         f"{info.get('product_count', 'N/A')}"
                     )
                 except (
                     DanDomainAPIError, ValueError, AttributeError,
                 ) as exc:
-                    st.error(f"❌ Connection failed: {exc}")
+                    st.error(f"Connection failed: {exc}")
 
         with push_col:
             push_clicked = st.button(
-                "🧪 Simulate Push" if dry_run else "⚡ Push Prices Now",
+                "Simulate Push" if dry_run else "Push Prices Now",
                 type="primary" if not dry_run else "secondary",
                 use_container_width=True,
                 disabled=st.session_state.get("_push_running", False),
@@ -1003,7 +1063,7 @@ def _render_push_to_shop(
 def _handle_dry_run(selected_updates, n_selected):
     """Display dry-run results."""
     st.info(
-        f"🧪 **Dry-run**: {n_selected} product(s) would be updated. "
+        f"**Dry-run**: {n_selected} product(s) would be updated. "
         "Disable dry-run in the sidebar to push for real."
     )
     dry_data: list[dict] = []
@@ -1043,7 +1103,7 @@ def _handle_live_push_confirmation(api_username, api_password, site_id):
 
     st.markdown(
         '<div class="confirm-banner">'
-        "<strong>⚠️ Confirm Live Push</strong><br>"
+        "<strong>Confirm Live Push</strong><br>"
         f"<strong>{n_pend}</strong> selected product(s) "
         "with verified changes<br>"
         f"Endpoints: <strong>{', '.join(ep_list)}</strong><br>"
@@ -1055,13 +1115,13 @@ def _handle_live_push_confirmation(api_username, api_password, site_id):
     confirm_col, cancel_col = st.columns(2)
     with confirm_col:
         confirmed = st.button(
-            "✅ Confirm & Push",
+            "Confirm and Push",
             type="primary",
             use_container_width=True,
         )
     with cancel_col:
         cancelled = st.button(
-            "❌ Cancel",
+            "Cancel",
             use_container_width=True,
         )
 
@@ -1091,7 +1151,7 @@ def _execute_live_push(pending_updates, api_username, api_password, site_id):
         )
         entry = {
             "product_number": pnum,
-            "status": "✅" if ok else "❌",
+            "status": "OK" if ok else "FAILED",
             "error": err,
             "timestamp": time.strftime("%H:%M:%S"),
         }
@@ -1113,11 +1173,11 @@ def _execute_live_push(pending_updates, api_username, api_password, site_id):
         progress_bar.progress(1.0, text="Done!")
 
         res_c1, res_c2 = st.columns(2)
-        res_c1.metric("✅ Succeeded", results["success"])
-        res_c2.metric("❌ Failed", results["failed"])
+        res_c1.metric("Succeeded", results["success"])
+        res_c2.metric("Failed", results["failed"])
 
         if results["errors"]:
-            with st.expander("⚠️ Errors", expanded=True):
+            with st.expander("Errors", expanded=True):
                 st.dataframe(
                     pd.DataFrame(results["errors"]),
                     use_container_width=True,
@@ -1125,7 +1185,7 @@ def _execute_live_push(pending_updates, api_username, api_password, site_id):
                 )
 
     except (DanDomainAPIError, ValueError, AttributeError) as exc:
-        st.error(f"❌ Push failed: {exc}")
+        st.error(f"Push failed: {exc}")
     finally:
         st.session_state.pop("_push_running", None)
         st.session_state.pop("_push_updates", None)
@@ -1134,7 +1194,7 @@ def _execute_live_push(pending_updates, api_username, api_password, site_id):
         log_df = pd.DataFrame(log_entries)
         log_csv = log_df.to_csv(index=False)
         st.download_button(
-            label="📋 Download Audit Log",
+            label="Download Audit Log",
             data=log_csv.encode("utf-8"),
             file_name="api_push_log.csv",
             mime="text/csv",
