@@ -16,6 +16,7 @@ except ImportError:
     _PDF_SUPPORT = False
 
 from dandomain_api import DanDomainClient, DanDomainAPIError
+from push_safety import build_push_updates
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -1727,224 +1728,357 @@ if parsed_df is not None and not _import_error:
                 unsafe_allow_html=True,
             )
         else:
-            mode_pill = (
-                '<span class="status-pill dry">🧪 DRY-RUN</span>'
-                if dry_run
-                else '<span class="status-pill live">⚡ LIVE</span>'
-            )
-            st.markdown(
-                f'<div class="info-card">'
-                f"<h4>{mode_pill} &nbsp; "
-                f"{adjusted_count} product"
-                f"{'s' if adjusted_count != 1 else ''} queued</h4>"
-                f"<p>Prices will be pushed via the <strong>SOAP API</strong>. "
-                f"Variant ID and Variant Types are included to ensure "
-                f"the correct product/variant is updated.</p>"
-                f"</div>",
-                unsafe_allow_html=True,
+            # Build all potential updates using both safety gates.
+            # Gate 1 (selection) is deferred — we pass None so all
+            # changed products appear in the selection table.
+            all_potential_updates = build_push_updates(
+                final_df,
+                adjusted_mask,
+                parsed_df['BUY_PRICE_NUM'],
+                work_df['BUY_PRICE_NUM'],
+                selected_indices=None,
             )
 
-            # Connection test
-            test_col, push_col = st.columns(2)
-            with test_col:
-                if st.button("🔍 Test Connection", use_container_width=True):
-                    try:
-                        with DanDomainClient(api_username, api_password) as client:
-                            info = client.test_connection()
-                        st.success(
-                            f"✅ Connected! Product count: "
-                            f"{info.get('product_count', 'N/A')}"
+            if not all_potential_updates:
+                st.info(
+                    "✅ No products have actual price or cost "
+                    "changes to push."
+                )
+            else:
+                mode_pill = (
+                    '<span class="status-pill dry">🧪 DRY-RUN</span>'
+                    if dry_run
+                    else '<span class="status-pill live">⚡ LIVE</span>'
+                )
+
+                # --- Product selection table ----------------------
+                # Users must explicitly select which products to push.
+                sel_rows: list[dict] = []
+                for u in all_potential_updates:
+                    changes: list[str] = []
+                    if "new_price" in u:
+                        changes.append(
+                            f"Price: {format_dk(u['old_price'])} → "
+                            f"{format_dk(u['new_price'])}"
                         )
-                    except (DanDomainAPIError, ValueError, AttributeError) as exc:
-                        st.error(f"❌ Connection failed: {exc}")
-
-            # Push / simulate button
-            with push_col:
-                push_clicked = st.button(
-                    "🧪 Simulate Push" if dry_run else "⚡ Push Prices Now",
-                    type="primary" if not dry_run else "secondary",
-                    use_container_width=True,
-                    disabled=st.session_state.get("_push_running", False),
-                )
-
-            if push_clicked:
-                # Build the update list from adjusted rows.
-                # Include every identifier that a regular CSV import
-                # would carry: PRODUCT_ID, NUMBER, VARIANT_ID,
-                # VARIANT_TYPES — this ensures the correct
-                # product / variant is targeted.
-                #
-                # buy_price is included when the user edited the
-                # BUY_PRICE for a product so that the cost price
-                # is also pushed to the shop.
-                bp_changed = (
-                    parsed_df['BUY_PRICE_NUM'] != work_df['BUY_PRICE_NUM']
-                )
-                adjusted_full = final_df[adjusted_mask]
-                updates = []
-                for idx, row in adjusted_full.iterrows():
-                    pid_raw = row.get('PRODUCT_ID', '')
-                    pid = '' if pd.isna(pid_raw) else str(pid_raw).strip()
-                    pnum = str(row['NUMBER']).strip()
-                    new_price_val = clean_price(str(row['NEW_PRICE']))
-                    orig_price_val = clean_price(str(row['PRICE']))
-                    vid_raw = row.get('VARIANT_ID', '')
-                    if pd.isna(vid_raw) or vid_raw == '':
-                        vid = ''
-                    else:
-                        vid = str(vid_raw).strip()
-                        # Normalise numeric IDs ("123.0" → "123")
-                        # and treat zero as "no variant".
-                        try:
-                            n = float(vid)
-                            vid = '' if n == 0 else str(int(n))
-                        except (ValueError, OverflowError):
-                            pass
-                    vtypes_raw = row.get('VARIANT_TYPES', '')
-                    vtypes = '' if pd.isna(vtypes_raw) else str(vtypes_raw).strip()
-                    sales_price_changed = (
-                        abs(new_price_val - orig_price_val) > PRICE_EPSILON
-                    )
-                    has_buy_change = bp_changed.loc[idx]
-                    if pnum and (sales_price_changed or has_buy_change):
-                        entry = {
-                            "product_id": pid,
-                            "product_number": pnum,
-                            "variant_id": vid,
-                            "variant_types": vtypes,
-                        }
-                        if sales_price_changed and new_price_val > 0:
-                            entry["new_price"] = new_price_val
-                        if has_buy_change:
-                            entry["buy_price"] = clean_price(
-                                str(row.get('BUY_PRICE', ''))
+                    if "buy_price" in u:
+                        old_bp = u.get("old_buy_price")
+                        if old_bp is not None:
+                            changes.append(
+                                f"BuyPrice: {format_dk(old_bp)} → "
+                                f"{format_dk(u['buy_price'])}"
                             )
-                        updates.append(entry)
+                        else:
+                            changes.append(
+                                f"BuyPrice: → {format_dk(u['buy_price'])}"
+                            )
+                    sel_rows.append({
+                        "Push": True,
+                        "Product ID": u["product_id"],
+                        "Number": u["product_number"],
+                        "Title": u.get("title", ""),
+                        "Variant ID": u.get("variant_id", ""),
+                        "Changes": " · ".join(changes),
+                        "Endpoint": u.get("endpoint", ""),
+                    })
 
-                if not updates:
-                    st.warning("No valid products to update.")
-                elif dry_run:
-                    st.info(
-                        f"🧪 **Dry-run**: {len(updates)} product(s) "
-                        "would be updated. Disable dry-run in the "
-                        "sidebar to push for real."
+                sel_df = pd.DataFrame(sel_rows)
+                edited_sel = st.data_editor(
+                    sel_df,
+                    disabled=[c for c in sel_df.columns if c != "Push"],
+                    column_config={
+                        "Push": st.column_config.CheckboxColumn(
+                            "Push", default=True,
+                        ),
+                        "Product ID": st.column_config.TextColumn(
+                            width="small",
+                        ),
+                        "Number": st.column_config.TextColumn(
+                            width="small",
+                        ),
+                        "Title": st.column_config.TextColumn(
+                            width="medium",
+                        ),
+                        "Variant ID": st.column_config.TextColumn(
+                            width="small",
+                        ),
+                        "Changes": st.column_config.TextColumn(
+                            width="large",
+                        ),
+                        "Endpoint": st.column_config.TextColumn(
+                            width="medium",
+                        ),
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                    key="_push_sel",
+                )
+
+                # Derive the selected subset
+                push_flags = edited_sel["Push"].tolist()
+                if len(push_flags) != len(all_potential_updates):
+                    st.error(
+                        "Selection state mismatch — please re-run "
+                        "the page."
                     )
-                    dry_df = pd.DataFrame(updates)
-                    dry_cols = ['product_id', 'product_number']
-                    dry_labels = ['Product ID', 'Product Number']
-                    if 'new_price' in dry_df.columns:
-                        dry_cols.append('new_price')
-                        dry_labels.append('New Price')
-                    dry_cols.extend(['variant_id', 'variant_types'])
-                    dry_labels.extend(['Variant ID', 'Variant Types'])
-                    if 'buy_price' in dry_df.columns:
-                        dry_cols.append('buy_price')
-                        dry_labels.append('Buy Price')
-                    dry_df = dry_df[dry_cols]
-                    dry_df.columns = dry_labels
-                    st.dataframe(dry_df, use_container_width=True, hide_index=True)
+                    selected_updates = []
                 else:
-                    # --- Two-step confirmation for live push --------
-                    st.session_state["_push_pending"] = True
-                    st.session_state["_push_updates"] = updates
+                    selected_updates = [
+                        u for u, sel in zip(
+                            all_potential_updates, push_flags,
+                        )
+                        if sel
+                    ]
 
-            # Handle pending live-push confirmation
-            if (
-                st.session_state.get("_push_pending")
-                and not dry_run
-                and not st.session_state.get("_push_running")
-            ):
-                pending_updates = st.session_state.get("_push_updates", [])
+                # Summary line
+                n_selected = len(selected_updates)
+                n_total = len(all_potential_updates)
+                n_variants = sum(
+                    1 for u in selected_updates if u.get("variant_id")
+                )
+                n_base = n_selected - n_variants
+                endpoints_summary: list[str] = []
+                if n_base > 0:
+                    endpoints_summary.append(
+                        f"Product_Update × {n_base}",
+                    )
+                if n_variants > 0:
+                    endpoints_summary.append(
+                        f"Product_UpdateVariant × {n_variants}",
+                    )
+
                 st.markdown(
-                    '<div class="confirm-banner">'
-                    "<strong>⚠️ Confirm Live Push</strong><br>"
-                    f"You are about to update <strong>{len(pending_updates)}</strong> "
-                    "product price(s) on your <strong>live</strong> webshop. "
-                    "This action cannot be undone automatically."
-                    "</div>",
+                    f"{mode_pill} &nbsp; "
+                    f"**{n_selected}** / {n_total} products selected "
+                    f"&nbsp;·&nbsp; Endpoints: "
+                    f"{', '.join(endpoints_summary) if endpoints_summary else '—'}",
                     unsafe_allow_html=True,
                 )
-                confirm_col, cancel_col = st.columns(2)
-                with confirm_col:
-                    confirmed = st.button(
-                        "✅ Confirm & Push",
-                        type="primary",
-                        use_container_width=True,
-                    )
-                with cancel_col:
-                    cancelled = st.button(
-                        "❌ Cancel",
-                        use_container_width=True,
-                    )
 
-                if cancelled:
-                    st.session_state.pop("_push_pending", None)
-                    st.session_state.pop("_push_updates", None)
-                    st.info("Push cancelled.")
+                if n_selected == 0:
+                    st.info("Select at least one product to push.")
+                else:
+                    # Connection test + push / simulate buttons
+                    test_col, push_col = st.columns(2)
+                    with test_col:
+                        if st.button(
+                            "🔍 Test Connection",
+                            use_container_width=True,
+                        ):
+                            try:
+                                with DanDomainClient(
+                                    api_username, api_password,
+                                ) as client:
+                                    info = client.test_connection()
+                                st.success(
+                                    f"✅ Connected! Product count: "
+                                    f"{info.get('product_count', 'N/A')}"
+                                )
+                            except (
+                                DanDomainAPIError, ValueError, AttributeError,
+                            ) as exc:
+                                st.error(f"❌ Connection failed: {exc}")
 
-                if confirmed:
-                    st.session_state["_push_running"] = True
-                    st.session_state.pop("_push_pending", None)
-
-                    progress_bar = st.progress(0, text="Pushing prices…")
-                    log_entries: list[dict] = []
-
-                    def on_progress(idx, total, pnum, ok, err):
-                        progress_bar.progress(
-                            idx / total,
-                            text=f"Updating {idx}/{total}: {pnum}",
+                    with push_col:
+                        push_clicked = st.button(
+                            "🧪 Simulate Push"
+                            if dry_run
+                            else "⚡ Push Prices Now",
+                            type="primary" if not dry_run else "secondary",
+                            use_container_width=True,
+                            disabled=st.session_state.get(
+                                "_push_running", False,
+                            ),
                         )
-                        # Include all identifiers in the log entry
-                        # (mirrors a regular CSV import row)
-                        entry = {
-                            "product_number": pnum,
-                            "status": "✅" if ok else "❌",
-                            "error": err,
-                            "timestamp": time.strftime("%H:%M:%S"),
-                        }
-                        if idx - 1 < len(pending_updates):
-                            u = pending_updates[idx - 1]
-                            entry["product_id"] = u.get("product_id", "")
-                            entry["variant_id"] = u.get("variant_id", "")
-                            entry["variant_types"] = u.get("variant_types", "")
-                        log_entries.append(entry)
 
-                    try:
-                        with DanDomainClient(api_username, api_password) as client:
-                            results = client.update_prices_batch(
-                                pending_updates,
-                                site_id=site_id,
-                                progress_callback=on_progress,
+                    if push_clicked:
+                        if dry_run:
+                            # --- Dry-run: show per-field diffs ------
+                            st.info(
+                                f"🧪 **Dry-run**: {n_selected} "
+                                "product(s) would be updated. "
+                                "Disable dry-run in the sidebar to "
+                                "push for real."
+                            )
+                            dry_data: list[dict] = []
+                            for u in selected_updates:
+                                r: dict = {
+                                    "Product ID": u["product_id"],
+                                    "Number": u["product_number"],
+                                    "Title": u.get("title", ""),
+                                    "Variant ID": u.get(
+                                        "variant_id", "",
+                                    ),
+                                }
+                                if "new_price" in u:
+                                    r["Old Price"] = u.get(
+                                        "old_price", "",
+                                    )
+                                    r["New Price"] = u["new_price"]
+                                if "buy_price" in u:
+                                    r["Old Buy Price"] = u.get(
+                                        "old_buy_price", "",
+                                    )
+                                    r["New Buy Price"] = u["buy_price"]
+                                r["Endpoint"] = u.get("endpoint", "")
+                                dry_data.append(r)
+                            st.dataframe(
+                                pd.DataFrame(dry_data),
+                                use_container_width=True,
+                                hide_index=True,
+                            )
+                        else:
+                            # --- Live push: two-step confirmation ---
+                            st.session_state["_push_pending"] = True
+                            st.session_state["_push_updates"] = (
+                                selected_updates
                             )
 
-                        progress_bar.progress(1.0, text="Done!")
+                    # Handle pending live-push confirmation
+                    if (
+                        st.session_state.get("_push_pending")
+                        and not dry_run
+                        and not st.session_state.get("_push_running")
+                    ):
+                        pending_updates = st.session_state.get(
+                            "_push_updates", [],
+                        )
+                        n_pend = len(pending_updates)
+                        n_pend_var = sum(
+                            1 for u in pending_updates
+                            if u.get("variant_id")
+                        )
+                        n_pend_base = n_pend - n_pend_var
+                        ep_list: list[str] = []
+                        if n_pend_base > 0:
+                            ep_list.append(
+                                f"Product_Update × {n_pend_base}",
+                            )
+                        if n_pend_var > 0:
+                            ep_list.append(
+                                f"Product_UpdateVariant × {n_pend_var}",
+                            )
 
-                        res_c1, res_c2 = st.columns(2)
-                        res_c1.metric("✅ Succeeded", results["success"])
-                        res_c2.metric("❌ Failed", results["failed"])
+                        st.markdown(
+                            '<div class="confirm-banner">'
+                            "<strong>⚠️ Confirm Live Push</strong><br>"
+                            f"<strong>{n_pend}</strong> selected product(s) "
+                            "with verified changes<br>"
+                            f"Endpoints: <strong>"
+                            f"{', '.join(ep_list)}</strong><br>"
+                            "This action cannot be undone automatically."
+                            "</div>",
+                            unsafe_allow_html=True,
+                        )
 
-                        if results["errors"]:
-                            with st.expander("⚠️ Errors", expanded=True):
-                                err_df = pd.DataFrame(results["errors"])
-                                st.dataframe(
-                                    err_df,
-                                    use_container_width=True,
-                                    hide_index=True,
+                        confirm_col, cancel_col = st.columns(2)
+                        with confirm_col:
+                            confirmed = st.button(
+                                "✅ Confirm & Push",
+                                type="primary",
+                                use_container_width=True,
+                            )
+                        with cancel_col:
+                            cancelled = st.button(
+                                "❌ Cancel",
+                                use_container_width=True,
+                            )
+
+                        if cancelled:
+                            st.session_state.pop("_push_pending", None)
+                            st.session_state.pop("_push_updates", None)
+                            st.info("Push cancelled.")
+
+                        if confirmed:
+                            st.session_state["_push_running"] = True
+                            st.session_state.pop("_push_pending", None)
+
+                            progress_bar = st.progress(
+                                0, text="Pushing prices…",
+                            )
+                            log_entries: list[dict] = []
+
+                            def on_progress(idx, total, pnum, ok, err):
+                                progress_bar.progress(
+                                    idx / total,
+                                    text=(
+                                        f"Updating {idx}/{total}: {pnum}"
+                                    ),
+                                )
+                                entry = {
+                                    "product_number": pnum,
+                                    "status": "✅" if ok else "❌",
+                                    "error": err,
+                                    "timestamp": time.strftime(
+                                        "%H:%M:%S",
+                                    ),
+                                }
+                                if idx - 1 < len(pending_updates):
+                                    u = pending_updates[idx - 1]
+                                    entry["product_id"] = u.get(
+                                        "product_id", "",
+                                    )
+                                    entry["variant_id"] = u.get(
+                                        "variant_id", "",
+                                    )
+                                    entry["variant_types"] = u.get(
+                                        "variant_types", "",
+                                    )
+                                log_entries.append(entry)
+
+                            try:
+                                with DanDomainClient(
+                                    api_username, api_password,
+                                ) as client:
+                                    results = client.update_prices_batch(
+                                        pending_updates,
+                                        site_id=site_id,
+                                        progress_callback=on_progress,
+                                    )
+
+                                progress_bar.progress(1.0, text="Done!")
+
+                                res_c1, res_c2 = st.columns(2)
+                                res_c1.metric(
+                                    "✅ Succeeded", results["success"],
+                                )
+                                res_c2.metric(
+                                    "❌ Failed", results["failed"],
                                 )
 
-                    except (DanDomainAPIError, ValueError, AttributeError) as exc:
-                        st.error(f"❌ Push failed: {exc}")
-                    finally:
-                        st.session_state.pop("_push_running", None)
-                        st.session_state.pop("_push_updates", None)
+                                if results["errors"]:
+                                    with st.expander(
+                                        "⚠️ Errors", expanded=True,
+                                    ):
+                                        st.dataframe(
+                                            pd.DataFrame(
+                                                results["errors"],
+                                            ),
+                                            use_container_width=True,
+                                            hide_index=True,
+                                        )
 
-                    # Audit log download
-                    if log_entries:
-                        log_df = pd.DataFrame(log_entries)
-                        log_csv = log_df.to_csv(index=False)
-                        st.download_button(
-                            label="📋 Download Audit Log",
-                            data=log_csv.encode("utf-8"),
-                            file_name="api_push_log.csv",
-                            mime="text/csv",
-                        )
+                            except (
+                                DanDomainAPIError,
+                                ValueError,
+                                AttributeError,
+                            ) as exc:
+                                st.error(f"❌ Push failed: {exc}")
+                            finally:
+                                st.session_state.pop(
+                                    "_push_running", None,
+                                )
+                                st.session_state.pop(
+                                    "_push_updates", None,
+                                )
+
+                            # Audit log download
+                            if log_entries:
+                                log_df = pd.DataFrame(log_entries)
+                                log_csv = log_df.to_csv(index=False)
+                                st.download_button(
+                                    label="📋 Download Audit Log",
+                                    data=log_csv.encode("utf-8"),
+                                    file_name="api_push_log.csv",
+                                    mime="text/csv",
+                                )
