@@ -969,45 +969,12 @@ else:  # Import from API
             unsafe_allow_html=True,
         )
     else:
-        # --- Load brands first, then fetch products by brand -----------
+        # --- Single-step: fetch products (brands are extracted from
+        #     the product data — no separate brand-loading call). -------
         _api_brands_available = st.session_state.get("_api_brands", [])
         _api_brand_id_map = st.session_state.get("_api_brand_id_map", {})
 
-        # Step 1 — Load brands (lightweight fetch of Producer fields only)
-        if not _api_brands_available:
-            if st.button("🔄 Load Brands from API", type="secondary"):
-                try:
-                    with st.spinner("Loading brands…"):
-                        _brand_prog = st.empty()
-
-                        def _brand_progress(count):
-                            _brand_prog.text(
-                                f"Scanned {count} products…"
-                            )
-
-                        with DanDomainClient(
-                            api_username, api_password
-                        ) as client:
-                            brand_map = client.get_all_brands(
-                                progress_callback=_brand_progress,
-                            )
-                        _brand_prog.empty()
-
-                    if brand_map:
-                        st.session_state["_api_brands"] = sorted(
-                            brand_map.keys()
-                        )
-                        st.session_state["_api_brand_id_map"] = brand_map
-                        st.rerun()
-                    else:
-                        st.warning(
-                            "No brands / producers found in the shop. "
-                            "Check the API logs for details."
-                        )
-                except (DanDomainAPIError, ValueError) as exc:
-                    st.error(f"❌ Failed to load brands: {exc}")
-
-        # Step 2 — Filtering options (enabled once brands are loaded)
+        # Filtering controls (brand filter populated after first fetch)
         api_filter_col1, api_filter_col2 = st.columns(2)
         with api_filter_col1:
             selected_brands = st.multiselect(
@@ -1018,7 +985,7 @@ else:  # Import from API
                 placeholder=(
                     "All brands (no filter)"
                     if _api_brands_available
-                    else "Load brands first ↑"
+                    else "Fetch products first"
                 ),
                 disabled=not _api_brands_available,
                 help=(
@@ -1041,23 +1008,24 @@ else:  # Import from API
                     def _api_progress(count):
                         progress_text.text(f"Fetched {count} products…")
 
-                    # If brands are already selected and we have their IDs
-                    # from a previous fetch, use the targeted
-                    # Product_GetByBrand call for each brand.
-                    _brand_id_map = st.session_state.get(
-                        "_api_brand_id_map", {},
-                    )
+                    # If brands are selected and we already know their
+                    # IDs (from a previous fetch), use the targeted
+                    # Product_GetByBrand call — much faster than
+                    # downloading the full catalogue again.
                     _use_brand_fetch = (
                         selected_brands
-                        and _brand_id_map
-                        and all(b in _brand_id_map for b in selected_brands)
+                        and _api_brand_id_map
+                        and all(
+                            b in _api_brand_id_map
+                            for b in selected_brands
+                        )
                     )
 
                     with DanDomainClient(api_username, api_password) as client:
                         if _use_brand_fetch:
                             raw_products = []
                             for brand_name in selected_brands:
-                                bid = _brand_id_map[brand_name]
+                                bid = _api_brand_id_map[brand_name]
                                 raw_products.extend(
                                     client.get_products_by_brand(
                                         brand_id=bid,
@@ -1066,40 +1034,40 @@ else:  # Import from API
                                 )
                         else:
                             raw_products = client.get_products_batch(
-                                batch_size=100,
                                 progress_callback=_api_progress,
                             )
                     progress_text.empty()
 
-                # Apply active filter – exclude products explicitly marked
-                # as inactive (Status=False) rather than requiring an
-                # explicit flag, so products with a missing / None Status
-                # field are kept.
+                # Exclude products explicitly marked inactive
                 if only_online:
                     raw_products = [
                         p for p in raw_products
                         if p.get('Status') is not False
-                        and str(p.get('Status', '')).lower() not in ('false', '0', 'no')
+                        and str(p.get('Status', '')).lower()
+                            not in ('false', '0', 'no')
                     ]
 
                 if not raw_products:
                     st.warning("No products matched the selected filters.")
                 else:
                     raw_df = api_products_to_dataframe(raw_products)
-                    # Sort by brand / producer so products are grouped
-                    # alphabetically (the API does not guarantee order).
                     raw_df = raw_df.sort_values(
                         "PRODUCER", key=lambda s: s.str.lower(),
                     ).reset_index(drop=True)
 
+                    # Build brand list & ID map from the products we
+                    # already fetched — zero extra API calls.
+                    brand_id_map = _build_brand_id_map(raw_products)
+
                     if _use_brand_fetch:
-                        # Targeted fetch – merge fresh brand data into
-                        # the existing full dataset so that switching to
-                        # a different brand later still works.
+                        # Targeted fetch — merge into existing data so
+                        # switching brands later still works.
                         existing = st.session_state.get("_api_raw_df")
                         if existing is not None:
                             other = existing[
-                                ~existing["PRODUCER"].isin(selected_brands)
+                                ~existing["PRODUCER"].isin(
+                                    selected_brands
+                                )
                             ]
                             raw_df = pd.concat(
                                 [other, raw_df], ignore_index=True,
@@ -1107,19 +1075,19 @@ else:  # Import from API
                                 "PRODUCER",
                                 key=lambda s: s.str.lower(),
                             ).reset_index(drop=True)
-                        # Keep the full brand list and ID map from the
-                        # previous full fetch.
-                    else:
-                        # Full fetch – update brand list and ID map.
-                        brands = sorted(
-                            {b for b in raw_df["PRODUCER"].tolist() if b}
+                        # Merge new brand IDs into existing map
+                        prev_map = st.session_state.get(
+                            "_api_brand_id_map", {},
                         )
-                        st.session_state["_api_brands"] = brands
-                        st.session_state["_api_brand_id_map"] = (
-                            _build_brand_id_map(raw_products)
-                        )
+                        brand_id_map = {**prev_map, **brand_id_map}
 
+                    # Persist everything in session state
                     st.session_state["_api_raw_df"] = raw_df
+                    st.session_state["_api_brand_id_map"] = brand_id_map
+                    st.session_state["_api_brands"] = sorted(
+                        {b for b in raw_df["PRODUCER"].tolist() if b}
+                    )
+
                     st.success(
                         f"✅ Loaded **{len(raw_df)}** product rows "
                         f"({len(raw_products)} base products)."
@@ -1128,11 +1096,13 @@ else:  # Import from API
                 st.error(f"❌ API import failed: {exc}")
                 _import_error = True
 
-        # Derive parsed_df from cached raw data, applying brand filter from multiselect
+        # Derive parsed_df from cached data, applying brand filter
         if "_api_raw_df" in st.session_state:
             _raw_df = st.session_state["_api_raw_df"]
             if selected_brands:
-                parsed_df = _raw_df[_raw_df["PRODUCER"].isin(selected_brands)].reset_index(drop=True)
+                parsed_df = _raw_df[
+                    _raw_df["PRODUCER"].isin(selected_brands)
+                ].reset_index(drop=True)
             else:
                 parsed_df = _raw_df
 
