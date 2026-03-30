@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from dandomain_api import DanDomainClient, DanDomainAPIError
+from backend.optimizer_api import router as optimizer_router
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,8 @@ app = FastAPI(
     description="REST gateway for the SB-Optima price-optimisation platform.",
     version="0.1.0",
 )
+
+app.include_router(optimizer_router)
 
 
 # ---------------------------------------------------------------------------
