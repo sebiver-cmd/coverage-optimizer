@@ -320,6 +320,24 @@ Returned inside `Product.Variants` or by `Product_GetVariantsByItemNumber`.
 | `Product_SetFields`                  | `Fields` (comma-separated string)          | Configure which fields appear in Product GET results |
 | `Product_SetVariantFields`           | `Fields` (comma-separated string)          | Configure which fields appear in Variant GET results |
 
+### User / Brand Retrieval
+
+Brands (producers) are stored as **User** objects in the HostedShop
+system.  The *Mærker* user group (typically ID 2) contains all
+brand/producer users.
+
+| Operation                            | Parameters                       | Returns        | Description                                           |
+|--------------------------------------|----------------------------------|----------------|-------------------------------------------------------|
+| `User_GetByGroup`                    | `UserGroupId` (int)              | `User[]`       | Fetch all users in a user group (e.g. brands)         |
+| `User_GetById`                       | `UserId` (int)                   | `User`         | Fetch a single user by ID                             |
+| `User_GetAll`                        | *(none)*                         | `User[]`       | Fetch all users                                       |
+| `User_GetByName`                     | `UserName` (string)              | `User`         | Fetch a user by username                              |
+| `User_GetGroupAll`                   | `withInterests` (bool)           | `UserGroup[]`  | Fetch all user groups                                 |
+| `User_GetGroupById`                  | `UserGroupId` (int)              | `UserGroup`    | Fetch a user group by ID                              |
+
+> **Important:** The parameter name for ``User_GetByGroup`` is
+> ``UserGroupId`` — **not** ``GroupId``.
+
 ---
 
 ## 8. Field Name Reference
