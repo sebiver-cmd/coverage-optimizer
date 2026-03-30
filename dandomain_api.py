@@ -346,9 +346,8 @@ class DanDomainClient:
     ) -> dict[str, int]:
         """Fetch all producer / brand names from the product catalogue.
 
-        Performs a lightweight paginated fetch using only the
-        ``Id``, ``Producer`` and ``ProducerId`` fields so the response
-        is as small as possible.  Returns a mapping of
+        Performs a paginated fetch and collects the ``Producer`` and
+        ``ProducerId`` fields from every product.  Returns a mapping of
         *brand name* → *ProducerId* which can be passed to
         :meth:`get_products_by_brand` for a targeted product fetch.
 
@@ -362,16 +361,14 @@ class DanDomainClient:
         dict[str, int]
             ``{"Brand Name": ProducerId, ...}``
         """
-        # Use minimal fields to keep the response lightweight.
-        minimal_fields = "Id,Producer,ProducerId"
-        try:
-            self._call("Product_SetFields", Fields=minimal_fields)
-        except DanDomainAPIError:
-            logger.warning("Could not set minimal product output fields")
+        # Use the same extended field set that get_products_batch() uses.
+        # ``Producer`` is a complex User object; some API versions only
+        # populate it reliably when the broader field set is requested.
+        self._set_extended_fields()
 
         brand_map: dict[str, int] = {}
         start = 0
-        batch_size = 500  # larger batches — each record is tiny
+        batch_size = 200  # smaller than get_products_batch; extended fields make records larger
 
         while True:
             batch = self._call(
@@ -384,17 +381,33 @@ class DanDomainClient:
             items = batch if isinstance(batch, list) else [batch]
             for item in items:
                 p = _fix_mojibake(serialize_object(item, dict))
+
+                # Extract brand name — Producer is a User object with
+                # Company, Firstname, Lastname, etc.  Fall back to
+                # Firstname+Lastname when Company is empty (mirrors
+                # the parsing logic in app.py).
                 _pr = p.get("Producer")
                 if isinstance(_pr, dict):
                     _name = str(_pr.get("Company", "") or "").strip()
+                    if not _name:
+                        _fn = str(
+                            _pr.get("Firstname", "") or ""
+                        ).strip()
+                        _ln = str(
+                            _pr.get("Lastname", "") or ""
+                        ).strip()
+                        _name = " ".join(filter(None, [_fn, _ln]))
                 else:
                     _name = str(_pr or "").strip()
+
                 _pid = p.get("ProducerId")
-                if _name and _pid:
+                if _name and _pid is not None:
                     try:
-                        brand_map[_name] = int(_pid)
+                        pid_int = int(_pid)
                     except (ValueError, TypeError):
-                        pass
+                        continue
+                    if pid_int > 0:
+                        brand_map[_name] = pid_int
 
             fetched = len(items)
             if progress_callback:
