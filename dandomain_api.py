@@ -426,12 +426,10 @@ class DanDomainClient:
         if not producer_ids:
             return {}
 
-        unique_ids = sorted(set(producer_ids))
+        unique_ids = set(producer_ids)
 
         # Temporarily include Producer so that brand names are returned.
-        brand_fields = (
-            "Id,ProducerId,Producer"
-        )
+        brand_fields = "Id,ProducerId,Producer"
         try:
             self._call("Product_SetFields", Fields=brand_fields)
         except DanDomainAPIError:
