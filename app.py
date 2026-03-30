@@ -980,7 +980,7 @@ else:  # Import from API
         # --- Single-step: fetch products (brands are extracted from
         #     the product data — no separate brand-loading call). -------
         # _api_brand_id_map is {ProducerId (int) → brand name (str)}.
-        # _api_brands is a sorted list of ProducerId ints.
+        # _api_brands is a list of ProducerId ints sorted by brand name.
         _api_brands_available = st.session_state.get("_api_brands", [])
         _api_brand_id_map = st.session_state.get("_api_brand_id_map", {})
 

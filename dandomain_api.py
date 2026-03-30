@@ -193,7 +193,7 @@ class DanDomainClient:
             ) from exc
 
         # Cache for User_GetById results to avoid repeated calls for
-        # the same producer ID (populated by _get_brands_via_users).
+        # the same producer ID (used by _get_brands_via_users).
         self._user_cache: dict[int, dict] = {}
 
         # Authenticate the SOAP session
