@@ -467,6 +467,12 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
         else:
             producer = str(_producer_raw or '').strip()
 
+        # Preserve ProducerId (int) for reliable brand matching.
+        _producer_id_raw = p.get('ProducerId')
+        try:
+            producer_id = int(_producer_id_raw) if _producer_id_raw is not None else None
+        except (ValueError, TypeError):
+            producer_id = None
         variants = p.get('Variants') or []
         if isinstance(variants, dict):
             items = variants.get('item', [])
@@ -504,6 +510,7 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
                     'VARIANT_ID': format_int_col(vid),
                     'VARIANT_TYPES': variant_types,
                     'PRODUCER': producer,
+                    'PRODUCER_ID': producer_id,
                 })
         else:
             rows.append({
@@ -515,6 +522,7 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
                 'VARIANT_ID': '',
                 'VARIANT_TYPES': '',
                 'PRODUCER': producer,
+                'PRODUCER_ID': producer_id,
             })
 
     if not rows:
@@ -533,13 +541,13 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
     return df
 
 
-def _build_brand_id_map(raw_products: list[dict]) -> dict[str, int]:
-    """Build a brand-name → ProducerId mapping from raw API product dicts.
+def _build_brand_id_map(raw_products: list[dict]) -> dict[int, str]:
+    """Build a ProducerId → brand-name mapping from raw API product dicts.
 
     Used to enable targeted ``Product_GetByBrand`` calls on subsequent
-    fetches instead of downloading the full product catalogue.
+    fetches and to populate the brand filter dropdown with integer IDs.
     """
-    brand_id_map: dict[str, int] = {}
+    brand_id_map: dict[int, str] = {}
     for p in raw_products:
         _pr = p.get("Producer")
         if isinstance(_pr, dict):
@@ -549,7 +557,7 @@ def _build_brand_id_map(raw_products: list[dict]) -> dict[str, int]:
         _pid = p.get("ProducerId")
         if _name and _pid:
             try:
-                brand_id_map[_name] = int(_pid)
+                brand_id_map[int(_pid)] = _name
             except (ValueError, TypeError):
                 pass
     return brand_id_map
@@ -971,8 +979,14 @@ else:  # Import from API
     else:
         # --- Single-step: fetch products (brands are extracted from
         #     the product data — no separate brand-loading call). -------
+        # _api_brand_id_map is {ProducerId (int) → brand name (str)}.
+        # _api_brands is a sorted list of ProducerId ints.
         _api_brands_available = st.session_state.get("_api_brands", [])
         _api_brand_id_map = st.session_state.get("_api_brand_id_map", {})
+
+        def _brand_label(pid: int) -> str:
+            """Display label for a ProducerId in the multiselect."""
+            return _api_brand_id_map.get(pid, f"Unknown ({pid})")
 
         # Filtering controls (brand filter populated after first fetch)
         api_filter_col1, api_filter_col2 = st.columns(2)
@@ -980,6 +994,7 @@ else:  # Import from API
             selected_brands = st.multiselect(
                 "Filter by brand / producer",
                 options=_api_brands_available,
+                format_func=_brand_label,
                 default=[],
                 key="_brand_filter",
                 placeholder=(
@@ -1012,20 +1027,15 @@ else:  # Import from API
                     # IDs (from a previous fetch), use the targeted
                     # Product_GetByBrand call — much faster than
                     # downloading the full catalogue again.
-                    _use_brand_fetch = (
-                        selected_brands
-                        and _api_brand_id_map
-                        and all(
-                            b in _api_brand_id_map
-                            for b in selected_brands
-                        )
+                    # selected_brands is now a list of ProducerId ints.
+                    _use_brand_fetch = bool(
+                        selected_brands and _api_brand_id_map
                     )
 
                     with DanDomainClient(api_username, api_password) as client:
                         if _use_brand_fetch:
                             raw_products = []
-                            for brand_name in selected_brands:
-                                bid = _api_brand_id_map[brand_name]
+                            for bid in selected_brands:
                                 raw_products.extend(
                                     client.get_products_by_brand(
                                         brand_id=bid,
@@ -1100,7 +1110,7 @@ else:  # Import from API
                         existing = st.session_state.get("_api_raw_df")
                         if existing is not None:
                             other = existing[
-                                ~existing["PRODUCER"].isin(
+                                ~existing["PRODUCER_ID"].isin(
                                     selected_brands
                                 )
                             ]
@@ -1118,9 +1128,14 @@ else:  # Import from API
 
                     # Persist everything in session state
                     st.session_state["_api_raw_df"] = raw_df
+                    # Merge brands from get_all_brands() into the
+                    # product-derived map so we never lose known brands.
+                    if _brands_map:
+                        brand_id_map = {**brand_id_map, **_brands_map}
                     st.session_state["_api_brand_id_map"] = brand_id_map
                     st.session_state["_api_brands"] = sorted(
-                        {b for b in raw_df["PRODUCER"].tolist() if b}
+                        brand_id_map.keys(),
+                        key=lambda pid: brand_id_map[pid].lower(),
                     )
 
                     st.success(
@@ -1132,11 +1147,12 @@ else:  # Import from API
                 _import_error = True
 
         # Derive parsed_df from cached data, applying brand filter
+        # by PRODUCER_ID (int) for reliable matching.
         if "_api_raw_df" in st.session_state:
             _raw_df = st.session_state["_api_raw_df"]
             if selected_brands:
                 parsed_df = _raw_df[
-                    _raw_df["PRODUCER"].isin(selected_brands)
+                    _raw_df["PRODUCER_ID"].isin(selected_brands)
                 ].reset_index(drop=True)
             else:
                 parsed_df = _raw_df

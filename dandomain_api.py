@@ -192,6 +192,10 @@ class DanDomainClient:
                 f"Failed to load SOAP service definition: {type(exc).__name__}"
             ) from exc
 
+        # Cache for User_GetById results to avoid repeated calls for
+        # the same producer ID (populated by _get_brands_via_users).
+        self._user_cache: dict[int, dict] = {}
+
         # Authenticate the SOAP session
         self._connect()
 
@@ -460,15 +464,22 @@ class DanDomainClient:
         brands: dict[int, str] = {}
 
         for pid in unique_ids:
-            try:
-                result = self._call("User_GetById", UserId=pid)
-            except DanDomainAPIError:
-                continue
+            # Check the instance-level cache first to avoid
+            # repeated SOAP calls for the same producer.
+            if pid in self._user_cache:
+                user = self._user_cache[pid]
+            else:
+                try:
+                    result = self._call("User_GetById", UserId=pid)
+                except DanDomainAPIError:
+                    continue
 
-            if result is None:
-                continue
+                if result is None:
+                    continue
 
-            user = _fix_mojibake(serialize_object(result, dict))
+                user = _fix_mojibake(serialize_object(result, dict))
+                self._user_cache[pid] = user
+
             name = self._extract_brand_name(user)
             if name:
                 brands[pid] = name
@@ -513,6 +524,13 @@ class DanDomainClient:
                 len(set(producer_ids)),
             )
             brands = self._get_brands_via_users(producer_ids)
+
+        # Add safe fallback labels for any producer IDs that could
+        # not be resolved to a name by either strategy.
+        if producer_ids:
+            for pid in set(producer_ids):
+                if pid and pid not in brands:
+                    brands[pid] = f"Unknown ({pid})"
 
         return brands
 
