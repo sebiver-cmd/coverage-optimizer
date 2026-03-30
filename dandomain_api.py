@@ -192,11 +192,14 @@ class DanDomainClient:
         in the objects returned by ``Product_GetByItemNumber``,
         ``Product_GetVariantsByItemNumber``, etc.
 
+        The HostedShop SOAP API expects the ``Fields`` parameter as a
+        **comma-separated string**, not an array.
+
         We request at least ``Id`` (needed for updates), ``ItemNumber``
         and ``Variants`` so that lookups always return enough data.
         """
-        product_fields = ["Id", "ItemNumber", "Price", "BuyingPrice", "Variants"]
-        variant_fields = ["Id", "ItemNumber", "Price", "BuyingPrice"]
+        product_fields = "Id,ItemNumber,Price,BuyingPrice,Variants"
+        variant_fields = "Id,ItemNumber,Price,BuyingPrice"
         try:
             self._call("Product_SetFields", Fields=product_fields)
         except DanDomainAPIError:
@@ -304,15 +307,14 @@ class DanDomainClient:
             ``Id``, ``ItemNumber``, ``Title``, ``Price``,
             ``BuyingPrice``, ``Producer``, ``Variants``, etc.
         """
-        # Temporarily request extended product fields
-        extended_fields = [
-            "Id", "ItemNumber", "Title", "Price", "BuyingPrice",
-            "Producer", "ProducerId", "CategoryId", "Variants",
-            "VariantTypes", "Online",
-        ]
-        extended_variant_fields = [
-            "Id", "ItemNumber", "Title", "Price", "BuyingPrice",
-        ]
+        # Temporarily request extended product fields.
+        # The HostedShop API expects Fields as a comma-separated string.
+        extended_fields = (
+            "Id,ItemNumber,Title,Price,BuyingPrice,"
+            "Producer,ProducerId,CategoryId,Variants,"
+            "VariantTypes,Online"
+        )
+        extended_variant_fields = "Id,ItemNumber,Title,Price,BuyingPrice"
         try:
             self._call("Product_SetFields", Fields=extended_fields)
         except DanDomainAPIError:
@@ -347,6 +349,67 @@ class DanDomainClient:
                 break
             start += fetched
             time.sleep(BATCH_DELAY)
+
+        # Restore default output fields
+        self._set_output_fields()
+
+        return products
+
+    def get_products_by_brand(
+        self,
+        brand_id: int,
+        progress_callback: Optional[Callable] = None,
+    ) -> list[dict]:
+        """Fetch products for a specific brand via ``Product_GetByBrand``.
+
+        Uses the dedicated brand-filter SOAP operation so only the
+        products belonging to ``brand_id`` are returned by the API,
+        avoiding the need to fetch the full catalogue and filter
+        client-side.
+
+        Parameters
+        ----------
+        brand_id : int
+            Producer / brand ID (``ProducerId``) as returned by the API.
+        progress_callback : callable, optional
+            Called once with ``(total_fetched,)`` after the response
+            has been deserialised.
+
+        Returns
+        -------
+        list[dict]
+            Plain-dict representations of each product.
+        """
+        # Set extended output fields before the fetch (comma-separated string).
+        extended_fields = (
+            "Id,ItemNumber,Title,Price,BuyingPrice,"
+            "Producer,ProducerId,CategoryId,Variants,"
+            "VariantTypes,Online"
+        )
+        extended_variant_fields = "Id,ItemNumber,Title,Price,BuyingPrice"
+        try:
+            self._call("Product_SetFields", Fields=extended_fields)
+        except DanDomainAPIError:
+            logger.warning("Could not set extended product output fields")
+        try:
+            self._call(
+                "Product_SetVariantFields", Fields=extended_variant_fields,
+            )
+        except DanDomainAPIError:
+            logger.warning("Could not set extended variant output fields")
+
+        result = self._call(
+            "Product_GetByBrand", BrandId=int(brand_id),
+        )
+
+        products: list[dict] = []
+        if result is not None:
+            items = result if isinstance(result, list) else [result]
+            for item in items:
+                products.append(serialize_object(item, dict))
+
+        if progress_callback:
+            progress_callback(len(products))
 
         # Restore default output fields
         self._set_output_fields()
