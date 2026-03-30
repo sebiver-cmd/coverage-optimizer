@@ -17,6 +17,7 @@ import pytest
 
 # Import the private helpers directly from the module.
 from ui.pages.price_optimizer import (
+    _normalize_base_url,
     _fetch_brands_from_backend,
     _run_backend_optimization,
     _build_dataframes_from_response,
@@ -325,3 +326,125 @@ class TestBuildDataframes:
         )
         assert raw_df.iloc[1]["VARIANT_ID"] == "V1"
         assert raw_df.iloc[1]["VARIANT_TYPES"] == "Color: Red"
+
+
+# ---------------------------------------------------------------------------
+# _normalize_base_url
+# ---------------------------------------------------------------------------
+
+class TestNormalizeBaseUrl:
+    """Tests for ``_normalize_base_url``."""
+
+    def test_plain_url_unchanged(self):
+        assert _normalize_base_url("http://127.0.0.1:8000") == "http://127.0.0.1:8000"
+
+    def test_strips_trailing_slash(self):
+        assert _normalize_base_url("http://127.0.0.1:8000/") == "http://127.0.0.1:8000"
+
+    def test_strips_multiple_trailing_slashes(self):
+        assert _normalize_base_url("http://127.0.0.1:8000///") == "http://127.0.0.1:8000"
+
+    def test_strips_leading_and_trailing_whitespace(self):
+        assert _normalize_base_url("  http://127.0.0.1:8000  ") == "http://127.0.0.1:8000"
+
+    def test_strips_whitespace_and_trailing_slash(self):
+        assert _normalize_base_url("  http://127.0.0.1:8000/  ") == "http://127.0.0.1:8000"
+
+    def test_localhost_url(self):
+        assert _normalize_base_url("http://localhost:8000") == "http://localhost:8000"
+
+    def test_produces_correct_optimize_url(self):
+        base = _normalize_base_url("http://127.0.0.1:8000/")
+        assert f"{base}/optimize/" == "http://127.0.0.1:8000/optimize/"
+
+    def test_produces_correct_brands_url(self):
+        base = _normalize_base_url("  http://127.0.0.1:8000  ")
+        assert f"{base}/brands" == "http://127.0.0.1:8000/brands"
+
+    def test_no_double_slash_in_optimize_url(self):
+        base = _normalize_base_url("http://127.0.0.1:8000/")
+        url = f"{base}/optimize/"
+        assert "//" not in url.split("://", 1)[1]
+
+
+# ---------------------------------------------------------------------------
+# URL normalization integration (verify final URLs sent by helpers)
+# ---------------------------------------------------------------------------
+
+class TestUrlNormalizationInHelpers:
+    """Verify that helpers produce clean URLs for various backend_url inputs."""
+
+    @patch("ui.pages.price_optimizer.requests.get")
+    def test_fetch_brands_plain_url(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = []
+        mock_get.return_value = mock_resp
+
+        _fetch_brands_from_backend("http://127.0.0.1:8000", "u", "p")
+        assert mock_get.call_args[0][0] == "http://127.0.0.1:8000/brands"
+
+    @patch("ui.pages.price_optimizer.requests.get")
+    def test_fetch_brands_trailing_slash(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = []
+        mock_get.return_value = mock_resp
+
+        _fetch_brands_from_backend("http://127.0.0.1:8000/", "u", "p")
+        assert mock_get.call_args[0][0] == "http://127.0.0.1:8000/brands"
+
+    @patch("ui.pages.price_optimizer.requests.get")
+    def test_fetch_brands_whitespace(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = []
+        mock_get.return_value = mock_resp
+
+        _fetch_brands_from_backend("  http://127.0.0.1:8000  ", "u", "p")
+        assert mock_get.call_args[0][0] == "http://127.0.0.1:8000/brands"
+
+    @patch("ui.pages.price_optimizer.st")
+    @patch("ui.pages.price_optimizer.requests.post")
+    def test_optimize_plain_url(self, mock_post, _mock_st):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = _OPTIMIZE_RESPONSE
+        mock_post.return_value = mock_resp
+
+        _run_backend_optimization(
+            "http://127.0.0.1:8000", "u", "p",
+            site_id=1, brand_ids=None, include_offline=False,
+            include_variants=True, price_pct=0.0, beautify_digit=9,
+        )
+        assert mock_post.call_args[0][0] == "http://127.0.0.1:8000/optimize/"
+
+    @patch("ui.pages.price_optimizer.st")
+    @patch("ui.pages.price_optimizer.requests.post")
+    def test_optimize_trailing_slash(self, mock_post, _mock_st):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = _OPTIMIZE_RESPONSE
+        mock_post.return_value = mock_resp
+
+        _run_backend_optimization(
+            "http://127.0.0.1:8000/", "u", "p",
+            site_id=1, brand_ids=None, include_offline=False,
+            include_variants=True, price_pct=0.0, beautify_digit=9,
+        )
+        assert mock_post.call_args[0][0] == "http://127.0.0.1:8000/optimize/"
+
+    @patch("ui.pages.price_optimizer.st")
+    @patch("ui.pages.price_optimizer.requests.post")
+    def test_optimize_whitespace(self, mock_post, _mock_st):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = _OPTIMIZE_RESPONSE
+        mock_post.return_value = mock_resp
+
+        _run_backend_optimization(
+            "  http://127.0.0.1:8000  ", "u", "p",
+            site_id=1, brand_ids=None, include_offline=False,
+            include_variants=True, price_pct=0.0, beautify_digit=9,
+        )
+        assert mock_post.call_args[0][0] == "http://127.0.0.1:8000/optimize/"

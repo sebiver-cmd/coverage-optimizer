@@ -53,6 +53,16 @@ _BACKEND_TIMEOUT = 120
 # Backend helpers (read-only HTTP calls to the FastAPI backend)
 # ---------------------------------------------------------------------------
 
+def _normalize_base_url(base_url: str) -> str:
+    """Normalize the backend base URL so it can be safely joined with endpoint paths.
+
+    - Strips leading/trailing whitespace.
+    - Strips trailing slashes.
+    - Leaves scheme/host/port otherwise unchanged.
+    """
+    return base_url.strip().rstrip("/")
+
+
 def _fetch_brands_from_backend(
     backend_url: str,
     api_username: str,
@@ -63,9 +73,11 @@ def _fetch_brands_from_backend(
     Returns a list of ``{"id": int, "name": str}`` dicts, or an empty
     list on error.
     """
+    base = _normalize_base_url(backend_url)
+    url = f"{base}/brands"
     try:
         resp = requests.get(
-            f"{backend_url.rstrip('/')}/brands",
+            url,
             params={
                 "api_username": api_username,
                 "api_password": api_password,
@@ -74,8 +86,8 @@ def _fetch_brands_from_backend(
         )
         resp.raise_for_status()
         return resp.json()
-    except requests.RequestException as exc:
-        logger.warning("Failed to fetch brands from backend: %s", exc)
+    except requests.RequestException:
+        logger.error("Backend request to %s failed", url, exc_info=True)
         return []
 
 
@@ -107,15 +119,19 @@ def _run_backend_optimization(
     if brand_ids:
         payload["brand_ids"] = brand_ids
 
+    base = _normalize_base_url(backend_url)
+    url = f"{base}/optimize/"
+
     try:
         resp = requests.post(
-            f"{backend_url.rstrip('/')}/optimize/",
+            url,
             json=payload,
             timeout=_BACKEND_TIMEOUT,
         )
         resp.raise_for_status()
         return resp.json()
     except requests.HTTPError as exc:
+        logger.error("Backend request to %s failed", url, exc_info=True)
         detail = ""
         try:
             detail = exc.response.json().get("detail", "")
@@ -124,13 +140,18 @@ def _run_backend_optimization(
         st.error(f"Backend optimisation failed ({exc.response.status_code}): {detail}")
         return None
     except requests.ConnectionError:
+        logger.error("Backend request to %s failed", url, exc_info=True)
         st.error(
             "Could not connect to the backend.  "
             "Make sure the FastAPI server is running and the Backend URL is correct."
         )
         return None
-    except requests.RequestException as exc:
-        st.error(f"Backend request error: {exc}")
+    except requests.RequestException:
+        logger.error("Backend request to %s failed", url, exc_info=True)
+        st.error(
+            "Backend request failed.  "
+            "Please check the Backend URL and server logs for details."
+        )
         return None
 
 
