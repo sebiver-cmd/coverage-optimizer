@@ -126,7 +126,6 @@ MAX_RETRIES = 3
 RETRY_BASE_DELAY = 1.0  # doubles on each retry
 BATCH_DELAY = 0.2       # seconds between successive batch requests
 SOAP_TIMEOUT = 30       # seconds for SOAP operations
-BRAND_USER_GROUP_ID = 2  # User group "Mærker" that holds brand/producer users
 
 # ---------------------------------------------------------------------------
 # DanDomain SOAP endpoint
@@ -351,72 +350,6 @@ class DanDomainClient:
             name = " ".join(filter(None, [fn, ln])).strip()
         return name
 
-    def _get_brands_from_user_group(
-        self,
-        group_id: int = BRAND_USER_GROUP_ID,
-    ) -> dict[str, int]:
-        """Fetch brands directly from the "Mærker" user group.
-
-        The HostedShop system stores brands / producers as users in a
-        dedicated user group (default ID 2, named *Mærker*).  This
-        method calls ``User_GetByGroup`` to retrieve them without
-        scanning every product.
-
-        Returns
-        -------
-        dict[str, int]
-            ``{"Brand Name": UserId, ...}``  (empty if the call fails).
-        """
-        try:
-            result = self._call("User_GetByGroup", GroupId=int(group_id))
-        except DanDomainAPIError:
-            logger.debug(
-                "User_GetByGroup(%s) not available or failed", group_id,
-            )
-            return {}
-
-        if result is None:
-            return {}
-
-        items = result if isinstance(result, list) else [result]
-        brand_map: dict[str, int] = {}
-
-        for item in items:
-            user = _fix_mojibake(serialize_object(item, dict))
-            uid = user.get("Id")
-            if uid is None:
-                continue
-            try:
-                uid_int = int(uid)
-            except (ValueError, TypeError):
-                continue
-            if uid_int <= 0:
-                continue
-
-            name = self._extract_brand_name(user)
-            if name:
-                brand_map[name] = uid_int
-
-        logger.info(
-            "Fetched %d brand(s) from user group %s", len(brand_map), group_id,
-        )
-        return brand_map
-
-    def _get_user_by_id(self, user_id: int) -> Optional[dict]:
-        """Fetch a single User by ID (best-effort).
-
-        Returns the deserialised user dict, or ``None`` if the call
-        fails or the API does not support ``User_GetById``.
-        """
-        try:
-            result = self._call("User_GetById", UserId=int(user_id))
-        except DanDomainAPIError:
-            logger.debug("User_GetById(%s) failed or unavailable", user_id)
-            return None
-        if result is None:
-            return None
-        return _fix_mojibake(serialize_object(result, dict))
-
     # -- public API ----------------------------------------------------------
 
     def test_connection(self) -> dict:
@@ -433,136 +366,9 @@ class DanDomainClient:
         count = len(result) if isinstance(result, list) else 0
         return {"status": "connected", "product_count": count}
 
-    def get_all_brands(
-        self,
-        progress_callback: Optional[Callable] = None,
-    ) -> dict[str, int]:
-        """Fetch all producer / brand names.
-
-        Strategy
-        --------
-        1. **User-group approach** (fast) — calls ``User_GetByGroup``
-           for the *Mærker* user group (ID ``BRAND_USER_GROUP_ID``).
-           If the API supports this call and the group is populated,
-           the result is returned immediately.
-        2. **Product-scan fallback** — iterates through all products
-           with ``Product_GetAllWithLimit`` and collects ``Producer`` /
-           ``ProducerId``.  When the API returns a ``ProducerId`` but
-           leaves the ``Producer`` object empty ("unhydrated"), a
-           secondary ``User_GetById`` call is attempted.
-
-        Parameters
-        ----------
-        progress_callback : callable, optional
-            Called after each batch with ``(products_scanned_so_far,)``.
-
-        Returns
-        -------
-        dict[str, int]
-            ``{"Brand Name": ProducerId, ...}``
-        """
-
-        # ------------------------------------------------------------------
-        # Strategy 1 — fetch directly from the "Mærker" user group
-        # ------------------------------------------------------------------
-        brand_map = self._get_brands_from_user_group()
-        if brand_map:
-            return brand_map
-
-        logger.info(
-            "User-group approach returned no brands; "
-            "falling back to product scan."
-        )
-
-        # ------------------------------------------------------------------
-        # Strategy 2 — scan products and extract Producer info
-        # ------------------------------------------------------------------
-        self._set_extended_fields()
-
-        brand_map = {}
-        # Cache of ProducerIds already resolved via User_GetById so we
-        # don't repeat the call for every product with the same brand.
-        resolved_users: dict[int, str] = {}
-
-        start = 0
-        batch_size = 50  # reduced from 200 to avoid API timeout with extended fields
-
-        while True:
-            batch = self._call(
-                "Product_GetAllWithLimit",
-                Start=start, Length=batch_size,
-            )
-            if batch is None or (isinstance(batch, list) and len(batch) == 0):
-                break
-
-            items = batch if isinstance(batch, list) else [batch]
-
-            # Log the first product in the very first batch for debugging
-            if start == 0 and items:
-                first = _fix_mojibake(serialize_object(items[0], dict))
-                logger.debug(
-                    "First product raw keys: %s", list(first.keys()),
-                )
-                logger.debug(
-                    "First product Producer=%r  ProducerId=%r",
-                    first.get("Producer"),
-                    first.get("ProducerId"),
-                )
-
-            for item in items:
-                p = _fix_mojibake(serialize_object(item, dict))
-
-                _pr = p.get("Producer")
-                _pid = p.get("ProducerId")
-
-                # --- extract name from the hydrated Producer object ----
-                _name = ""
-                if isinstance(_pr, dict):
-                    _name = self._extract_brand_name(_pr)
-
-                # --- "unhydrated" fallback: ProducerId present but
-                #     Producer is empty / None.  Try User_GetById. ------
-                if not _name and _pid is not None:
-                    try:
-                        pid_int = int(_pid)
-                    except (ValueError, TypeError):
-                        pid_int = 0
-
-                    if pid_int > 0:
-                        if pid_int in resolved_users:
-                            _name = resolved_users[pid_int]
-                        else:
-                            user = self._get_user_by_id(pid_int)
-                            if user:
-                                _name = self._extract_brand_name(user)
-                            resolved_users[pid_int] = _name
-
-                # --- store in brand_map --------------------------------
-                if _name and _pid is not None:
-                    try:
-                        pid_int = int(_pid)
-                    except (ValueError, TypeError):
-                        continue
-                    if pid_int > 0:
-                        brand_map[_name] = pid_int
-
-            fetched = len(items)
-            if progress_callback:
-                progress_callback(start + fetched)
-
-            if fetched < batch_size:
-                break
-            start += fetched
-            time.sleep(BATCH_DELAY)
-
-        # Restore default output fields
-        self._set_output_fields()
-
-        return brand_map
-
     def get_products_batch(
         self,
-        batch_size: int = 100,
+        batch_size: int = 200,
         progress_callback: Optional[Callable] = None,
     ) -> list[dict]:
         """Fetch all products via paginated ``Product_GetAllWithLimit``.
@@ -574,7 +380,7 @@ class DanDomainClient:
         Parameters
         ----------
         batch_size : int
-            Number of products to retrieve per API call (default 100).
+            Number of products to retrieve per API call (default 200).
         progress_callback : callable, optional
             Called after each batch with ``(fetched_so_far,)``.
 
