@@ -4,6 +4,31 @@ Fetches products from the DanDomain SOAP API, runs the pricing pipeline
 (coverage-rate analysis, minimum-margin adjustment, beautification, and
 percentage rules), and returns suggested price changes **without writing
 anything back to the webshop**.
+
+Product and variant selection
+-----------------------------
+The inclusion logic here is **intentionally aligned** with the Streamlit
+Price Optimizer (``ui/pages/price_optimizer.py``):
+
+*   Products are fetched via ``DanDomainClient.get_products_batch()``
+    (``Product_GetAll`` with extended fields including ``Variants``).
+*   Variants are expanded into separate rows by
+    ``domain.pricing.api_products_to_dataframe`` — exactly the same
+    helper the Dashboard / Price Optimizer UI uses.
+*   Default filters match the Streamlit defaults:
+    -  ``include_offline=False`` → only online products (same as the
+       UI checkbox *"Only active (online) products"* defaulting to
+       checked).
+    -  ``include_variants=True`` → variants expanded into individual
+       rows (the UI always includes variants).
+    -  No brand filter by default (all brands).
+*   ``summary.total_products`` equals the number of **rows** (base
+    products + their variant rows) after filtering — the same number
+    displayed as *"Total Products"* in the Streamlit Price Optimizer.
+*   ``summary.base_products`` is the count of distinct ``PRODUCT_ID``
+    values (i.e. unique base products, before variant expansion).
+*   ``summary.total_rows`` is an explicit alias for ``total_products``
+    for callers that prefer the unambiguous name.
 """
 
 from __future__ import annotations
@@ -53,7 +78,9 @@ class OptimizeRequest(BaseModel):
         description="Round adjusted prices up to the nearest integer ending in this digit (9, 0, or 5).",
     )
 
-    # Filters
+    # Filters — defaults match the Streamlit Price Optimizer
+    # (ui/pages/price_optimizer.py) so that the same credentials and
+    # default parameters produce the same product set.
     brand_ids: Optional[list[int]] = Field(
         default=None,
         description=(
@@ -61,9 +88,24 @@ class OptimizeRequest(BaseModel):
             "When null or empty, all brands are included."
         ),
     )
-    only_online: bool = Field(
+    include_offline: bool = Field(
+        default=False,
+        description=(
+            "When false (default), only products with an active / online "
+            "status are included — matching the Streamlit UI checkbox "
+            "'Only active (online) products' which defaults to checked. "
+            "Set to true to include offline / inactive products as well."
+        ),
+    )
+    include_variants: bool = Field(
         default=True,
-        description="When true, only products with an active / online status are included.",
+        description=(
+            "When true (default), each product variant is expanded into "
+            "its own row with variant-specific pricing — matching the "
+            "Streamlit Price Optimizer behaviour.  When false, only one "
+            "row per base product is returned (using the base product's "
+            "price and buy-price, ignoring individual variant prices)."
+        ),
     )
 
 
@@ -87,9 +129,22 @@ class ProductRow(BaseModel):
 
 
 class OptimizeSummary(BaseModel):
-    """Aggregate statistics for the optimisation run."""
+    """Aggregate statistics for the optimisation run.
+
+    ``total_products`` is the number of **rows** (base products + variant
+    rows) after filtering — the same number displayed as *"Total Products"*
+    in the Streamlit Price Optimizer (``ui/pages/price_optimizer.py``).
+
+    ``base_products`` is the number of distinct ``PRODUCT_ID`` values
+    (unique base products, before variant expansion).
+
+    ``total_rows`` is an explicit alias for ``total_products`` for
+    callers that prefer the unambiguous name.
+    """
 
     total_products: int
+    base_products: int = 0
+    total_rows: int = 0
     adjusted_count: int
     unchanged_count: int
     adjusted_pct: float
@@ -115,13 +170,23 @@ router = APIRouter(prefix="/optimize", tags=["optimize"])
 def run_optimization(payload: OptimizeRequest) -> OptimizeResponse:
     """Run the read-only pricing optimisation pipeline.
 
-    1. Connects to the DanDomain SOAP API.
-    2. Fetches all products (``get_products_batch``).
-    3. Resolves brand names (``get_all_brands``).
-    4. Converts raw products to a DataFrame.
-    5. Applies optional brand / online filters.
-    6. Runs ``optimize_prices`` with the caller's settings.
-    7. Returns suggested prices — **no data is written** to the webshop.
+    The product and variant selection logic mirrors the Streamlit Price
+    Optimizer (``ui/pages/price_optimizer.py``) so that, for the same
+    shop credentials and equivalent default parameters, the output
+    (row count, adjusted count, etc.) is consistent with the UI.
+
+    Pipeline
+    --------
+    1. Connect to the DanDomain SOAP API.
+    2. Fetch all products (``get_products_batch`` → ``Product_GetAll``).
+    3. Resolve brand names (``get_all_brands``).
+    4. Optionally strip variant data (when ``include_variants=False``).
+    5. Convert raw products to a DataFrame via
+       ``api_products_to_dataframe`` — the same helper the UI uses —
+       which expands each variant into its own row.
+    6. Apply inclusion filters (online / brand) matching the UI defaults.
+    7. Run ``optimize_prices`` with the caller's settings.
+    8. Return suggested prices — **no data is written** to the webshop.
     """
 
     try:
@@ -158,12 +223,23 @@ def run_optimization(payload: OptimizeRequest) -> OptimizeResponse:
         if not raw_products:
             raise HTTPException(status_code=404, detail="No products found in the webshop.")
 
-        # Build DataFrame (same helper the UI uses)
+        # When include_variants is False, strip variant data so that
+        # api_products_to_dataframe creates one row per base product
+        # (using the base product's own Price / BuyingPrice).
+        if not payload.include_variants:
+            raw_products = [
+                {**p, "Variants": None} for p in raw_products
+            ]
+
+        # Build DataFrame (same helper the UI uses).  Variants are
+        # expanded into separate rows here — exactly as the Dashboard
+        # does when it stores _api_raw_df in session state.
         df = api_products_to_dataframe(raw_products)
         df = df.sort_values("PRODUCER", key=lambda s: s.str.lower()).reset_index(drop=True)
 
-        # --- Apply filters ---
-        if payload.only_online and "ONLINE" in df.columns:
+        # --- Apply filters (matching ui/pages/price_optimizer.py) ---
+        # include_offline=False ↔ Streamlit "Only active (online) products" checked
+        if not payload.include_offline and "ONLINE" in df.columns:
             df = df[df["ONLINE"]].reset_index(drop=True)
 
         if payload.brand_ids:
@@ -191,6 +267,11 @@ def run_optimization(payload: OptimizeRequest) -> OptimizeResponse:
         total = len(final_df)
         unchanged = total - adjusted_count
 
+        # Count distinct base products (unique PRODUCT_ID values) in
+        # the filtered set — comparable to the "base products" number
+        # shown on the Streamlit Dashboard.
+        base_products = int(df["PRODUCT_ID"].nunique()) if "PRODUCT_ID" in df.columns else total
+
         base_ex_vat = df["PRICE_NUM"] / (1 + VAT_RATE)
         base_coverage = calc_coverage_rate(
             df.assign(PRICE_EX_VAT_NUM=base_ex_vat),
@@ -209,6 +290,8 @@ def run_optimization(payload: OptimizeRequest) -> OptimizeResponse:
 
         summary = OptimizeSummary(
             total_products=total,
+            base_products=base_products,
+            total_rows=total,
             adjusted_count=adjusted_count,
             unchanged_count=unchanged,
             adjusted_pct=round(adjusted_count / total * 100, 2) if total else 0.0,
