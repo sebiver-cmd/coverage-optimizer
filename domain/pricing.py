@@ -52,13 +52,14 @@ def clean_price(price_str):
         return 0.0
 
 
-def beautify_price(price):
-    """Round *price* up to the nearest integer ending in BEAUTIFY_LAST_DIGIT."""
+def beautify_price(price, last_digit=BEAUTIFY_LAST_DIGIT):
+    """Round *price* up to the nearest integer ending in *last_digit*."""
     if price == 0:
         return 0.0
     target = math.ceil(price)
     remainder = target % 10
-    return float(target + (BEAUTIFY_LAST_DIGIT - remainder))
+    offset = (last_digit - remainder) % 10
+    return float(target + offset)
 
 
 def format_dk(num):
@@ -100,6 +101,12 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
         item_number = p.get('ItemNumber', '')
         price = p.get('Price', 0)
         buy_price = p.get('BuyingPrice', 0)
+        # Online status for post-fetch filtering
+        _status_raw = p.get('Status')
+        _is_online = (
+            _status_raw is not False
+            and str(_status_raw or '').lower() not in ('false', '0', 'no')
+        )
         # Producer is a User object in the API; extract the brand name from it.
         # After serialize_object() it becomes a dict with Company, Firstname, etc.
         _producer_raw = p.get('Producer')
@@ -156,6 +163,7 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
                     'VARIANT_TYPES': variant_types,
                     'PRODUCER': producer,
                     'PRODUCER_ID': producer_id,
+                    'ONLINE': _is_online,
                 })
         else:
             rows.append({
@@ -168,6 +176,7 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
                 'VARIANT_TYPES': '',
                 'PRODUCER': producer,
                 'PRODUCER_ID': producer_id,
+                'ONLINE': _is_online,
             })
 
     if not rows:
@@ -212,20 +221,25 @@ def optimize_prices(
     df: pd.DataFrame,
     price_pct: float = 0.0,
     original_buy_prices: "pd.Series | None" = None,
+    beautify_digit: int = BEAUTIFY_LAST_DIGIT,
 ) -> tuple:
-    """Apply optional sales-price adjustment, calculate coverage and optimise.
+    """Compute optimised prices following the pipeline:
+
+    Current → Proposed → Beautified → Rules-adjusted → Final New Price.
 
     Parameters
     ----------
     price_pct : float
-        Percentage adjustment to apply to all sales prices (PRICE)
-        before recalculating coverage (e.g. 10.0 = +10 %).
-        Changes both incl-VAT and ex-VAT prices.
+        Percentage adjustment applied to the **New Sales Price**
+        (after coverage-based adjustment and beautification),
+        not the current price.  E.g. 10.0 = +10 %.
     original_buy_prices : pd.Series, optional
         Original ``BUY_PRICE_NUM`` values before per-line editing.
         When supplied, products whose BUY_PRICE was changed are
         included in the import / push set even when their coverage
         rate already meets the minimum threshold.
+    beautify_digit : int
+        Desired ending digit for beautified prices (9, 0, or 5).
     """
     df = df.copy()
 
@@ -238,33 +252,35 @@ def optimize_prices(
     # Reformat BUY_PRICE from (possibly per-line edited) numeric values
     df['BUY_PRICE'] = df['BUY_PRICE_NUM'].apply(format_dk)
 
-    # Apply optional sales-price adjustment (incl VAT)
-    if price_pct != 0:
-        df['PRICE_NUM'] = df['PRICE_NUM'] * (1 + price_pct / 100)
-        df['PRICE'] = df['PRICE_NUM'].apply(format_dk)
-
+    # Step 1 — Current prices (no price_pct applied here)
     df['PRICE_EX_VAT_NUM'] = df['PRICE_NUM'] / (1 + VAT_RATE)
 
-    # Calculate current coverage rate
+    # Step 2 — Current coverage on original prices
     df['COVERAGE_RATE'] = calc_coverage_rate(df, 'PRICE_EX_VAT_NUM', 'BUY_PRICE_NUM')
 
     # Identify items needing adjustment
     needs_adjustment = (df['COVERAGE_RATE'] < MIN_COVERAGE_RATE) & (df['BUY_PRICE_NUM'] > 0)
 
-    # Calculate target EX VAT price for the minimum margin.
-    # beautify_price() rounds up afterwards, so the final margin will always
-    # be slightly above MIN_COVERAGE_RATE — this is intentional.
+    # Step 3 — Proposed new ex-VAT price (minimum-margin based)
     df['NEW_PRICE_EX_VAT_NUM'] = df['PRICE_EX_VAT_NUM']
     df.loc[needs_adjustment, 'NEW_PRICE_EX_VAT_NUM'] = (
         df.loc[needs_adjustment, 'BUY_PRICE_NUM'] / MIN_COVERAGE_RATE
     )
 
-    # Calculate inc VAT and beautify
+    # Calculate inc-VAT proposed price
     df['NEW_PRICE_NUM'] = df['NEW_PRICE_EX_VAT_NUM'] * (1 + VAT_RATE)
+
+    # Step 4 — Beautify (only adjusted products)
     df['FINAL_PRICE_NUM'] = df['PRICE_NUM']
     df.loc[needs_adjustment, 'FINAL_PRICE_NUM'] = (
-        df.loc[needs_adjustment, 'NEW_PRICE_NUM'].apply(beautify_price)
+        df.loc[needs_adjustment, 'NEW_PRICE_NUM'].apply(
+            lambda p: beautify_price(p, beautify_digit)
+        )
     )
+
+    # Step 5 — Apply Price Rules (price_pct) to all new prices
+    if price_pct != 0:
+        df['FINAL_PRICE_NUM'] = df['FINAL_PRICE_NUM'] * (1 + price_pct / 100)
 
     # Recalculate final metrics
     df['FINAL_PRICE_EX_VAT'] = df['FINAL_PRICE_NUM'] / (1 + VAT_RATE)
@@ -285,8 +301,14 @@ def optimize_prices(
 
     # Determine the full set of products for import / push:
     # products needing a price adjustment + products with manually changed BUY_PRICE
+    # + products whose final price differs from current (e.g. due to price_pct)
     in_import_set = needs_adjustment.copy()
     in_import_set = in_import_set | buy_price_changed
+    if price_pct != 0:
+        price_changed_by_rules = (
+            abs(df['FINAL_PRICE_NUM'] - df['PRICE_NUM']) > PRICE_EPSILON
+        )
+        in_import_set = in_import_set | price_changed_by_rules
 
     # Build import-ready DataFrame
     import_df = df.loc[in_import_set, REQUIRED_COLUMNS].copy()

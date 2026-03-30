@@ -1,13 +1,23 @@
-"""Dashboard home page — summary cards and quick actions."""
+"""Dashboard home page — summary cards, API fetch, and quick actions."""
 
 from __future__ import annotations
 
 import streamlit as st
 
-from domain.pricing import MIN_COVERAGE_RATE, BEAUTIFY_LAST_DIGIT
+from dandomain_api import DanDomainClient, DanDomainAPIError
+from domain.pricing import (
+    MIN_COVERAGE_RATE,
+    BEAUTIFY_LAST_DIGIT,
+    api_products_to_dataframe,
+    _build_brand_id_map,
+)
 
 
-def render(api_ready: bool) -> None:
+def render(
+    api_ready: bool,
+    api_username: str = "",
+    api_password: str = "",
+) -> None:
     """Render the dashboard landing page."""
     st.markdown(
         '<h1 class="hero-header">SB-Optima Dashboard</h1>',
@@ -34,6 +44,89 @@ def render(api_ready: bool) -> None:
         brand_count = len(st.session_state.get("_api_brand_id_map", {}))
         st.metric("Brands", f"{brand_count:,}" if brand_count else "—")
 
+    # --- API Fetch ---
+    st.markdown("")
+    st.divider()
+    st.markdown(
+        '<div class="section-header">Fetch Products</div>',
+        unsafe_allow_html=True,
+    )
+
+    if not api_ready:
+        st.markdown(
+            '<div class="info-card">'
+            "<h4>API Not Connected</h4>"
+            "<p>Configure your DanDomain API credentials in the sidebar "
+            "to fetch products from your webshop.</p>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        if st.button("Fetch Products from API", type="primary"):
+            try:
+                with st.spinner("Fetching products from the API..."):
+                    progress_text = st.empty()
+
+                    def _api_progress(count):
+                        progress_text.text(f"Fetched {count} products...")
+
+                    with DanDomainClient(api_username, api_password) as client:
+                        raw_products = client.get_products_batch(
+                            progress_callback=_api_progress,
+                        )
+
+                        _producer_ids = []
+                        for p in raw_products:
+                            _pid = p.get("ProducerId")
+                            if _pid is not None:
+                                try:
+                                    _producer_ids.append(int(_pid))
+                                except (ValueError, TypeError):
+                                    pass
+                        _brands_map = client.get_all_brands(
+                            producer_ids=_producer_ids,
+                        )
+
+                    progress_text.empty()
+
+                # Hydrate Producer on each product using the brands map
+                if _brands_map:
+                    for p in raw_products:
+                        pid = p.get("ProducerId")
+                        if pid is not None:
+                            try:
+                                _bname = _brands_map.get(int(pid))
+                                if _bname:
+                                    p["Producer"] = _bname
+                            except (ValueError, TypeError):
+                                pass
+
+                if not raw_products:
+                    st.warning("No products found.")
+                else:
+                    raw_df = api_products_to_dataframe(raw_products)
+                    raw_df = raw_df.sort_values(
+                        "PRODUCER", key=lambda s: s.str.lower(),
+                    ).reset_index(drop=True)
+
+                    brand_id_map = _build_brand_id_map(raw_products)
+                    if _brands_map:
+                        brand_id_map = {**brand_id_map, **_brands_map}
+
+                    st.session_state["_api_raw_df"] = raw_df
+                    st.session_state["_api_brand_id_map"] = brand_id_map
+                    st.session_state["_api_brands"] = sorted(
+                        brand_id_map.keys(),
+                        key=lambda pid: brand_id_map[pid].lower(),
+                    )
+
+                    st.success(
+                        f"Loaded **{len(raw_df)}** product rows "
+                        f"({len(raw_products)} base products)."
+                    )
+            except (DanDomainAPIError, ValueError, AttributeError) as exc:
+                st.error(f"API import failed: {exc}")
+
     st.markdown("")
     st.divider()
 
@@ -43,39 +136,25 @@ def render(api_ready: bool) -> None:
         unsafe_allow_html=True,
     )
 
-    mc1, mc2, mc3, mc4 = st.columns(4)
+    mc1, mc2, mc3 = st.columns(3)
     with mc1:
         st.markdown(
             '<div class="dash-card">'
-            "<h3>Coverage Converter</h3>"
-            "<p>Import products from the API, calculate coverage rates, "
-            "adjust prices, and push updates to your webshop.</p>"
+            "<h3>Price Optimizer</h3>"
+            "<p>Calculate coverage rates, adjust prices, "
+            "apply beautifier and price rules, and push updates "
+            "to your webshop.</p>"
             "</div>",
             unsafe_allow_html=True,
         )
         if st.button(
-            "Open Coverage Converter",
+            "Open Price Optimizer",
             use_container_width=True,
-            key="_nav_converter",
+            key="_nav_price_opt",
         ):
-            st.session_state["_nav_page"] = "Coverage Converter"
+            st.session_state["_nav_page"] = "Price Optimizer"
             st.rerun()
     with mc2:
-        st.markdown(
-            '<div class="dash-card disabled">'
-            "<h3>Price Optimizer</h3>"
-            "<p>Advanced pricing rules, competitor monitoring, "
-            "and margin optimisation.</p>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-        st.button(
-            "Coming Soon",
-            use_container_width=True,
-            disabled=True,
-            key="_nav_price_opt",
-        )
-    with mc3:
         st.markdown(
             '<div class="dash-card disabled">'
             "<h3>Push to Shop</h3>"
@@ -90,7 +169,7 @@ def render(api_ready: bool) -> None:
             disabled=True,
             key="_nav_push",
         )
-    with mc4:
+    with mc3:
         st.markdown(
             '<div class="dash-card disabled">'
             "<h3>Reports</h3>"
@@ -120,7 +199,7 @@ def render(api_ready: bool) -> None:
             '<div class="info-card">'
             "<h4>Price Rules</h4>"
             f"<p>Minimum margin: <strong>{int(MIN_COVERAGE_RATE * 100)}%</strong><br>"
-            f"Prices end in: <strong>{BEAUTIFY_LAST_DIGIT}</strong><br>"
+            f"Default beautifier: end in <strong>{BEAUTIFY_LAST_DIGIT}</strong><br>"
             "VAT rate: <strong>25%</strong></p>"
             "</div>",
             unsafe_allow_html=True,
