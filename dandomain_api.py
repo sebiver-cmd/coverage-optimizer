@@ -55,6 +55,35 @@ from zeep.transports import Transport
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Encoding helpers
+# ---------------------------------------------------------------------------
+
+def _fix_mojibake(obj: Any) -> Any:
+    """Recursively repair UTF-8 text that was incorrectly decoded as Latin-1.
+
+    A common problem with SOAP APIs is that the server sends UTF-8
+    encoded text but the XML parser (or an intermediate layer) treats
+    the bytes as ISO-8859-1 / Windows-1252.  This produces *mojibake*
+    — e.g. ``"Ã†"`` instead of ``"Æ"``, ``"Ã¸"`` instead of ``"ø"``.
+
+    The fix is to re-encode the garbled string back to Latin-1 (which
+    recovers the original bytes) and then decode those bytes as UTF-8.
+    If the string is already correct the round-trip will fail at one of
+    the encode/decode steps and the original value is returned unchanged.
+    """
+    if isinstance(obj, str):
+        try:
+            return obj.encode("latin-1").decode("utf-8")
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            return obj
+    if isinstance(obj, dict):
+        return {k: _fix_mojibake(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_fix_mojibake(item) for item in obj]
+    return obj
+
+
 class _CredentialScrubFilter(logging.Filter):
     """Prevent credentials from leaking into log output."""
 
@@ -348,7 +377,9 @@ class DanDomainClient:
 
             items = batch if isinstance(batch, list) else [batch]
             for item in items:
-                products.append(serialize_object(item, dict))
+                products.append(
+                    _fix_mojibake(serialize_object(item, dict))
+                )
 
             fetched = len(items)
             if progress_callback:
@@ -400,7 +431,9 @@ class DanDomainClient:
         if result is not None:
             items = result if isinstance(result, list) else [result]
             for item in items:
-                products.append(serialize_object(item, dict))
+                products.append(
+                    _fix_mojibake(serialize_object(item, dict))
+                )
 
         if progress_callback:
             progress_callback(len(products))
