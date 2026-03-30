@@ -40,6 +40,7 @@ See https://webshop-help.dandomain.dk/integration-via-api/
 
 from __future__ import annotations
 
+import html as _html
 import logging
 import math
 import re
@@ -60,23 +61,26 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _fix_mojibake(obj: Any) -> Any:
-    """Recursively repair UTF-8 text that was incorrectly decoded as Latin-1.
+    """Recursively repair encoding issues in SOAP API text.
 
-    A common problem with SOAP APIs is that the server sends UTF-8
-    encoded text but the XML parser (or an intermediate layer) treats
-    the bytes as ISO-8859-1 / Windows-1252.  This produces *mojibake*
-    — e.g. ``"Ã†"`` instead of ``"Æ"``, ``"Ã¸"`` instead of ``"ø"``.
+    Handles two common problems:
 
-    The fix is to re-encode the garbled string back to Latin-1 (which
-    recovers the original bytes) and then decode those bytes as UTF-8.
-    If the string is already correct the round-trip will fail at one of
-    the encode/decode steps and the original value is returned unchanged.
+    1. **Mojibake** — the server sends UTF-8 but the XML parser treats
+       the bytes as ISO-8859-1 / Windows-1252, producing garbled text
+       (e.g. ``"Ã†"`` instead of ``"Æ"``).  Fixed by re-encoding to
+       Latin-1 and decoding as UTF-8.
+
+    2. **HTML entities** — the API returns HTML-encoded characters such
+       as ``&oslash;`` instead of ``ø``, ``&aelig;`` instead of ``æ``,
+       etc.  Fixed via :func:`html.unescape`.
     """
     if isinstance(obj, str):
         try:
-            return obj.encode("latin-1").decode("utf-8")
+            fixed = obj.encode("latin-1").decode("utf-8")
         except (UnicodeDecodeError, UnicodeEncodeError):
-            return obj
+            fixed = obj
+        # Decode HTML entities (e.g. &oslash; → ø, &amp; → &)
+        return _html.unescape(fixed)
     if isinstance(obj, dict):
         return {k: _fix_mojibake(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -335,6 +339,76 @@ class DanDomainClient:
         result = self._call("Product_GetAllWithLimit", Start=0, Length=1)
         count = len(result) if isinstance(result, list) else 0
         return {"status": "connected", "product_count": count}
+
+    def get_all_brands(
+        self,
+        progress_callback: Optional[Callable] = None,
+    ) -> dict[str, int]:
+        """Fetch all producer / brand names from the product catalogue.
+
+        Performs a lightweight paginated fetch using only the
+        ``Id``, ``Producer`` and ``ProducerId`` fields so the response
+        is as small as possible.  Returns a mapping of
+        *brand name* → *ProducerId* which can be passed to
+        :meth:`get_products_by_brand` for a targeted product fetch.
+
+        Parameters
+        ----------
+        progress_callback : callable, optional
+            Called after each batch with ``(products_scanned_so_far,)``.
+
+        Returns
+        -------
+        dict[str, int]
+            ``{"Brand Name": ProducerId, ...}``
+        """
+        # Use minimal fields to keep the response lightweight.
+        minimal_fields = "Id,Producer,ProducerId"
+        try:
+            self._call("Product_SetFields", Fields=minimal_fields)
+        except DanDomainAPIError:
+            logger.warning("Could not set minimal product output fields")
+
+        brand_map: dict[str, int] = {}
+        start = 0
+        batch_size = 500  # larger batches — each record is tiny
+
+        while True:
+            batch = self._call(
+                "Product_GetAllWithLimit",
+                Start=start, Length=batch_size,
+            )
+            if batch is None or (isinstance(batch, list) and len(batch) == 0):
+                break
+
+            items = batch if isinstance(batch, list) else [batch]
+            for item in items:
+                p = _fix_mojibake(serialize_object(item, dict))
+                _pr = p.get("Producer")
+                if isinstance(_pr, dict):
+                    _name = str(_pr.get("Company", "") or "").strip()
+                else:
+                    _name = str(_pr or "").strip()
+                _pid = p.get("ProducerId")
+                if _name and _pid:
+                    try:
+                        brand_map[_name] = int(_pid)
+                    except (ValueError, TypeError):
+                        pass
+
+            fetched = len(items)
+            if progress_callback:
+                progress_callback(start + fetched)
+
+            if fetched < batch_size:
+                break
+            start += fetched
+            time.sleep(BATCH_DELAY)
+
+        # Restore default output fields
+        self._set_output_fields()
+
+        return brand_map
 
     def get_products_batch(
         self,

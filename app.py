@@ -969,10 +969,46 @@ else:  # Import from API
             unsafe_allow_html=True,
         )
     else:
-        # Filtering options
+        # --- Load brands first, then fetch products by brand -----------
+        _api_brands_available = st.session_state.get("_api_brands", [])
+        _api_brand_id_map = st.session_state.get("_api_brand_id_map", {})
+
+        # Step 1 — Load brands (lightweight fetch of Producer fields only)
+        if not _api_brands_available:
+            if st.button("🔄 Load Brands from API", type="secondary"):
+                try:
+                    with st.spinner("Scanning products for brands…"):
+                        _brand_prog = st.empty()
+
+                        def _brand_progress(count):
+                            _brand_prog.text(
+                                f"Scanned {count} products…"
+                            )
+
+                        with DanDomainClient(
+                            api_username, api_password
+                        ) as client:
+                            brand_map = client.get_all_brands(
+                                progress_callback=_brand_progress,
+                            )
+                        _brand_prog.empty()
+
+                    if brand_map:
+                        st.session_state["_api_brands"] = sorted(
+                            brand_map.keys()
+                        )
+                        st.session_state["_api_brand_id_map"] = brand_map
+                        st.rerun()
+                    else:
+                        st.warning(
+                            "No brands / producers found in the shop."
+                        )
+                except (DanDomainAPIError, ValueError) as exc:
+                    st.error(f"❌ Failed to load brands: {exc}")
+
+        # Step 2 — Filtering options (enabled once brands are loaded)
         api_filter_col1, api_filter_col2 = st.columns(2)
         with api_filter_col1:
-            _api_brands_available = st.session_state.get("_api_brands", [])
             selected_brands = st.multiselect(
                 "Filter by brand / producer",
                 options=_api_brands_available,
@@ -981,13 +1017,12 @@ else:  # Import from API
                 placeholder=(
                     "All brands (no filter)"
                     if _api_brands_available
-                    else "Fetch products first to filter by brand"
+                    else "Load brands first ↑"
                 ),
                 disabled=not _api_brands_available,
                 help=(
                     "Select one or more brands to include. "
-                    "Leave empty to include all brands. "
-                    "Fetch products from the API first to populate this list."
+                    "Leave empty to include all brands."
                 ),
             )
         with api_filter_col2:
