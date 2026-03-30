@@ -281,3 +281,105 @@ class TestCombinedGates:
             df, mask, parsed_bp, work_bp, selected_indices={2},
         )
         assert updates == []
+
+
+# ---------------------------------------------------------------------------
+# Test: Partial updates — only changed fields in payload
+# ---------------------------------------------------------------------------
+
+class TestPartialUpdates:
+    """Verify that payloads contain only changed fields (partial updates)."""
+
+    def test_price_only_no_buy_price_key(self):
+        """Changing PRICE only: payload must not contain buy_price."""
+        df = _make_test_df()
+        mask = np.array([True, False, False])
+        parsed_bp = pd.Series([100.0, 200.0, 300.0])
+        work_bp = pd.Series([100.0, 200.0, 300.0])
+
+        updates = build_push_updates(
+            df, mask, parsed_bp, work_bp, selected_indices={0},
+        )
+        assert len(updates) == 1
+        u = updates[0]
+        assert "new_price" in u
+        assert u["new_price"] == pytest.approx(249.0, abs=0.01)
+        assert "buy_price" not in u
+
+    def test_buy_price_only_no_new_price_key(self):
+        """Changing BUY_PRICE only: payload must not contain new_price."""
+        df = _make_test_df()
+        mask = np.array([False, False, True])
+        parsed_bp = pd.Series([100.0, 200.0, 300.0])
+        work_bp = pd.Series([100.0, 200.0, 275.0])
+
+        updates = build_push_updates(
+            df, mask, parsed_bp, work_bp, selected_indices={2},
+        )
+        assert len(updates) == 1
+        u = updates[0]
+        assert "buy_price" in u
+        assert u["buy_price"] == pytest.approx(275.0, abs=0.01)
+        assert "new_price" not in u
+
+    def test_both_changed_both_present(self):
+        """Changing both PRICE and BUY_PRICE: both fields in payload."""
+        df = _make_test_df()
+        mask = np.array([True, False, False])
+        parsed_bp = pd.Series([100.0, 200.0, 300.0])
+        work_bp = pd.Series([120.0, 200.0, 300.0])
+
+        updates = build_push_updates(
+            df, mask, parsed_bp, work_bp, selected_indices={0},
+        )
+        assert len(updates) == 1
+        u = updates[0]
+        assert "new_price" in u
+        assert "buy_price" in u
+        assert u["buy_price"] == pytest.approx(120.0, abs=0.01)
+
+    def test_buy_price_auto_included_when_changed(self):
+        """BUY_PRICE must be included automatically when changed,
+        even without CSV/import providing it."""
+        df = _make_test_df()
+        # Product A: price change + buy price change
+        mask = np.array([True, True, False])
+        parsed_bp = pd.Series([100.0, 200.0, 300.0])
+        work_bp = pd.Series([110.0, 200.0, 300.0])  # Only A changed
+
+        updates = build_push_updates(
+            df, mask, parsed_bp, work_bp, selected_indices={0, 1},
+        )
+        a_update = [u for u in updates if u["product_number"] == "SKU-A"][0]
+        b_update = [u for u in updates if u["product_number"] == "SKU-B"][0]
+
+        # A has both price + buy price change
+        assert "buy_price" in a_update
+        assert a_update["buy_price"] == pytest.approx(110.0, abs=0.01)
+        # B only has price change — no buy_price
+        assert "buy_price" not in b_update
+
+    def test_multiple_products_independent_changes(self):
+        """Each product independently gets only its own changed fields."""
+        df = _make_test_df()
+        mask = np.array([True, True, True])
+        parsed_bp = pd.Series([100.0, 200.0, 300.0])
+        # A: buy price changed, B: unchanged, C: buy price changed
+        work_bp = pd.Series([130.0, 200.0, 280.0])
+
+        updates = build_push_updates(
+            df, mask, parsed_bp, work_bp, selected_indices={0, 1, 2},
+        )
+        by_sku = {u["product_number"]: u for u in updates}
+
+        # A: both prices changed
+        assert "new_price" in by_sku["SKU-A"]
+        assert "buy_price" in by_sku["SKU-A"]
+
+        # B: only sales price changed
+        assert "new_price" in by_sku["SKU-B"]
+        assert "buy_price" not in by_sku["SKU-B"]
+
+        # C: only buy price changed (sales price unchanged)
+        assert "new_price" not in by_sku["SKU-C"]
+        assert "buy_price" in by_sku["SKU-C"]

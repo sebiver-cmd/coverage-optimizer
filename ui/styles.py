@@ -11,10 +11,10 @@ html, body, [class*="css"] {
 
 /* ---- Sidebar ---- */
 section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #E3F2FD 0%, #BBDEFB 100%);
+    background: linear-gradient(180deg, #f5f5f5 0%, #e0e0e0 100%);
 }
 section[data-testid="stSidebar"] * {
-    color: #0D47A1 !important;
+    color: #37474f !important;
 }
 section[data-testid="stSidebar"] .stSelectbox label,
 section[data-testid="stSidebar"] .stNumberInput label,
@@ -24,10 +24,10 @@ section[data-testid="stSidebar"] .stTextInput label {
     font-size: 0.82rem;
     letter-spacing: 0.03em;
     text-transform: uppercase;
-    color: #1565C0 !important;
+    color: #455a64 !important;
 }
 section[data-testid="stSidebar"] .stCaption {
-    color: #1976D2 !important;
+    color: #546e7a !important;
     font-weight: 700;
     letter-spacing: 0.08em;
 }
@@ -35,27 +35,27 @@ section[data-testid="stSidebar"] .stCaption {
 /* ---- Metrics cards ---- */
 div[data-testid="stMetric"] {
     background: #ffffff;
-    border: 1px solid #B3E5FC;
+    border: 1px solid #cfd8dc;
     border-radius: 16px;
     padding: 1.25rem 1.5rem;
-    box-shadow: 0 1px 3px rgba(2,136,209,0.06), 0 4px 12px rgba(2,136,209,0.04);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.02);
     transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 div[data-testid="stMetric"]:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 16px rgba(2,136,209,0.12);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.08);
 }
 div[data-testid="stMetric"] label {
     font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     font-weight: 600;
-    color: #546E7A !important;
+    color: #607d8b !important;
 }
 div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
     font-weight: 700;
     font-size: 2rem;
-    color: #01579B !important;
+    color: #37474f !important;
 }
 
 /* ---- Buttons ---- */
@@ -70,10 +70,10 @@ div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
 }
 .stButton > button:hover {
     transform: translateY(-1px);
-    box-shadow: 0 6px 20px rgba(2,136,209,0.20);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.12);
 }
 .stButton > button[kind="primary"] {
-    background: linear-gradient(135deg, #29B6F6 0%, #0288D1 100%);
+    background: linear-gradient(135deg, #78909c 0%, #546e7a 100%);
     color: #fff !important;
 }
 
@@ -82,15 +82,15 @@ div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
     border-radius: 10px;
     font-weight: 600;
     font-size: 0.88rem;
-    background: #E1F5FE;
-    border: 1px solid #B3E5FC;
-    color: #01579B !important;
+    background: #f5f5f5;
+    border: 1px solid #cfd8dc;
+    color: #37474f !important;
     transition: all 0.15s ease;
 }
 .stDownloadButton > button:hover {
-    background: #B3E5FC;
-    border-color: #81D4FA;
-    box-shadow: 0 2px 8px rgba(2,136,209,0.10);
+    background: #eceff1;
+    border-color: #b0bec5;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
 }
 /* ---- Download section compact layout ---- */
 .download-row {
@@ -116,14 +116,14 @@ div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
 .streamlit-expanderHeader {
     font-weight: 600;
     font-size: 0.95rem;
-    color: #01579B;
+    color: #37474f;
     border-radius: 12px;
 }
 
 /* ---- Tabs ---- */
 .stTabs [data-baseweb="tab-list"] {
     gap: 0.25rem;
-    background: #E1F5FE;
+    background: #eceff1;
     border-radius: 12px;
     padding: 0.25rem;
 }
@@ -132,47 +132,47 @@ div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
     font-weight: 600;
     font-size: 0.88rem;
     padding: 0.5rem 1.5rem;
-    color: #546E7A;
+    color: #607d8b;
     transition: all 0.15s ease;
 }
 .stTabs [data-baseweb="tab"][aria-selected="true"] {
     background: #ffffff !important;
-    color: #01579B !important;
-    box-shadow: 0 1px 3px rgba(2,136,209,0.12);
+    color: #37474f !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
 }
 
 /* ---- Dataframes ---- */
 .stDataFrame {
     border-radius: 12px;
     overflow: hidden;
-    border: 1px solid #B3E5FC;
+    border: 1px solid #cfd8dc;
 }
 
 /* ---- Dividers ---- */
 hr {
     border: none;
-    border-top: 1px solid #B3E5FC;
+    border-top: 1px solid #cfd8dc;
     margin: 2rem 0;
 }
 
 /* ---- File uploader ---- */
 section[data-testid="stFileUploader"] {
-    border: 2px dashed #81D4FA;
+    border: 2px dashed #b0bec5;
     border-radius: 16px;
     padding: 1rem;
-    background: #E1F5FE;
+    background: #f5f5f5;
     transition: all 0.2s ease;
 }
 section[data-testid="stFileUploader"]:hover {
-    border-color: #0288D1;
-    background: #B3E5FC;
+    border-color: #78909c;
+    background: #eceff1;
 }
 
 /* ---- Section headers ---- */
 .section-header {
     font-size: 1.15rem;
     font-weight: 700;
-    color: #01579B;
+    color: #37474f;
     margin-bottom: 0.75rem;
     display: flex;
     align-items: center;
@@ -200,41 +200,41 @@ section[data-testid="stFileUploader"]:hover {
     letter-spacing: 0.03em;
 }
 .status-pill.live { background: #fee2e2; color: #991b1b; }
-.status-pill.dry  { background: #B3E5FC; color: #01579B; }
+.status-pill.dry  { background: #eceff1; color: #37474f; }
 
 /* ---- Hero header ---- */
 .hero-header {
     margin-bottom: 0.25rem;
     font-size: 2rem;
     font-weight: 800;
-    color: #01579B;
+    color: #37474f;
     letter-spacing: -0.02em;
 }
 .hero-sub {
-    color: #546E7A;
+    color: #607d8b;
     margin-top: 0;
     font-size: 1.05rem;
     line-height: 1.5;
     max-width: 700px;
 }
-.hero-sub strong { color: #0288D1; }
+.hero-sub strong { color: #455a64; }
 
 /* ---- Info cards ---- */
 .info-card {
-    background: #E1F5FE;
-    border: 1px solid #B3E5FC;
+    background: #f5f5f5;
+    border: 1px solid #cfd8dc;
     border-radius: 14px;
     padding: 1.25rem 1.5rem;
     margin-bottom: 0.75rem;
 }
 .info-card h4 {
     margin: 0 0 0.4rem 0;
-    color: #01579B;
+    color: #37474f;
     font-size: 0.95rem;
 }
 .info-card p {
     margin: 0;
-    color: #546E7A;
+    color: #607d8b;
     font-size: 0.88rem;
     line-height: 1.5;
 }
@@ -246,7 +246,7 @@ section[data-testid="stFileUploader"]:hover {
     font-size: 0.72rem;
     padding: 0.5rem;
     border-radius: 8px;
-    background: rgba(2,136,209,0.08);
+    background: rgba(0,0,0,0.05);
 }
 
 /* ---- Nav item styling ---- */
@@ -258,13 +258,13 @@ section[data-testid="stFileUploader"]:hover {
     font-size: 0.9rem;
 }
 .nav-item.active {
-    background: rgba(2,136,209,0.15);
+    background: rgba(0,0,0,0.08);
 }
 
 /* ---- Dashboard cards ---- */
 .dash-card {
     background: #ffffff;
-    border: 1px solid #B3E5FC;
+    border: 1px solid #cfd8dc;
     border-radius: 16px;
     padding: 1.5rem;
     text-align: center;
@@ -273,20 +273,16 @@ section[data-testid="stFileUploader"]:hover {
 }
 .dash-card:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 16px rgba(2,136,209,0.12);
-}
-.dash-card .icon {
-    font-size: 2.5rem;
-    margin-bottom: 0.5rem;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.08);
 }
 .dash-card h3 {
     margin: 0 0 0.4rem 0;
-    color: #01579B;
+    color: #37474f;
     font-size: 1rem;
 }
 .dash-card p {
     margin: 0;
-    color: #546E7A;
+    color: #607d8b;
     font-size: 0.82rem;
     line-height: 1.4;
 }
