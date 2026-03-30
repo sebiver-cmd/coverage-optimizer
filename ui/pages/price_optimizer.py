@@ -1,9 +1,15 @@
-"""Price Optimizer module — analysis, pricing pipeline, and push-to-shop."""
+"""Price Optimizer module — analysis, pricing pipeline, and push-to-shop.
+
+Uses the FastAPI backend ``/optimize`` endpoint for computing optimisation
+suggestions (read-only).  Push-to-shop behaviour is unchanged.
+"""
 
 from __future__ import annotations
 
+import logging
 import time
 
+import requests
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -21,7 +27,6 @@ from domain.pricing import (
     calc_coverage_rate,
     optimize_prices,
 )
-from domain.product_loader import filter_products
 from domain.supplier import (
     DEFAULT_CURRENCY_RATES,
     ENCODING_OPTIONS,
@@ -31,12 +36,197 @@ from domain.supplier import (
     detect_discount_lines,
 )
 
+logger = logging.getLogger(__name__)
+
 # Columns shown in the simplified (default) table view.
 _SIMPLE_COLUMNS = [
     'TITLE_DK', 'NUMBER', 'PRODUCER',
     'BUY_PRICE', 'PRICE', 'COVERAGE_RATE_%',
     'NEW_PRICE', 'NEW_COVERAGE_RATE_%',
 ]
+
+# Default timeout (seconds) for HTTP requests to the FastAPI backend.
+_BACKEND_TIMEOUT = 120
+
+
+# ---------------------------------------------------------------------------
+# Backend helpers (read-only HTTP calls to the FastAPI backend)
+# ---------------------------------------------------------------------------
+
+def _fetch_brands_from_backend(
+    backend_url: str,
+    api_username: str,
+    api_password: str,
+) -> list[dict]:
+    """Fetch brands from ``GET /brands`` on the FastAPI backend.
+
+    Returns a list of ``{"id": int, "name": str}`` dicts, or an empty
+    list on error.
+    """
+    try:
+        resp = requests.get(
+            f"{backend_url.rstrip('/')}/brands",
+            params={
+                "api_username": api_username,
+                "api_password": api_password,
+            },
+            timeout=_BACKEND_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException as exc:
+        logger.warning("Failed to fetch brands from backend: %s", exc)
+        return []
+
+
+def _run_backend_optimization(
+    backend_url: str,
+    api_username: str,
+    api_password: str,
+    site_id: int,
+    brand_ids: list[int] | None,
+    include_offline: bool,
+    include_variants: bool,
+    price_pct: float,
+    beautify_digit: int,
+) -> dict | None:
+    """Call ``POST /optimize/`` on the FastAPI backend.
+
+    Returns the parsed JSON response (with ``summary`` and ``rows`` keys),
+    or *None* on error.  Errors are reported via :func:`st.error`.
+    """
+    payload: dict = {
+        "api_username": api_username,
+        "api_password": api_password,
+        "site_id": site_id,
+        "price_pct": price_pct,
+        "beautify_digit": beautify_digit,
+        "include_offline": include_offline,
+        "include_variants": include_variants,
+    }
+    if brand_ids:
+        payload["brand_ids"] = brand_ids
+
+    try:
+        resp = requests.post(
+            f"{backend_url.rstrip('/')}/optimize/",
+            json=payload,
+            timeout=_BACKEND_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except requests.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.response.json().get("detail", "")
+        except Exception:
+            detail = exc.response.text[:200] if exc.response is not None else ""
+        st.error(f"Backend optimisation failed ({exc.response.status_code}): {detail}")
+        return None
+    except requests.ConnectionError:
+        st.error(
+            "Could not connect to the backend.  "
+            "Make sure the FastAPI server is running and the Backend URL is correct."
+        )
+        return None
+    except requests.RequestException as exc:
+        st.error(f"Backend request error: {exc}")
+        return None
+
+
+def _build_dataframes_from_response(
+    data: dict,
+) -> tuple[pd.DataFrame, int, np.ndarray, pd.DataFrame, pd.DataFrame]:
+    """Convert the ``/optimize`` JSON response into DataFrames.
+
+    Returns
+    -------
+    final_df
+        Display DataFrame matching the ``EXPORT_COLUMNS`` layout produced
+        by :func:`optimize_prices`, with ``PRODUCER`` inserted after
+        ``NUMBER``.
+    adjusted_count
+        Number of products flagged as needing adjustment.
+    adjusted_mask
+        Boolean :class:`numpy.ndarray` (one entry per row).
+    import_df
+        Import-ready subset of adjusted rows.
+    raw_df
+        Reconstructed "raw" DataFrame with numeric columns
+        (``BUY_PRICE_NUM``, ``PRICE_NUM``, etc.) suitable for local
+        re-computation when the user edits ``BUY_PRICE``.
+    """
+    rows = data["rows"]
+    summary = data["summary"]
+
+    # --- Raw DataFrame (numeric columns for local re-computation) ---
+    raw_records = []
+    for r in rows:
+        raw_records.append({
+            "PRODUCT_ID": r["product_id"],
+            "TITLE_DK": r["title"],
+            "NUMBER": r["item_number"],
+            "PRODUCER": r["producer"],
+            "BUY_PRICE": format_dk(r["buy_price"]),
+            "BUY_PRICE_NUM": r["buy_price"],
+            "PRICE": format_dk(r["current_price"]),
+            "PRICE_NUM": r["current_price"],
+            "VARIANT_ID": r["variant_id"],
+            "VARIANT_TYPES": r["variant_types"],
+        })
+    raw_df = pd.DataFrame(raw_records)
+
+    # --- Display DataFrame (formatted strings) ---
+    final_records = []
+    for r in rows:
+        final_records.append({
+            "PRODUCT_ID": r["product_id"],
+            "TITLE_DK": r["title"],
+            "NUMBER": r["item_number"],
+            "PRODUCER": r["producer"],
+            "BUY_PRICE": format_dk(r["buy_price"]),
+            "PRICE_EX_VAT": format_dk(r["current_price_ex_vat"]),
+            "PRICE": format_dk(r["current_price"]),
+            "COVERAGE_RATE_%": (
+                str(round(r["current_coverage_pct"], 2))
+                .replace(".", ",") + "%"
+            ),
+            "VARIANT_ID": r["variant_id"],
+            "VARIANT_TYPES": r["variant_types"],
+            "NEW_PRICE_EX_VAT": format_dk(r["suggested_price_ex_vat"]),
+            "NEW_PRICE": format_dk(r["suggested_price"]),
+            "NEW_COVERAGE_RATE_%": (
+                str(round(r["suggested_coverage_pct"], 2))
+                .replace(".", ",") + "%"
+            ),
+        })
+    final_df = pd.DataFrame(final_records)
+
+    # --- Adjusted mask & count ---
+    adjusted_mask = np.array([r["needs_adjustment"] for r in rows])
+    adjusted_count = int(summary["adjusted_count"])
+
+    # --- Import DataFrame ---
+    import_records = []
+    for r in rows:
+        if r["needs_adjustment"]:
+            import_records.append({
+                "PRODUCT_ID": r["product_id"],
+                "TITLE_DK": r["title"],
+                "NUMBER": r["item_number"],
+                "BUY_PRICE": format_dk(r["buy_price"]),
+                "PRICE": format_dk(r["suggested_price"]),
+                "VARIANT_ID": r["variant_id"],
+                "VARIANT_TYPES": r["variant_types"],
+            })
+    if import_records:
+        import_df = pd.DataFrame(import_records)
+    else:
+        import_df = pd.DataFrame(
+            columns=REQUIRED_COLUMNS,
+        )
+
+    return final_df, adjusted_count, adjusted_mask, import_df, raw_df
 
 
 def render(
@@ -45,8 +235,14 @@ def render(
     api_ready: bool,
     site_id: int,
     dry_run: bool,
+    backend_url: str = "http://localhost:8000",
 ) -> None:
-    """Render the full Price Optimizer page."""
+    """Render the full Price Optimizer page.
+
+    Fetches brands and runs the pricing optimisation via the FastAPI
+    backend (``GET /brands``, ``POST /optimize``).  Push-to-shop
+    behaviour is unchanged.
+    """
 
     st.markdown(
         '<h1 class="hero-header">Price Optimizer</h1>',
@@ -97,24 +293,63 @@ def render(
                 key="_cc_include_bp",
             )
 
-    parsed_df = None
-
-    # Check for loaded data in shared state (fetched on Dashboard)
-    if "_api_raw_df" not in st.session_state:
+    if not api_ready:
         st.markdown(
             '<div class="info-card">'
-            "<h4>No Products Loaded</h4>"
-            "<p>Go to the <strong>Dashboard</strong> and use "
-            "<em>Fetch Products from API</em> to load product data first.</p>"
+            "<h4>API Not Connected</h4>"
+            "<p>Configure your DanDomain API credentials in the sidebar "
+            "to enable price optimisation.</p>"
             "</div>",
             unsafe_allow_html=True,
         )
-    else:
-        parsed_df = _render_filters()
+        return
 
-    if parsed_df is not None:
+    # --- Fetch brands from backend (cached in session state) ---
+    if "_backend_brands" not in st.session_state:
+        with st.spinner("Loading brands from backend..."):
+            brands = _fetch_brands_from_backend(
+                backend_url, api_username, api_password,
+            )
+            st.session_state["_backend_brands"] = brands
+
+    brands = st.session_state.get("_backend_brands", [])
+
+    # --- Filters ---
+    selected_brands, include_offline = _render_filters(brands)
+
+    # --- Run Optimisation button ---
+    if st.button("Run Optimisation", type="primary", use_container_width=True):
+        with st.spinner("Running optimisation via backend..."):
+            response = _run_backend_optimization(
+                backend_url=backend_url,
+                api_username=api_username,
+                api_password=api_password,
+                site_id=site_id,
+                brand_ids=selected_brands,
+                include_offline=include_offline,
+                include_variants=True,
+                price_pct=price_pct,
+                beautify_digit=beautify_digit,
+            )
+            if response is not None:
+                (
+                    final_df, adjusted_count, adjusted_mask,
+                    import_df, raw_df,
+                ) = _build_dataframes_from_response(response)
+                st.session_state["_opt_response"] = response
+                st.session_state["_opt_final_df"] = final_df
+                st.session_state["_opt_adjusted_count"] = adjusted_count
+                st.session_state["_opt_adjusted_mask"] = adjusted_mask
+                st.session_state["_opt_import_df"] = import_df
+                st.session_state["_opt_raw_df"] = raw_df
+                # Clear stale data-editor edits from previous runs
+                for k in ("_ed_all", "_ed_adj", "_ed_imp"):
+                    st.session_state.pop(k, None)
+
+    # --- Display cached results ---
+    if "_opt_raw_df" in st.session_state:
         _render_analysis(
-            parsed_df,
+            st.session_state["_opt_raw_df"],
             api_username,
             api_password,
             api_ready,
@@ -124,36 +359,59 @@ def render(
             include_buy_price,
             beautify_digit,
         )
+    elif "_opt_response" not in st.session_state:
+        st.markdown(
+            '<div class="info-card">'
+            "<h4>Ready to Optimise</h4>"
+            "<p>Adjust filters and price rules above, then click "
+            "<strong>Run Optimisation</strong> to fetch products from "
+            "the backend and compute suggested prices.</p>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
 
 # ---------------------------------------------------------------------------
-# API Import section
+# Filter controls
 # ---------------------------------------------------------------------------
 
-def _render_filters() -> pd.DataFrame | None:
-    """Render filter controls and return the filtered DataFrame from shared state."""
-    parsed_df = None
+def _render_filters(
+    brands: list[dict],
+) -> tuple[list[int] | None, bool]:
+    """Render filter controls and return the selected filter values.
 
-    _api_brands_available = st.session_state.get("_api_brands", [])
-    _api_brand_id_map = st.session_state.get("_api_brand_id_map", {})
+    Parameters
+    ----------
+    brands
+        Brand list from ``GET /brands`` (each item has ``id`` and ``name``).
+
+    Returns
+    -------
+    brand_ids
+        Selected brand IDs, or *None* when no filter is active.
+    include_offline
+        Whether to include offline / inactive products.
+    """
+    brand_options = [b["id"] for b in brands]
+    brand_map = {b["id"]: b["name"] for b in brands}
 
     def _brand_label(pid: int) -> str:
-        return _api_brand_id_map.get(pid, f"Unknown ({pid})")
+        return brand_map.get(pid, f"Unknown ({pid})")
 
     api_filter_col1, api_filter_col2 = st.columns(2)
     with api_filter_col1:
         selected_brands = st.multiselect(
             "Filter by brand / producer",
-            options=_api_brands_available,
+            options=brand_options,
             format_func=_brand_label,
             default=[],
             key="_brand_filter",
             placeholder=(
                 "All brands (no filter)"
-                if _api_brands_available
+                if brand_options
                 else "No brands available"
             ),
-            disabled=not _api_brands_available,
+            disabled=not brand_options,
             help=(
                 "Select one or more brands to include. "
                 "Leave empty to include all brands."
@@ -166,16 +424,7 @@ def _render_filters() -> pd.DataFrame | None:
             help="When checked, only products marked as 'online' are shown.",
         )
 
-    # Derive parsed_df from cached data, applying filters
-    if "_api_raw_df" in st.session_state:
-        _raw_df = st.session_state["_api_raw_df"]
-        parsed_df = filter_products(
-            _raw_df,
-            include_offline=not only_online,
-            brand_ids=selected_brands or None,
-        )
-
-    return parsed_df
+    return selected_brands or None, not only_online
 
 
 # ---------------------------------------------------------------------------
@@ -193,15 +442,24 @@ def _render_analysis(
     include_buy_price: bool,
     beautify_digit: int,
 ) -> None:
-    """Render analysis results, data tabs, downloads, and push-to-shop."""
+    """Render analysis results, data tabs, downloads, and push-to-shop.
+
+    When the user has not edited any ``BUY_PRICE`` values, the
+    pre-computed results from the backend (stored in session state by
+    :func:`render`) are used directly.  If ``BUY_PRICE`` edits are
+    detected, :func:`optimize_prices` is called locally so that the
+    modified cost prices are reflected immediately.
+    """
     # --- Apply persisted BUY_PRICE edits from data-editor state ---
     work_df = parsed_df.copy()
+    has_buy_price_edits = False
     for key in ("_ed_all", "_ed_adj", "_ed_imp"):
         for row_str, changes in (
             st.session_state.get(key, {}).get("edited_rows", {}).items()
         ):
             if "BUY_PRICE" not in changes:
                 continue
+            has_buy_price_edits = True
             row_idx = int(row_str)
             if key == "_ed_adj" and "_adj_index_map" in st.session_state:
                 idx_map = st.session_state["_adj_index_map"]
@@ -218,16 +476,23 @@ def _render_analysis(
             if row_idx in work_df.index:
                 work_df.at[row_idx, 'BUY_PRICE_NUM'] = changes["BUY_PRICE"]
 
-    final_df, adjusted_count, adjusted_mask, import_df = optimize_prices(
-        work_df, price_pct,
-        original_buy_prices=parsed_df['BUY_PRICE_NUM'],
-        beautify_digit=beautify_digit,
-    )
-
-    # Include PRODUCER (brand) column when available (API import).
-    if 'PRODUCER' in work_df.columns:
-        _pos = final_df.columns.get_loc('NUMBER') + 1
-        final_df.insert(_pos, 'PRODUCER', work_df['PRODUCER'].values)
+    if has_buy_price_edits:
+        # Local re-computation with edited buy prices
+        final_df, adjusted_count, adjusted_mask, import_df = optimize_prices(
+            work_df, price_pct,
+            original_buy_prices=parsed_df['BUY_PRICE_NUM'],
+            beautify_digit=beautify_digit,
+        )
+        # Include PRODUCER column when available
+        if 'PRODUCER' in work_df.columns and 'PRODUCER' not in final_df.columns:
+            _pos = final_df.columns.get_loc('NUMBER') + 1
+            final_df.insert(_pos, 'PRODUCER', work_df['PRODUCER'].values)
+    else:
+        # Use pre-computed backend results (already has PRODUCER)
+        final_df = st.session_state["_opt_final_df"]
+        adjusted_count = st.session_state["_opt_adjusted_count"]
+        adjusted_mask = st.session_state["_opt_adjusted_mask"]
+        import_df = st.session_state["_opt_import_df"]
 
     # --- Summary Metrics ---
     total = len(final_df)

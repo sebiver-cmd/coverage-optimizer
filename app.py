@@ -85,6 +85,15 @@ with st.sidebar:
     api_ready = bool(api_username and api_password)
 
     st.divider()
+    st.caption("BACKEND")
+    backend_url = st.text_input(
+        "Backend URL",
+        value=os.environ.get("SB_OPTIMA_BACKEND_URL", "http://localhost:8000"),
+        placeholder="http://localhost:8000",
+        help="URL of the SB-Optima FastAPI backend.",
+    )
+
+    st.divider()
     _active_beautify = st.session_state.get("_cc_beautify_digit", BEAUTIFY_LAST_DIGIT)
     st.markdown(
         '<div class="version-badge">'
@@ -112,6 +121,7 @@ elif page == "Price Optimizer":
         api_ready=api_ready,
         site_id=site_id,
         dry_run=dry_run,
+        backend_url=backend_url,
     )
 
 elif page == "Reports":
