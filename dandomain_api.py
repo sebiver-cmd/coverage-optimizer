@@ -213,14 +213,14 @@ class DanDomainClient:
         """Temporarily configure extended product output fields.
 
         Sets the output fields to include display-relevant attributes
-        such as ``Title``, ``Producer``, ``Online``, etc. for the
+        such as ``Title``, ``Producer``, ``Status``, etc. for the
         duration of a product-fetch operation.  The caller should call
         :meth:`_set_output_fields` afterwards to restore the defaults.
         """
         extended_fields = (
             "Id,ItemNumber,Title,Price,BuyingPrice,"
             "Producer,ProducerId,CategoryId,Variants,"
-            "VariantTypes,Online"
+            "VariantTypes,Status"
         )
         extended_variant_fields = "Id,ItemNumber,Title,Price,BuyingPrice"
         try:
