@@ -533,6 +533,28 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
     return df
 
 
+def _build_brand_id_map(raw_products: list[dict]) -> dict[str, int]:
+    """Build a brand-name → ProducerId mapping from raw API product dicts.
+
+    Used to enable targeted ``Product_GetByBrand`` calls on subsequent
+    fetches instead of downloading the full product catalogue.
+    """
+    brand_id_map: dict[str, int] = {}
+    for p in raw_products:
+        _pr = p.get("Producer")
+        if isinstance(_pr, dict):
+            _name = str(_pr.get("Company", "") or "").strip()
+        else:
+            _name = str(_pr or "").strip()
+        _pid = p.get("ProducerId")
+        if _name and _pid:
+            try:
+                brand_id_map[_name] = int(_pid)
+            except (ValueError, TypeError):
+                pass
+    return brand_id_map
+
+
 # ---------------------------------------------------------------------------
 # Supplier price-list helpers
 # ---------------------------------------------------------------------------
@@ -1037,20 +1059,9 @@ else:  # Import from API
                     st.session_state["_api_brands"] = brands
                     # Build brand-name → ProducerId mapping so that
                     # subsequent fetches can use Product_GetByBrand.
-                    brand_id_map: dict[str, int] = {}
-                    for p in raw_products:
-                        _pr = p.get("Producer")
-                        if isinstance(_pr, dict):
-                            _name = str(_pr.get("Company", "") or "").strip()
-                        else:
-                            _name = str(_pr or "").strip()
-                        _pid = p.get("ProducerId")
-                        if _name and _pid:
-                            try:
-                                brand_id_map[_name] = int(_pid)
-                            except (ValueError, TypeError):
-                                pass
-                    st.session_state["_api_brand_id_map"] = brand_id_map
+                    st.session_state["_api_brand_id_map"] = _build_brand_id_map(
+                        raw_products,
+                    )
                     st.success(
                         f"✅ Loaded **{len(raw_df)}** product rows "
                         f"({len(raw_products)} base products)."

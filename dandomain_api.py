@@ -209,6 +209,31 @@ class DanDomainClient:
         except DanDomainAPIError:
             logger.warning("Could not set variant output fields")
 
+    def _set_extended_fields(self) -> None:
+        """Temporarily configure extended product output fields.
+
+        Sets the output fields to include display-relevant attributes
+        such as ``Title``, ``Producer``, ``Online``, etc. for the
+        duration of a product-fetch operation.  The caller should call
+        :meth:`_set_output_fields` afterwards to restore the defaults.
+        """
+        extended_fields = (
+            "Id,ItemNumber,Title,Price,BuyingPrice,"
+            "Producer,ProducerId,CategoryId,Variants,"
+            "VariantTypes,Online"
+        )
+        extended_variant_fields = "Id,ItemNumber,Title,Price,BuyingPrice"
+        try:
+            self._call("Product_SetFields", Fields=extended_fields)
+        except DanDomainAPIError:
+            logger.warning("Could not set extended product output fields")
+        try:
+            self._call(
+                "Product_SetVariantFields", Fields=extended_variant_fields,
+            )
+        except DanDomainAPIError:
+            logger.warning("Could not set extended variant output fields")
+
     def _call(self, operation: str, **kwargs) -> Any:
         """Execute a SOAP operation with retry / back-off."""
         last_error: Optional[str] = None
@@ -308,23 +333,7 @@ class DanDomainClient:
             ``BuyingPrice``, ``Producer``, ``Variants``, etc.
         """
         # Temporarily request extended product fields.
-        # The HostedShop API expects Fields as a comma-separated string.
-        extended_fields = (
-            "Id,ItemNumber,Title,Price,BuyingPrice,"
-            "Producer,ProducerId,CategoryId,Variants,"
-            "VariantTypes,Online"
-        )
-        extended_variant_fields = "Id,ItemNumber,Title,Price,BuyingPrice"
-        try:
-            self._call("Product_SetFields", Fields=extended_fields)
-        except DanDomainAPIError:
-            logger.warning("Could not set extended product output fields")
-        try:
-            self._call(
-                "Product_SetVariantFields", Fields=extended_variant_fields,
-            )
-        except DanDomainAPIError:
-            logger.warning("Could not set extended variant output fields")
+        self._set_extended_fields()
 
         products: list[dict] = []
         start = 0
@@ -380,23 +389,8 @@ class DanDomainClient:
         list[dict]
             Plain-dict representations of each product.
         """
-        # Set extended output fields before the fetch (comma-separated string).
-        extended_fields = (
-            "Id,ItemNumber,Title,Price,BuyingPrice,"
-            "Producer,ProducerId,CategoryId,Variants,"
-            "VariantTypes,Online"
-        )
-        extended_variant_fields = "Id,ItemNumber,Title,Price,BuyingPrice"
-        try:
-            self._call("Product_SetFields", Fields=extended_fields)
-        except DanDomainAPIError:
-            logger.warning("Could not set extended product output fields")
-        try:
-            self._call(
-                "Product_SetVariantFields", Fields=extended_variant_fields,
-            )
-        except DanDomainAPIError:
-            logger.warning("Could not set extended variant output fields")
+        # Set extended output fields before the fetch.
+        self._set_extended_fields()
 
         result = self._call(
             "Product_GetByBrand", BrandId=int(brand_id),
