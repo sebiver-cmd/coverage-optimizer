@@ -163,7 +163,7 @@ def filter_products(
     pd.DataFrame
         Filtered copy of the input DataFrame.
     """
-    result = df
+    result = df.copy()
     if not include_offline and "ONLINE" in result.columns:
         result = result[result["ONLINE"]].reset_index(drop=True)
     if brand_ids:
