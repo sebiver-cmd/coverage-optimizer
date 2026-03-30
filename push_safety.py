@@ -28,11 +28,16 @@ PRICE_EPSILON = 0.001
 def _parse_price(val: Any) -> float:
     """Parse a Danish-formatted price value to a float.
 
-    Handles:
-    - ``None`` / NaN / Inf → ``0.0``
-    - Numeric types → ``float(val)``
-    - Strings like ``"1.234,56"`` (Danish thousands-separator + comma
-      decimal)
+    Parameters
+    ----------
+    val : Any
+        Price value — may be ``None``, a number, or a Danish-formatted
+        string (e.g. ``"1.234,56"``).
+
+    Returns
+    -------
+    float
+        Parsed price, or ``0.0`` for any invalid / unparseable input.
     """
     if val is None:
         return 0.0
@@ -145,7 +150,9 @@ def build_push_updates(
             "variant_types": vtypes,
         }
 
-        # Only include fields that actually changed
+        # Only include fields that actually changed.
+        # Zero prices are excluded to prevent accidentally making a
+        # product free — this mirrors the original app.py guard.
         if sales_price_changed and new_price_val > 0:
             entry["new_price"] = new_price_val
             entry["old_price"] = orig_price_val

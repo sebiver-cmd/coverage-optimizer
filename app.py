@@ -1816,10 +1816,19 @@ if parsed_df is not None and not _import_error:
 
                 # Derive the selected subset
                 push_flags = edited_sel["Push"].tolist()
-                selected_updates = [
-                    u for u, sel in zip(all_potential_updates, push_flags)
-                    if sel
-                ]
+                if len(push_flags) != len(all_potential_updates):
+                    st.error(
+                        "Selection state mismatch — please re-run "
+                        "the page."
+                    )
+                    selected_updates = []
+                else:
+                    selected_updates = [
+                        u for u, sel in zip(
+                            all_potential_updates, push_flags,
+                        )
+                        if sel
+                    ]
 
                 # Summary line
                 n_selected = len(selected_updates)

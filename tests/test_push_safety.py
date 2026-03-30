@@ -20,9 +20,9 @@ from push_safety import build_push_updates, PRICE_EPSILON
 def _make_test_df() -> pd.DataFrame:
     """Create a minimal final_df-like DataFrame for testing.
 
-    - Product A (SKU-A): price changed 200 → 249 (no variant)
-    - Product B (SKU-B): price changed 400 → 499 (variant 55)
-    - Product C (SKU-C): price UNCHANGED 600 → 600 (no variant)
+    - Product A (SKU-A): sales price changed 200 → 249 (no variant)
+    - Product B (SKU-B): sales price changed 400 → 499 (variant 55)
+    - Product C (SKU-C): sales price UNCHANGED (PRICE == NEW_PRICE == 600)
     """
     return pd.DataFrame({
         "PRODUCT_ID": ["101", "102", "103"],
