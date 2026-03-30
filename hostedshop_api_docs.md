@@ -49,7 +49,7 @@ data returned by subsequent GET calls.
 ### Product_SetFields
 
 Configures which properties are included in `Product` objects returned
-by `Product_GetByItemNumber`, `Product_GetAllWithLimit`,
+by `Product_GetAll`, `Product_GetByItemNumber`, `Product_GetAllWithLimit`,
 `Product_GetByBrand`, etc.
 
 | Parameter | Type   | Description                                      |
@@ -75,8 +75,8 @@ Same concept as above, but controls the fields returned for
 **Class:** `Product`
 ([docs](https://api.hostedshop.io/doc/Hosted%20Solution%20API/Product.html))
 
-Returned by `Product_GetByItemNumber`, `Product_GetAllWithLimit`,
-`Product_GetByBrand`, etc.
+Returned by `Product_GetAll`, `Product_GetByItemNumber`,
+`Product_GetAllWithLimit`, `Product_GetByBrand`, etc.
 
 | Field                | Type                    | Description                                                                 |
 |----------------------|-------------------------|-----------------------------------------------------------------------------|
@@ -296,6 +296,7 @@ Returned inside `Product.Variants` or by `Product_GetVariantsByItemNumber`.
 
 | Operation                            | Parameters                       | Returns             | Description                                            |
 |--------------------------------------|----------------------------------|---------------------|--------------------------------------------------------|
+| `Product_GetAll`                     | *(none)*                         | `Product[]`         | Fetch all products in one call                         |
 | `Product_GetByItemNumber`            | `ItemNumber` (string)            | `Product`           | Find a base product by its SKU                         |
 | `Product_GetVariantsByItemNumber`    | `ItemNumber` (string)            | `ProductVariant[]`  | Find variant(s) by a variant-specific SKU              |
 | `Product_GetAllWithLimit`            | `Start` (int), `Length` (int)    | `Product[]`         | Paginated fetch of all products                        |

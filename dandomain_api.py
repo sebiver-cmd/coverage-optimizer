@@ -247,13 +247,23 @@ class DanDomainClient:
         """Temporarily configure extended product output fields.
 
         Sets the output fields to include display-relevant attributes
-        such as ``Title``, ``Producer``, ``Status``, etc. for the
+        such as ``Title``, ``ProducerId``, ``Status``, etc. for the
         duration of a product-fetch operation.  The caller should call
         :meth:`_set_output_fields` afterwards to restore the defaults.
+
+        .. note::
+
+           ``Producer`` (a complex ``User`` object) is intentionally
+           **excluded** — including it in ``Product_SetFields`` can
+           cause the SOAP call to fail silently, which leaves the
+           field configuration at whatever was set previously (often
+           the minimal price-update set).  Brand names are resolved
+           separately via :meth:`get_all_brands` using the scalar
+           ``ProducerId`` field instead.
         """
         extended_fields = (
             "Id,ItemNumber,Title,Price,BuyingPrice,"
-            "Producer,ProducerId,CategoryId,Variants,"
+            "ProducerId,CategoryId,Variants,"
             "VariantTypes,Status"
         )
         extended_variant_fields = "Id,ItemNumber,Title,Price,BuyingPrice"
@@ -413,54 +423,46 @@ class DanDomainClient:
         batch_size: int = 200,
         progress_callback: Optional[Callable] = None,
     ) -> list[dict]:
-        """Fetch all products via paginated ``Product_GetAllWithLimit``.
+        """Fetch all products via ``Product_GetAll``.
 
-        Configures extended output fields (``Title``, ``Producer``,
-        ``ProducerId``, ``CategoryId``) for the duration of the call,
-        then restores the default fields.
+        Configures extended output fields (``Title``, ``ProducerId``,
+        ``CategoryId``, etc.) for the duration of the call, then
+        restores the default fields.
+
+        ``Product_GetAll`` returns every product in a single response,
+        which avoids pagination complexity and ensures all product
+        data (including ``ProducerId``) is returned reliably.
 
         Parameters
         ----------
         batch_size : int
-            Number of products to retrieve per API call (default 200).
+            Ignored — retained for API compatibility.
         progress_callback : callable, optional
-            Called after each batch with ``(fetched_so_far,)``.
+            Called once with ``(total_products,)`` after all products
+            have been deserialised.
 
         Returns
         -------
         list[dict]
             Plain-dict representations of each product, including
             ``Id``, ``ItemNumber``, ``Title``, ``Price``,
-            ``BuyingPrice``, ``Producer``, ``Variants``, etc.
+            ``BuyingPrice``, ``Variants``, etc.
         """
         # Temporarily request extended product fields.
         self._set_extended_fields()
 
+        result = self._call("Product_GetAll")
+
         products: list[dict] = []
-        start = 0
-
-        while True:
-            batch = self._call(
-                "Product_GetAllWithLimit",
-                Start=start, Length=batch_size,
-            )
-            if batch is None or (isinstance(batch, list) and len(batch) == 0):
-                break
-
-            items = batch if isinstance(batch, list) else [batch]
+        if result is not None:
+            items = result if isinstance(result, list) else [result]
             for item in items:
                 products.append(
                     _fix_mojibake(serialize_object(item, dict))
                 )
 
-            fetched = len(items)
-            if progress_callback:
-                progress_callback(len(products))
-
-            if fetched < batch_size:
-                break
-            start += fetched
-            time.sleep(BATCH_DELAY)
+        if progress_callback:
+            progress_callback(len(products))
 
         # Restore default output fields
         self._set_output_fields()

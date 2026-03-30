@@ -1046,17 +1046,19 @@ else:  # Import from API
 
                 # Hydrate Producer on each product using the brands map
                 # so that brand names appear in the PRODUCER column.
+                # Always prefer the brand name from get_all_brands()
+                # because the Producer complex User object returned by
+                # product GET calls is often empty or incomplete.
                 if _brands_map:
                     for p in raw_products:
-                        if not p.get("Producer"):
-                            pid = p.get("ProducerId")
-                            if pid is not None:
-                                try:
-                                    _bname = _brands_map.get(int(pid))
-                                    if _bname:
-                                        p["Producer"] = _bname
-                                except (ValueError, TypeError):
-                                    pass
+                        pid = p.get("ProducerId")
+                        if pid is not None:
+                            try:
+                                _bname = _brands_map.get(int(pid))
+                                if _bname:
+                                    p["Producer"] = _bname
+                            except (ValueError, TypeError):
+                                pass
 
                 # Exclude products explicitly marked inactive
                 if only_online:
