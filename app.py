@@ -1041,7 +1041,7 @@ else:  # Import from API
                         # User object is not populated by Product_SetFields;
                         # only ProducerId (scalar) is returned reliably.
                         # Pass ProducerIds so that get_all_brands() can
-                        # fall back to Product_GetByBrand when the
+                        # fall back to User_GetById when the
                         # User_GetByGroup call returns nothing.
                         _producer_ids = []
                         for p in raw_products:

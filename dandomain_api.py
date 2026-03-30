@@ -374,7 +374,7 @@ class DanDomainClient:
         """
         try:
             result = self._call(
-                "User_GetByGroup", GroupId=BRAND_USER_GROUP_ID,
+                "User_GetByGroup", UserGroupId=BRAND_USER_GROUP_ID,
             )
         except DanDomainAPIError:
             logger.warning(
@@ -399,15 +399,15 @@ class DanDomainClient:
                     pass
         return brands
 
-    def _get_brands_via_products(
+    def _get_brands_via_users(
         self,
         producer_ids: list[int],
     ) -> dict[int, str]:
-        """Discover brand names by fetching one product per brand.
+        """Discover brand names by fetching each producer as a User.
 
-        For each unique ``ProducerId``, calls ``Product_GetByBrand``
-        with the ``Producer`` field included in ``Product_SetFields``,
-        then extracts the brand name from the first returned product.
+        For each unique ``ProducerId``, calls ``User_GetById`` to
+        retrieve the brand's ``User`` object and extracts the display
+        name from it.
 
         This is a **fallback** for when ``User_GetByGroup`` returns no
         data.
@@ -427,44 +427,21 @@ class DanDomainClient:
             return {}
 
         unique_ids = set(producer_ids)
-
-        # Temporarily include Producer so that brand names are returned.
-        brand_fields = "Id,ProducerId,Producer"
-        try:
-            self._call("Product_SetFields", Fields=brand_fields)
-        except DanDomainAPIError:
-            logger.warning(
-                "Could not set brand-discovery product fields"
-            )
-            return {}
-
         brands: dict[int, str] = {}
+
         for pid in unique_ids:
             try:
-                result = self._call(
-                    "Product_GetByBrand", BrandId=pid,
-                )
+                result = self._call("User_GetById", UserId=pid)
             except DanDomainAPIError:
                 continue
 
             if result is None:
                 continue
 
-            items = result if isinstance(result, list) else [result]
-            if not items:
-                continue
-
-            # Only need the first product to extract the brand name.
-            product = _fix_mojibake(serialize_object(items[0], dict))
-            producer = product.get("Producer")
-            name = (
-                self._extract_brand_name(producer) if producer else ""
-            )
+            user = _fix_mojibake(serialize_object(result, dict))
+            name = self._extract_brand_name(user)
             if name:
                 brands[pid] = name
-
-        # Restore default output fields.
-        self._set_output_fields()
 
         return brands
 
@@ -480,18 +457,17 @@ class DanDomainClient:
 
         1. **Primary** — ``User_GetByGroup`` on the *Mærker* user
            group (fast, single call).
-        2. **Fallback** — ``Product_GetByBrand`` per unique
-           ``ProducerId``, extracting the ``Producer`` field from
-           the first returned product.  Only attempted when the
-           primary call returns nothing **and** ``producer_ids``
-           are supplied.
+        2. **Fallback** — ``User_GetById`` per unique ``ProducerId``,
+           fetching each producer's ``User`` object to extract the
+           brand name.  Only attempted when the primary call returns
+           nothing **and** ``producer_ids`` are supplied.
 
         Parameters
         ----------
         producer_ids : list[int], optional
             ``ProducerId`` values from already-fetched products.
             Used by the fallback strategy to discover brand names
-            via ``Product_GetByBrand``.
+            via ``User_GetById``.
 
         Returns
         -------
@@ -503,10 +479,10 @@ class DanDomainClient:
         if not brands and producer_ids:
             logger.info(
                 "User_GetByGroup returned no brands; falling back "
-                "to Product_GetByBrand for %d unique producer IDs",
+                "to User_GetById for %d unique producer IDs",
                 len(set(producer_ids)),
             )
-            brands = self._get_brands_via_products(producer_ids)
+            brands = self._get_brands_via_users(producer_ids)
 
         return brands
 
