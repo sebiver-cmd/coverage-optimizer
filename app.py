@@ -1092,7 +1092,6 @@ else:  # Import from API
                         f"✅ Loaded **{len(raw_df)}** product rows "
                         f"({len(raw_products)} base products)."
                     )
-                    st.rerun()
             except (DanDomainAPIError, ValueError, AttributeError) as exc:
                 st.error(f"❌ API import failed: {exc}")
                 _import_error = True
