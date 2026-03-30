@@ -969,12 +969,35 @@ else:  # Import from API
             unsafe_allow_html=True,
         )
     else:
-        # --- Single-step: fetch products (brands are extracted from
-        #     the product data — no separate brand-loading call). -------
+        # --- Load brands first, then fetch products. -------------------
         _api_brands_available = st.session_state.get("_api_brands", [])
         _api_brand_id_map = st.session_state.get("_api_brand_id_map", {})
 
-        # Filtering controls (brand filter populated after first fetch)
+        # Button to load brands from the user group BEFORE products
+        if st.button("🔍 Load Brands", disabled=bool(_api_brands_available)):
+            try:
+                with st.spinner("Loading brands from user group…"):
+                    with DanDomainClient(api_username, api_password) as client:
+                        _brands_map = client.get_all_brands()
+                if _brands_map:
+                    # get_all_brands returns {ProducerId: brand_name}
+                    # _api_brand_id_map needs {brand_name: ProducerId}
+                    _api_brand_id_map = {
+                        name: pid for pid, name in _brands_map.items()
+                    }
+                    _api_brands_available = sorted(_brands_map.values())
+                    st.session_state["_api_brands"] = _api_brands_available
+                    st.session_state["_api_brand_id_map"] = _api_brand_id_map
+                    st.rerun()
+                else:
+                    st.warning(
+                        "No brands found in user group. "
+                        "Brands will be extracted from products after fetch."
+                    )
+            except (DanDomainAPIError, ValueError, AttributeError) as exc:
+                st.error(f"❌ Failed to load brands: {exc}")
+
+        # Filtering controls (brand filter populated after Load Brands)
         api_filter_col1, api_filter_col2 = st.columns(2)
         with api_filter_col1:
             selected_brands = st.multiselect(
@@ -985,7 +1008,7 @@ else:  # Import from API
                 placeholder=(
                     "All brands (no filter)"
                     if _api_brands_available
-                    else "Fetch products first"
+                    else "Load brands first"
                 ),
                 disabled=not _api_brands_available,
                 help=(
@@ -1037,12 +1060,11 @@ else:  # Import from API
                                 progress_callback=_api_progress,
                             )
 
-                        # Fetch brands separately — the Producer complex
-                        # User object is not populated by Product_SetFields;
-                        # only ProducerId (scalar) is returned reliably.
-                        # Pass ProducerIds so that get_all_brands() can
-                        # fall back to User_GetById when the
-                        # User_GetByGroup call returns nothing.
+                        # Use brands already loaded via "Load Brands",
+                        # or fetch them now as fallback.  Pass ProducerIds
+                        # so get_all_brands() can fall back to
+                        # User_GetById when User_GetByGroup returns
+                        # nothing.
                         _producer_ids = []
                         for p in raw_products:
                             _pid = p.get("ProducerId")
@@ -1051,9 +1073,23 @@ else:  # Import from API
                                     _producer_ids.append(int(_pid))
                                 except (ValueError, TypeError):
                                     pass
-                        _brands_map = client.get_all_brands(
-                            producer_ids=_producer_ids,
+
+                        # Reuse pre-loaded brand map if available;
+                        # otherwise fetch from API now.
+                        _existing_brand_id_map = st.session_state.get(
+                            "_api_brand_id_map", {},
                         )
+                        if _existing_brand_id_map:
+                            # Invert {name: pid} → {pid: name}
+                            _brands_map = {
+                                pid: name
+                                for name, pid in
+                                _existing_brand_id_map.items()
+                            }
+                        else:
+                            _brands_map = client.get_all_brands(
+                                producer_ids=_producer_ids,
+                            )
 
                     progress_text.empty()
 
@@ -1094,6 +1130,15 @@ else:  # Import from API
                     # already fetched — zero extra API calls.
                     brand_id_map = _build_brand_id_map(raw_products)
 
+                    # Always merge with pre-loaded brands (from
+                    # "Load Brands" / previous fetches) so the full
+                    # brand list is preserved.  Product-derived entries
+                    # take precedence over pre-loaded ones.
+                    prev_map = st.session_state.get(
+                        "_api_brand_id_map", {},
+                    )
+                    brand_id_map = {**prev_map, **brand_id_map}
+
                     if _use_brand_fetch:
                         # Targeted fetch — merge into existing data so
                         # switching brands later still works.
@@ -1110,17 +1155,19 @@ else:  # Import from API
                                 "PRODUCER",
                                 key=lambda s: s.str.lower(),
                             ).reset_index(drop=True)
-                        # Merge new brand IDs into existing map
-                        prev_map = st.session_state.get(
-                            "_api_brand_id_map", {},
-                        )
-                        brand_id_map = {**prev_map, **brand_id_map}
 
                     # Persist everything in session state
                     st.session_state["_api_raw_df"] = raw_df
                     st.session_state["_api_brand_id_map"] = brand_id_map
+                    # Merge product-based brands with pre-loaded ones
+                    _product_brands = {
+                        b for b in raw_df["PRODUCER"].tolist() if b
+                    }
+                    _preloaded_brands = set(
+                        st.session_state.get("_api_brands", [])
+                    )
                     st.session_state["_api_brands"] = sorted(
-                        {b for b in raw_df["PRODUCER"].tolist() if b}
+                        _product_brands | _preloaded_brands
                     )
 
                     st.success(
