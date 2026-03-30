@@ -1034,14 +1034,15 @@ else:  # Import from API
                             )
                     progress_text.empty()
 
-                # Apply online filter – exclude products explicitly marked
-                # as offline rather than requiring an explicit "online" flag,
-                # so products with a missing / None Online field are kept.
+                # Apply active filter – exclude products explicitly marked
+                # as inactive (Status=False) rather than requiring an
+                # explicit flag, so products with a missing / None Status
+                # field are kept.
                 if only_online:
                     raw_products = [
                         p for p in raw_products
-                        if p.get('Online') is not False
-                        and str(p.get('Online', '')).lower() not in ('false', '0', 'no')
+                        if p.get('Status') is not False
+                        and str(p.get('Status', '')).lower() not in ('false', '0', 'no')
                     ]
 
                 if not raw_products:
