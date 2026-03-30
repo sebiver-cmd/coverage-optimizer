@@ -335,6 +335,28 @@ class DanDomainClient:
             raise ValueError(f"Price exceeds sanity limit ({_MAX_PRICE:,.0f})")
         return round(float(price), 2)
 
+    # -- user / brand field configuration ------------------------------------
+
+    def _set_user_output_fields(self) -> None:
+        """Configure which fields User GET responses include.
+
+        ``User_SetFields`` controls which attributes appear in the
+        ``User`` objects returned by ``User_GetByGroup``,
+        ``User_GetById``, etc.
+
+        We request at least ``Id``, ``Company``, ``Firstname`` and
+        ``Lastname`` so that :meth:`_extract_brand_name` can always
+        resolve a display name.
+        """
+        user_fields = "Id,Company,Firstname,Lastname"
+        try:
+            self._call("User_SetFields", Fields=user_fields)
+        except DanDomainAPIError:
+            logger.warning(
+                "Could not set user output fields; "
+                "brand names may not be populated correctly",
+            )
+
     # -- internal: brand helpers ---------------------------------------------
 
     @staticmethod
@@ -372,6 +394,10 @@ class DanDomainClient:
             Mapping of ``ProducerId`` → display brand name, or empty
             dict when the user-group call fails / returns nothing.
         """
+        # Ensure the API returns the fields we need for brand-name
+        # extraction (Id, Company, Firstname, Lastname).
+        self._set_user_output_fields()
+
         try:
             result = self._call(
                 "User_GetByGroup", UserGroupId=BRAND_USER_GROUP_ID,
@@ -425,6 +451,10 @@ class DanDomainClient:
         """
         if not producer_ids:
             return {}
+
+        # Ensure the API returns the fields we need for brand-name
+        # extraction (Id, Company, Firstname, Lastname).
+        self._set_user_output_fields()
 
         unique_ids = set(producer_ids)
         brands: dict[int, str] = {}
