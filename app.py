@@ -454,7 +454,7 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
         title = p.get('Title', '')
         item_number = p.get('ItemNumber', '')
         price = p.get('Price', 0)
-        buy_price = p.get('BuyingPrice', 0)
+        buy_price = p.get('CostPrice', 0)
         # Producer is a User object in the API; extract the brand name from it.
         # After serialize_object() it becomes a dict with Company, Firstname, etc.
         _producer_raw = p.get('Producer')
@@ -494,7 +494,7 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
             for v in items:
                 vid = v.get('Id', '') if isinstance(v, dict) else getattr(v, 'Id', '')
                 vprice = v.get('Price', price) if isinstance(v, dict) else getattr(v, 'Price', price)
-                vbuy = v.get('BuyingPrice', buy_price) if isinstance(v, dict) else getattr(v, 'BuyingPrice', buy_price)
+                vbuy = v.get('CostPrice', buy_price) if isinstance(v, dict) else getattr(v, 'CostPrice', buy_price)
                 rows.append({
                     'PRODUCT_ID': format_int_col(pid),
                     'TITLE_DK': title,

@@ -3,7 +3,7 @@
 Uses the HostedShop SOAP API (``https://api.hostedshop.dk/service.wsdl``)
 to read and update product data on a DanDomain webshop.
 
-Price updates use **partial updates** — only ``Price`` and ``BuyingPrice``
+Price updates use **partial updates** — only ``Price`` and ``CostPrice``
 are sent so that other product data is never accidentally overwritten:
 
 *   Base products → ``Product_Update`` with a minimal ``ProductUpdate``
@@ -198,8 +198,8 @@ class DanDomainClient:
         We request at least ``Id`` (needed for updates), ``ItemNumber``
         and ``Variants`` so that lookups always return enough data.
         """
-        product_fields = "Id,ItemNumber,Price,BuyingPrice,Variants"
-        variant_fields = "Id,ItemNumber,Price,BuyingPrice"
+        product_fields = "Id,ItemNumber,Price,CostPrice,Variants"
+        variant_fields = "Id,ItemNumber,Price,CostPrice"
         try:
             self._call("Product_SetFields", Fields=product_fields)
         except DanDomainAPIError:
@@ -218,11 +218,11 @@ class DanDomainClient:
         :meth:`_set_output_fields` afterwards to restore the defaults.
         """
         extended_fields = (
-            "Id,ItemNumber,Title,Price,BuyingPrice,"
+            "Id,ItemNumber,Title,Price,CostPrice,"
             "Producer,ProducerId,CategoryId,Variants,"
             "VariantTypes,Online"
         )
-        extended_variant_fields = "Id,ItemNumber,Title,Price,BuyingPrice"
+        extended_variant_fields = "Id,ItemNumber,Title,Price,CostPrice"
         try:
             self._call("Product_SetFields", Fields=extended_fields)
         except DanDomainAPIError:
@@ -330,7 +330,7 @@ class DanDomainClient:
         list[dict]
             Plain-dict representations of each product, including
             ``Id``, ``ItemNumber``, ``Title``, ``Price``,
-            ``BuyingPrice``, ``Producer``, ``Variants``, etc.
+            ``CostPrice``, ``Producer``, ``Variants``, etc.
         """
         # Temporarily request extended product fields.
         self._set_extended_fields()
@@ -479,7 +479,7 @@ class DanDomainClient:
     ) -> dict:
         """Update the sales price and/or cost price of a product or variant.
 
-        Uses **partial updates** so that only ``Price`` and ``BuyingPrice``
+        Uses **partial updates** so that only ``Price`` and ``CostPrice``
         are transmitted — other product data (title, description, stock,
         SEO settings …) is never touched.
 
@@ -503,7 +503,7 @@ class DanDomainClient:
             variant directly via ``Product_UpdateVariant`` instead of
             the base product.
         buy_price : float, optional
-            When provided the product's *BuyingPrice* (cost / buying
+            When provided the product's *CostPrice* (cost / purchase
             price) is also updated.
         product_id : str
             Optional product ``Id`` from the import file.  When
@@ -548,7 +548,7 @@ class DanDomainClient:
             if new_price is not None:
                 variant_data["Price"] = new_price
             if buy_price is not None:
-                variant_data["BuyingPrice"] = buy_price
+                variant_data["CostPrice"] = buy_price
             result = self._call(
                 "Product_UpdateVariant", VariantData=variant_data,
             )
@@ -582,7 +582,7 @@ class DanDomainClient:
                         if new_price is not None:
                             vdata["Price"] = new_price
                         if buy_price is not None:
-                            vdata["BuyingPrice"] = buy_price
+                            vdata["CostPrice"] = buy_price
                         result = self._call(
                             "Product_UpdateVariant",
                             VariantData=vdata,
@@ -606,7 +606,7 @@ class DanDomainClient:
             if new_price is not None:
                 product_data["Price"] = new_price
             if buy_price is not None:
-                product_data["BuyingPrice"] = buy_price
+                product_data["CostPrice"] = buy_price
             result = self._call(
                 "Product_Update", ProductData=product_data,
             )
@@ -626,7 +626,7 @@ class DanDomainClient:
     ) -> dict:
         """Batch-update product prices using partial updates.
 
-        Each update sends only the ``Price`` and/or ``BuyingPrice`` fields
+        Each update sends only the ``Price`` and/or ``CostPrice`` fields
         to avoid accidentally overwriting other product data.
 
         *   Base products are updated via ``Product_Update`` with a
