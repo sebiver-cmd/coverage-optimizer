@@ -130,7 +130,7 @@ Then STOP and say: “Say ‘Next’ to continue.”
 # Stage 3 — Real apply (writes enabled) with strict guardrails
 
 ## Task 3.1 — Apply stored manifest: `POST /apply-prices/apply` (small batches)
-- [ ] Task 3.1
+- [x] Task 3.1
 
 ### Claude prompt (copy/paste)
 ```text
@@ -192,20 +192,20 @@ Then STOP and say: “Say ‘Next’ to continue.”
 # Stage 4 — Production safety improvements
 
 ## Task 4.1 — Per‑row margin/cost guardrails (partial success)
-- [ ] Task 4.1
+- [x] Task 4.1
 
 ## Task 4.2 — Environment gating (enable apply only when SB_OPTIMA_ENABLE_APPLY=true)
-- [ ] Task 4.2
+- [x] Task 4.2
 
 ## Task 4.3 — Add `GET /health` and use it for UI connectivity status
-- [ ] Task 4.3
+- [x] Task 4.3
 
 ---
 
 # Stage 5 — Optional analyst features (read‑only)
 
 ## Task 5.1 — Risk view (largest decreases, near-cost warnings, histogram)
-- [ ] Task 5.1
+- [x] Task 5.1
 
 ---
 
@@ -216,8 +216,8 @@ Then STOP and say: “Say ‘Next’ to continue.”
 - [x] 1.3
 - [x] 2.1
 - [x] 2.5.1
-- [ ] 3.1
-- [ ] 4.1
-- [ ] 4.2
-- [ ] 4.3
-- [ ] 5.1
+- [x] 3.1
+- [x] 4.1
+- [x] 4.2
+- [x] 4.3
+- [x] 5.1
