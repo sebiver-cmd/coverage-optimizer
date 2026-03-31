@@ -342,6 +342,7 @@ def _render_barcode_image(ean_value: str) -> io.BytesIO | None:
     except Exception:
         return None
     buf.seek(0)
+    # fpdf2 uses the .name attribute to infer the image format (PNG).
     buf.name = 'barcode.png'
     return buf
 
@@ -419,9 +420,7 @@ def generate_barcode_pdf(export_df: pd.DataFrame) -> bytes:
         variant = str(row.get('Variant Name', '') or '')
         if variant:
             title = f"{title} - {variant}"
-        # Sanitise to Latin-1 for built-in Helvetica font
-        title = title.encode('latin-1', 'replace').decode('latin-1')
-        pdf.cell(label_w - 6, 3.5, title, new_x='LMARGIN', new_y='NEXT')
+        pdf.cell(label_w - 6, 3.5, _latin1(title), new_x='LMARGIN', new_y='NEXT')
 
         amount = row.get('Amount', 1)
         try:
