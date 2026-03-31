@@ -89,7 +89,7 @@ def dry_run_apply(payload: DryRunRequest) -> DryRunResponse:
     comparison with percentage changes.
     """
 
-    # Reuse the existing optimisation endpoint logic (read-only).
+    # Reuse the existing optimization endpoint logic (read-only).
     opt_response = run_optimization(payload.optimize_payload)
 
     # Build the change rows from the optimisation result.
