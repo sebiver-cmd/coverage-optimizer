@@ -95,7 +95,7 @@ with st.sidebar:
     )
 
     # --- Backend connectivity status ---
-    _ok, _msg = check_backend_connected(backend_url, api_username, api_password)
+    _ok, _msg = check_backend_connected(backend_url)
     if _ok:
         st.success(_msg)
     else:

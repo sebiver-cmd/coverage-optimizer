@@ -44,26 +44,17 @@ def normalize_base_url(url: str) -> str:
 
 def check_backend_connected(
     base_url: str,
-    api_username: str,
-    api_password: str,
     timeout_s: float = 5.0,
 ) -> tuple[bool, str]:
     """Lightweight connectivity check against the FastAPI backend.
 
-    Sends ``GET /brands`` (the lightest existing endpoint) and returns a
-    ``(ok, message)`` tuple so the caller can display status without
-    having to know HTTP details.
+    Sends ``GET /health`` — a simple liveness probe that requires no
+    credentials — and returns a ``(ok, message)`` tuple so the caller
+    can display status without having to know HTTP details.
     """
-    url = f"{normalize_base_url(base_url)}/brands"
+    url = f"{normalize_base_url(base_url)}/health"
     try:
-        resp = requests.get(
-            url,
-            params={
-                "api_username": api_username,
-                "api_password": api_password,
-            },
-            timeout=timeout_s,
-        )
+        resp = requests.get(url, timeout=timeout_s)
         resp.raise_for_status()
         return True, "Backend connected"
     except requests.RequestException as exc:
