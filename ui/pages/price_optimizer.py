@@ -1503,14 +1503,25 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                 augmented_skus: list[str] = []
                 title_lookup: dict[str, str] = {}
 
-                for _, row in work_df.iterrows():
-                    num = str(row.get('NUMBER', '') or '').strip()
-                    vtype = str(
-                        row.get('VARIANT_TYPES', '') or ''
-                    ).strip()
-                    title = str(
-                        row.get('TITLE_DK', '') or ''
-                    ).strip()
+                _nums = (
+                    work_df['NUMBER'].fillna('').astype(str)
+                    .str.strip()
+                )
+                _vtypes = (
+                    work_df['VARIANT_TYPES'].fillna('').astype(str)
+                    .str.strip()
+                    if 'VARIANT_TYPES' in work_df.columns
+                    else pd.Series('', index=work_df.index)
+                )
+                _titles = (
+                    work_df['TITLE_DK'].fillna('').astype(str)
+                    .str.strip()
+                    if 'TITLE_DK' in work_df.columns
+                    else pd.Series('', index=work_df.index)
+                )
+                for num, vtype, title in zip(
+                    _nums, _vtypes, _titles
+                ):
                     if not num:
                         continue
                     if num not in composite_lookup:
@@ -1576,13 +1587,7 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                 # Build variant lookup for display in suggestions
                 _variant_lookup: dict[str, list[str]] = {}
                 if 'VARIANT_TYPES' in work_df.columns:
-                    for _, _r in work_df.iterrows():
-                        _n = str(
-                            _r.get('NUMBER', '') or ''
-                        ).strip()
-                        _vt = str(
-                            _r.get('VARIANT_TYPES', '') or ''
-                        ).strip()
+                    for _n, _vt in zip(_nums, _vtypes):
                         if _n and _vt:
                             _variant_lookup.setdefault(
                                 _n, []
