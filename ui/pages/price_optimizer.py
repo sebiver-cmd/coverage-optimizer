@@ -1989,9 +1989,7 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
                 # Step 3: build the export with manual overrides
                 export_df = build_export_from_matches(
                     work_df, mdata,
-                    manual_overrides=(
-                        manual_overrides if manual_overrides else None
-                    ),
+                    manual_overrides=manual_overrides or None,
                 )
 
                 matched_count = len(auto_matched) + len(manual_overrides)
