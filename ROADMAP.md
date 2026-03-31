@@ -254,6 +254,9 @@ Finish by:
 - confirming tests pass
 
 Then STOP and say: “Say ‘Next’ to continue.”
+```
+
+---
 
 ## Task 4.2 — Environment gating (enable apply only when SB_OPTIMA_ENABLE_APPLY=true)
 - [ ] Task 4.2
@@ -317,6 +320,9 @@ Finish by:
 - confirming tests pass
 
 Then STOP and say: “Say ‘Next’ to continue.”
+```
+
+---
 
 ## Task 4.3 — Add `GET /health` and use it for UI connectivity status
 - [ ] Task 4.3
@@ -375,7 +381,9 @@ Finish by:
 - confirming tests pass
 
 Then STOP and say: “Say ‘Next’ to continue.”
+```
 
+---
 ---
 
 # Stage 5 — Optional analyst features (read‑only)
@@ -443,6 +451,7 @@ Finish by:
 - confirming tests pass
 
 Then STOP and say: “Say ‘Next’ to continue.”
+```
 
 ---
 
