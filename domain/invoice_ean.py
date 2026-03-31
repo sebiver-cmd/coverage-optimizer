@@ -376,6 +376,11 @@ def _variant_in_context(vt: str, context: str) -> bool:
     Uses word-boundary matching so that short names like ``"S"`` or ``"L"``
     do not accidentally match inside unrelated words (e.g. ``"PSW"``).
 
+    Composite variants separated by ``/`` or ``//`` (e.g. ``"rød//Large"``)
+    are split and each part is checked independently — returns ``True`` if
+    **any** part matches (allowing partial info such as only size or only
+    colour to narrow the candidate set).
+
     Also recognises standard size abbreviations: ``XS`` ↔ ``X-Small``,
     ``S`` ↔ ``Small``, ``M`` ↔ ``Medium``, ``L`` ↔ ``Large``,
     ``XL`` ↔ ``X-Large``, and so on.
@@ -383,6 +388,13 @@ def _variant_in_context(vt: str, context: str) -> bool:
     vt = vt.strip()
     if not vt:
         return False
+
+    # Split composite variants on "/" (handles both "/" and "//")
+    if '/' in vt:
+        parts = [p.strip() for p in vt.split('/') if p.strip()]
+        if len(parts) > 1:
+            return any(_variant_in_context(part, context) for part in parts)
+
     key = vt.lower()
     context_lower = context.lower()
 

@@ -1494,7 +1494,46 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                     .astype(str).str.strip()
                     .loc[lambda s: s != '']
                 )
-                product_skus = work_df['NUMBER'].dropna().astype(str).str.strip()
+
+                # Build augmented product-SKU pool with composite
+                # keys (NUMBER + VARIANT_TYPES) so that supplier
+                # SKUs containing variant info can match directly —
+                # same approach used by the EAN matching flow.
+                composite_lookup: dict[str, tuple[str, str]] = {}
+                augmented_skus: list[str] = []
+                title_lookup: dict[str, str] = {}
+
+                _nums = (
+                    work_df['NUMBER'].fillna('').astype(str)
+                    .str.strip()
+                )
+                _vtypes = (
+                    work_df['VARIANT_TYPES'].fillna('').astype(str)
+                    .str.strip()
+                    if 'VARIANT_TYPES' in work_df.columns
+                    else pd.Series('', index=work_df.index)
+                )
+                _titles = (
+                    work_df['TITLE_DK'].fillna('').astype(str)
+                    .str.strip()
+                    if 'TITLE_DK' in work_df.columns
+                    else pd.Series('', index=work_df.index)
+                )
+                for num, vtype, title in zip(
+                    _nums, _vtypes, _titles
+                ):
+                    if not num:
+                        continue
+                    if num not in composite_lookup:
+                        composite_lookup[num] = (num, '')
+                        augmented_skus.append(num)
+                        if title:
+                            title_lookup[num] = title
+                    if vtype:
+                        composite = f"{num} {vtype}"
+                        if composite not in composite_lookup:
+                            composite_lookup[composite] = (num, vtype)
+                            augmented_skus.append(composite)
 
                 # Build name mappings for enhanced matching
                 supplier_names = None
@@ -1503,20 +1542,31 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                         sup_df[sup_sku_col].astype(str).str.strip(),
                         sup_df[sup_desc_col].astype(str).str.strip(),
                     ))
-                product_names = None
-                if 'TITLE_DK' in work_df.columns:
-                    product_names = dict(zip(
-                        work_df['NUMBER'].astype(str).str.strip(),
-                        work_df['TITLE_DK'].astype(str).str.strip(),
-                    ))
+                product_names = (
+                    title_lookup if title_lookup else None
+                )
 
                 matches = match_supplier_to_products(
                     supplier_skus.tolist(),
-                    product_skus.tolist(),
+                    augmented_skus,
                     threshold=match_threshold,
                     supplier_names=supplier_names,
                     product_names=product_names,
                 )
+
+                # Resolve augmented keys back to plain NUMBERs
+                # so that downstream code can look up products.
+                for sup_sku, mentry in matches.items():
+                    mk = mentry['sku']
+                    if mk is not None and mk in composite_lookup:
+                        mentry['sku'] = composite_lookup[mk][0]
+                    new_alts = []
+                    for alt_key, alt_score in mentry['alternatives']:
+                        num = composite_lookup.get(
+                            alt_key, (alt_key, '')
+                        )[0]
+                        new_alts.append((num, alt_score))
+                    mentry['alternatives'] = new_alts
 
                 disc_col_name = (
                     sup_disc_col if sup_disc_col != '(none)' else None
@@ -1533,6 +1583,15 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                             disc_df, use_container_width=True,
                             hide_index=True,
                         )
+
+                # Build variant lookup for display in suggestions
+                _variant_lookup: dict[str, list[str]] = {}
+                if 'VARIANT_TYPES' in work_df.columns:
+                    for _n, _vt in zip(_nums, _vtypes):
+                        if _n and _vt:
+                            _variant_lookup.setdefault(
+                                _n, []
+                            ).append(_vt)
 
                 # Split into auto-matched and unmatched
                 auto_matches = {
@@ -1567,6 +1626,14 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                                     lbl += (
                                         f" \u2014 "
                                         f"{product_names[alt_sku]}"
+                                    )
+                                if alt_sku in _variant_lookup:
+                                    lbl += (
+                                        " ["
+                                        + ", ".join(
+                                            _variant_lookup[alt_sku]
+                                        )
+                                        + "]"
                                     )
                                 lbl += f" ({alt_score}%)"
                                 options.append(lbl)
@@ -1920,6 +1987,7 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
 
                 raw_matches = mdata['matches']
                 title_lookup = mdata['title_lookup']
+                ean_composite = mdata['composite_lookup']
 
                 # Build invoice-side name map for display
                 inv_names: dict[str, str] = {}
@@ -1962,11 +2030,18 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
                             options = ['(skip \u2014 no match)']
                             for alt_sku, alt_score in alts:
                                 lbl = alt_sku
-                                if alt_sku in title_lookup:
+                                # Show product title
+                                _num, _vt = ean_composite.get(
+                                    alt_sku, (alt_sku, '')
+                                )
+                                if _num in title_lookup:
                                     lbl += (
                                         f" \u2014 "
-                                        f"{title_lookup[alt_sku]}"
+                                        f"{title_lookup[_num]}"
                                     )
+                                # Show variant name when present
+                                if _vt:
+                                    lbl += f" [{_vt}]"
                                 lbl += f" ({alt_score}%)"
                                 options.append(lbl)
 
