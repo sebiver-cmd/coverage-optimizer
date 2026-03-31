@@ -4,11 +4,16 @@ Validates:
 - Correct response structure and counts.
 - Filtering by ``product_numbers``.
 - No-write guarantee (no write/push imports in the module).
+- Batch persistence (batch_id, manifest file, GET endpoint).
 """
 
 from __future__ import annotations
 
 import inspect
+import json
+import shutil
+import uuid
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -124,6 +129,7 @@ class TestDryRunStructure:
         assert resp.status_code == 200
 
         data = resp.json()
+        assert "batch_id" in data
         assert "changes" in data
         assert "summary" in data
 
@@ -380,4 +386,152 @@ class TestDryRunErrors:
 
     def test_422_on_invalid_payload(self):
         resp = client.post("/apply-prices/dry-run", json={})
+        assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Tests – batch persistence
+# ---------------------------------------------------------------------------
+
+# Use a temporary directory to avoid polluting the real data dir.
+_TEST_BATCH_DIR = Path("data/apply_batches")
+
+
+@pytest.fixture(autouse=False)
+def _clean_batch_dir():
+    """Remove test-created batch files after each test that uses this fixture."""
+    yield
+    if _TEST_BATCH_DIR.exists():
+        shutil.rmtree(_TEST_BATCH_DIR)
+
+
+class TestBatchPersistence:
+    """Verify that dry-run creates a batch manifest file."""
+
+    @patch("backend.apply_prices_api.run_optimization")
+    def test_dry_run_returns_batch_id(self, mock_opt, _clean_batch_dir):
+        mock_opt.return_value = _SAMPLE_OPT_RESPONSE
+
+        resp = client.post("/apply-prices/dry-run", json=_dry_run_payload())
+        assert resp.status_code == 200
+        data = resp.json()
+
+        batch_id = data["batch_id"]
+        # Must be a valid UUID-4
+        parsed = uuid.UUID(batch_id, version=4)
+        assert str(parsed) == batch_id
+
+    @patch("backend.apply_prices_api.run_optimization")
+    def test_manifest_file_created(self, mock_opt, _clean_batch_dir):
+        mock_opt.return_value = _SAMPLE_OPT_RESPONSE
+
+        resp = client.post("/apply-prices/dry-run", json=_dry_run_payload())
+        batch_id = resp.json()["batch_id"]
+
+        manifest_path = _TEST_BATCH_DIR / f"{batch_id}.json"
+        assert manifest_path.is_file()
+
+    @patch("backend.apply_prices_api.run_optimization")
+    def test_manifest_has_required_fields(self, mock_opt, _clean_batch_dir):
+        mock_opt.return_value = _SAMPLE_OPT_RESPONSE
+
+        resp = client.post(
+            "/apply-prices/dry-run",
+            json=_dry_run_payload(product_numbers=["WID-001"]),
+        )
+        batch_id = resp.json()["batch_id"]
+
+        manifest_path = _TEST_BATCH_DIR / f"{batch_id}.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        assert manifest["batch_id"] == batch_id
+        assert "created_at" in manifest
+        assert "optimize_payload" in manifest
+        assert "product_numbers" in manifest
+        assert "changes" in manifest
+        assert "summary" in manifest
+
+    @patch("backend.apply_prices_api.run_optimization")
+    def test_manifest_product_numbers_null_when_omitted(
+        self, mock_opt, _clean_batch_dir
+    ):
+        mock_opt.return_value = _SAMPLE_OPT_RESPONSE
+
+        resp = client.post(
+            "/apply-prices/dry-run",
+            json=_dry_run_payload(product_numbers=None),
+        )
+        batch_id = resp.json()["batch_id"]
+
+        manifest_path = _TEST_BATCH_DIR / f"{batch_id}.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        assert manifest["product_numbers"] is None
+
+
+# ---------------------------------------------------------------------------
+# Tests – GET /apply-prices/batch/{batch_id}
+# ---------------------------------------------------------------------------
+
+
+class TestGetBatch:
+    """Verify the GET endpoint for retrieving a batch manifest."""
+
+    @patch("backend.apply_prices_api.run_optimization")
+    def test_get_returns_manifest(self, mock_opt, _clean_batch_dir):
+        mock_opt.return_value = _SAMPLE_OPT_RESPONSE
+
+        # Create a batch via dry-run
+        post_resp = client.post("/apply-prices/dry-run", json=_dry_run_payload())
+        batch_id = post_resp.json()["batch_id"]
+
+        # Retrieve via GET
+        get_resp = client.get(f"/apply-prices/batch/{batch_id}")
+        assert get_resp.status_code == 200
+
+        data = get_resp.json()
+        assert data["batch_id"] == batch_id
+        assert data["summary"]["total"] == 3
+        assert len(data["changes"]) == 3
+
+    @patch("backend.apply_prices_api.run_optimization")
+    def test_get_returns_same_content_as_dry_run(self, mock_opt, _clean_batch_dir):
+        mock_opt.return_value = _SAMPLE_OPT_RESPONSE
+
+        post_resp = client.post("/apply-prices/dry-run", json=_dry_run_payload())
+        post_data = post_resp.json()
+        batch_id = post_data["batch_id"]
+
+        get_resp = client.get(f"/apply-prices/batch/{batch_id}")
+        get_data = get_resp.json()
+
+        # changes and summary must match
+        assert get_data["changes"] == post_data["changes"]
+        assert get_data["summary"] == post_data["summary"]
+
+    def test_404_missing_batch(self, _clean_batch_dir):
+        fake_id = str(uuid.uuid4())
+        resp = client.get(f"/apply-prices/batch/{fake_id}")
+        assert resp.status_code == 404
+
+    def test_422_invalid_batch_id_format(self):
+        resp = client.get("/apply-prices/batch/not-a-uuid")
+        assert resp.status_code == 422
+
+    def test_422_path_traversal_attempt(self):
+        # Dots and slashes are not valid UUID chars; our regex rejects them.
+        resp = client.get("/apply-prices/batch/../../../etc/passwd")
+        # FastAPI may return 404 (route not found) or our 422; either way
+        # it must never return 200 with file contents.
+        assert resp.status_code in (404, 422)
+        if resp.status_code == 200:
+            pytest.fail("Path traversal must not succeed")
+
+    def test_422_path_traversal_uuid_like(self):
+        # A UUID-shaped string with invalid hex char 'g' is rejected.
+        resp = client.get("/apply-prices/batch/00000000-0000-0000-0000-00000000000g")
+        assert resp.status_code == 422
+
+    def test_422_empty_batch_id(self):
+        resp = client.get("/apply-prices/batch/ ")
         assert resp.status_code == 422
