@@ -261,11 +261,11 @@ Then STOP and say: “Say ‘Next’ to continue.”
 ## Task 4.2 — Environment gating (enable apply only when SB_OPTIMA_ENABLE_APPLY=true)
 - [ ] Task 4.2
 
-Goal
+### Goal
 Prevent accidental real applies in environments where they shouldn’t happen (e.g., local dev, demo). Only allow the apply endpoint when a specific environment flag is enabled.
 
-Claude prompt (copy/paste)
-Text
+### Claude prompt (copy/paste)
+```text
 You are working in repo `sebiver-cmd/coverage-optimizer`.
 
 CRITICAL: Work on exactly ONE task: Task 4.2 only. Do not start any other tasks.
@@ -327,11 +327,11 @@ Then STOP and say: “Say ‘Next’ to continue.”
 ## Task 4.3 — Add `GET /health` and use it for UI connectivity status
 - [ ] Task 4.3
 
-Goal
+### Goal
 Provide a standard health endpoint that tells the UI and ops whether the backend is up, what version is running, and whether apply is enabled, and use it instead of hitting /brands for health.
 
-Claude prompt (copy/paste)
-Text
+### Claude prompt (copy/paste)
+```text
 You are working in repo `sebiver-cmd/coverage-optimizer`.
 
 CRITICAL: Work on exactly ONE task: Task 4.3 only. Do not start any other tasks.
@@ -391,11 +391,11 @@ Then STOP and say: “Say ‘Next’ to continue.”
 ## Task 5.1 — Risk view (largest decreases, near-cost warnings, histogram)
 - [ ] Task 5.1
 
-Goal
+### Goal
 Give analysts a “risk” lens on an optimization run: highlight large decreases, near-cost prices, and the distribution of percentage changes. This is read-only analysis on the optimization results.
 
-Claude prompt (copy/paste)
-Text
+### Claude prompt (copy/paste)
+```text
 You are working in repo `sebiver-cmd/coverage-optimizer`.
 
 CRITICAL: Work on exactly ONE task: Task 5.1 only. Do not start any other tasks.
