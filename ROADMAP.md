@@ -194,11 +194,187 @@ Then STOP and say: “Say ‘Next’ to continue.”
 ## Task 4.1 — Per‑row margin/cost guardrails (partial success)
 - [ ] Task 4.1
 
+### Goal
+Ensure **no individual product** is pushed below cost or below your global minimum coverage rate, while still allowing partial success (apply valid rows, reject unsafe ones with reasons).
+
+### Claude prompt (copy/paste)
+```text
+You are working in repo `sebiver-cmd/coverage-optimizer`.
+
+CRITICAL: Work on exactly ONE task: Task 4.1 only. Do not start any other tasks.
+
+Task 4.1 — Per-row margin/cost guardrails (partial success)
+
+Context:
+- There is already an optimization pipeline and (from Stage 3) an apply endpoint that can write price changes based on a batch manifest.
+- We now want an additional layer of safety at APPLY TIME for each individual row.
+
+Requirements:
+
+Backend:
+1) Add per-row guardrail checks during apply (in the apply pipeline, not in the optimizer):
+   - If a row has buy_price (or equivalent cost field):
+     - Block the change if new_price <= buy_price (no selling below buy price).
+   - Compute resulting coverage/margin using the same logic as optimization (MIN_COVERAGE_RATE constant).
+     - Block the change if resulting coverage < MIN_COVERAGE_RATE.
+2) Behavior on violations:
+   - Do NOT abort the whole batch just because a few rows fail.
+   - Instead:
+     - Apply all VALID rows.
+     - Collect FAILED rows with structured reasons (e.g., "below_cost", "below_min_coverage").
+3) Response shape:
+   - Extend the apply response (from Task 3.1) with:
+     - `failed: list[{NUMBER, reason, current_price, new_price, buy_price, current_coverage_pct, suggested_coverage_pct}]` (include whatever fields are already available; do not invent data that isn't in manifest).
+   - `applied_count` should reflect only successfully applied rows.
+
+4) Audit log:
+   - Ensure audit log entry records:
+     - number of attempted rows
+     - number_applied
+     - number_failed
+   - Do not log raw credentials or secrets.
+
+UI (Streamlit apply view):
+1) Update the Apply results section to:
+   - Show a small summary: "Applied X rows, blocked Y rows by safety rules."
+   - Show a table of failed rows with reasons (e.g., “Below cost”, “Below minimum coverage”).
+2) Keep this read-only and descriptive. Do NOT add overrides in this task.
+
+Tests:
+1) Unit/integration tests for apply logic:
+   - When all rows safe: all applied, failed empty.
+   - When some rows below cost: those rows in failed, others applied.
+   - When some rows below MIN_COVERAGE_RATE: those rows in failed, others applied.
+   - Mixed case: both cost and coverage violations appear with correct reasons.
+2) Ensure audit log test reflects applied vs failed counts.
+
+Finish by:
+- listing files changed
+- listing tests added/updated
+- confirming tests pass
+
+Then STOP and say: “Say ‘Next’ to continue.”
+
 ## Task 4.2 — Environment gating (enable apply only when SB_OPTIMA_ENABLE_APPLY=true)
 - [ ] Task 4.2
 
+Goal
+Prevent accidental real applies in environments where they shouldn’t happen (e.g., local dev, demo). Only allow the apply endpoint when a specific environment flag is enabled.
+
+Claude prompt (copy/paste)
+Text
+You are working in repo `sebiver-cmd/coverage-optimizer`.
+
+CRITICAL: Work on exactly ONE task: Task 4.2 only. Do not start any other tasks.
+
+Task 4.2 — Environment gating for apply (SB_OPTIMA_ENABLE_APPLY=true)
+
+Requirements:
+
+Backend:
+1) Add an environment configuration flag:
+   - Name: SB_OPTIMA_ENABLE_APPLY
+   - Values:
+     - absent or "false"/"0" => apply is DISABLED
+     - "true"/"1" => apply is ENABLED
+   - Parse this once at startup or via a small config helper.
+
+2) Update the real apply endpoint (from Task 3.1):
+   - If apply is DISABLED:
+     - Return 403 Forbidden (or 503 with clear message) for any request.
+     - Message should clearly say apply is disabled and controlled by SB_OPTIMA_ENABLE_APPLY.
+   - If ENABLED:
+     - Proceed with existing validations/guardrails from earlier tasks.
+
+3) Do NOT weaken any existing guardrails. This is an additional outer gate.
+
+UI (Streamlit):
+1) When loading the app, determine whether apply is enabled:
+   - Prefer to use a lightweight backend endpoint or configuration response if such exists.
+   - If there is no config endpoint yet, temporarily:
+     - Call the apply endpoint with a harmless probe OR add a small `/config` or `/health` endpoint (if not already implemented) that exposes an `apply_enabled` flag.
+   - In this task, you may add a minimal `/config` or enhance `/health` ONLY for this flag if needed, but do not add lots of extra fields (those belong to Task 4.3).
+
+2) In the Apply UI:
+   - If apply is disabled:
+     - Hide or disable the Apply button.
+     - Show an info/warning message like: "Apply to shop is disabled in this environment. Set SB_OPTIMA_ENABLE_APPLY=true to enable."
+   - If enabled:
+     - Show the normal Apply UI.
+
+Tests:
+1) Backend tests:
+   - With SB_OPTIMA_ENABLE_APPLY not set or set to false:
+     - Apply endpoint returns 403/503 with clear message.
+   - With SB_OPTIMA_ENABLE_APPLY=true:
+     - Apply endpoint passes through to existing logic (mock downstream behavior).
+2) UI tests (if you have any for Streamlit; otherwise rely on manual testing notes):
+   - At least verify the new flag-handling helpers in isolation if they exist.
+
+Finish by:
+- listing files changed
+- listing tests added/updated
+- confirming tests pass
+
+Then STOP and say: “Say ‘Next’ to continue.”
+
 ## Task 4.3 — Add `GET /health` and use it for UI connectivity status
 - [ ] Task 4.3
+
+Goal
+Provide a standard health endpoint that tells the UI and ops whether the backend is up, what version is running, and whether apply is enabled, and use it instead of hitting /brands for health.
+
+Claude prompt (copy/paste)
+Text
+You are working in repo `sebiver-cmd/coverage-optimizer`.
+
+CRITICAL: Work on exactly ONE task: Task 4.3 only. Do not start any other tasks.
+
+Task 4.3 — Health endpoint + Streamlit connectivity via /health
+
+Requirements:
+
+Backend:
+1) Add a GET /health endpoint (e.g., in backend/main.py or a dedicated module):
+   - Returns JSON like:
+     {
+       "status": "ok",
+       "version": "<app_version or git SHA if available>",
+       "apply_enabled": <bool>,    // from SB_OPTIMA_ENABLE_APPLY
+       "timestamp": "<UTC ISO8601>"
+     }
+   - status should be "ok" if the app is up and able to serve requests.
+   - version can be:
+     - a hard-coded __version__ constant, or
+     - derived from package metadata or env var (keep it simple for now).
+
+2) Do NOT perform slow or external checks in /health (no DanDomain calls, no DB migrations, etc.). It should be fast and reliable.
+
+3) Optionally, return a distinct status if a critical dependency is clearly misconfigured (e.g., missing required env vars), but do not over-engineer for this task.
+
+Streamlit:
+1) Update the “Backend connection” / connectivity check logic to use /health:
+   - Call GET {backend_url}/health with a short timeout.
+   - If status == "ok":
+     - show success indicator, optionally with version + apply_enabled info.
+   - If request fails or status != "ok":
+     - show error with a short, helpful message and (optionally) a collapsed technical detail area.
+
+2) Remove or deprecate the existing “probe /brands with fake credentials” style connectivity check, since /health is cheaper and more appropriate.
+
+Tests:
+1) Backend:
+   - Test /health returns 200 and JSON with required keys.
+   - Test apply_enabled reflects SB_OPTIMA_ENABLE_APPLY flag correctly (true/false).
+2) Basic integration/regression:
+   - Ensure /brands and /optimize behavior is unchanged by this feature.
+
+Finish by:
+- listing files changed
+- listing tests added/updated
+- confirming tests pass
+
+Then STOP and say: “Say ‘Next’ to continue.”
 
 ---
 
@@ -206,6 +382,67 @@ Then STOP and say: “Say ‘Next’ to continue.”
 
 ## Task 5.1 — Risk view (largest decreases, near-cost warnings, histogram)
 - [ ] Task 5.1
+
+Goal
+Give analysts a “risk” lens on an optimization run: highlight large decreases, near-cost prices, and the distribution of percentage changes. This is read-only analysis on the optimization results.
+
+Claude prompt (copy/paste)
+Text
+You are working in repo `sebiver-cmd/coverage-optimizer`.
+
+CRITICAL: Work on exactly ONE task: Task 5.1 only. Do not start any other tasks.
+
+Task 5.1 — Risk view (largest decreases, near-cost warnings, histogram)
+
+Requirements:
+
+Backend:
+- No new backend endpoints are strictly required for this task.
+- You may add small pure helper functions in the UI layer or a shared analysis module to calculate risk metrics from the optimization DataFrame/JSON.
+
+UI (Streamlit Price Optimizer page):
+1) Add a “Risk view” section/tab associated with the current optimization results.
+2) Include at least three elements:
+
+   a) Largest decreases:
+      - Table: top N (e.g., 20) rows with the biggest negative percentage change in price (Change %).
+      - Include key columns: NUMBER, TITLE/TITLE_DK, current_price, new_price, change_pct, buy_price (if available).
+      - Sort descending by absolute negative change (largest drop first).
+
+   b) Near-cost / low-margin warnings:
+      - Table or callout listing rows where:
+        - new_price is within a small threshold above buy_price (e.g., <= 5% margin) OR
+        - resulting coverage/margin is close to MIN_COVERAGE_RATE (e.g., within 2–3 percentage points).
+      - Thresholds can be constants in code; document them and make them easy to adjust.
+
+   c) Histogram of Change %:
+      - A simple histogram or binned bar chart of change_pct across all affected rows.
+      - Use Streamlit’s built-in charting (e.g., st.bar_chart / altair) and avoid heavy dependencies.
+
+3) Read-only:
+   - Do NOT add any buttons that trigger writes or applies.
+   - This is purely investigative/analytical UI.
+
+Implementation guidance:
+- Consider adding small helper functions:
+  - compute_largest_decreases(df, n=20)
+  - compute_near_cost_rows(df, margin_threshold, coverage_slack)
+  - compute_change_pct_histogram(df, bins=20)
+- Keep helpers testable and independent of Streamlit.
+
+Tests:
+1) Unit tests for helper functions:
+   - largest_decreases returns correct rows & sort order.
+   - near_cost_rows flags entries correctly for varied buy_price/margin scenarios.
+   - histogram bin logic yields predictable bin counts for toy data.
+2) No backend changes should be required; verify existing tests still pass.
+
+Finish by:
+- listing files changed
+- listing tests added/updated
+- confirming tests pass
+
+Then STOP and say: “Say ‘Next’ to continue.”
 
 ---
 
