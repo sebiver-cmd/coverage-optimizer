@@ -42,6 +42,10 @@ from domain.supplier import (
     match_supplier_to_products,
     detect_discount_lines,
 )
+from domain.invoice_ean import (
+    detect_invoice_columns,
+    build_ean_export,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1222,11 +1226,12 @@ def _render_analysis(
         if _buy_price_col not in _visible_cols:
             _visible_cols.insert(0, _buy_price_col)
 
-    tab_all, tab_adjusted, tab_import, tab_supplier = st.tabs([
+    tab_all, tab_adjusted, tab_import, tab_supplier, tab_ean = st.tabs([
         "All Products",
         "Adjusted Only",
         "Import Preview",
         "Supplier Match",
+        "EAN Barcode Export",
     ])
 
     with tab_all:
@@ -1325,6 +1330,10 @@ def _render_analysis(
     # --- Supplier Match Tab ---
     with tab_supplier:
         _render_supplier_match(work_df)
+
+    # --- EAN Barcode Export Tab ---
+    with tab_ean:
+        _render_ean_barcode_export(work_df)
 
     # --- Downloads ---
     _render_downloads(final_df, import_df, adjusted_count, include_buy_price)
@@ -1654,6 +1663,171 @@ def _apply_supplier_prices(match_rows, work_df):
         st.rerun()
     else:
         st.warning("No products were updated.")
+
+
+# ---------------------------------------------------------------------------
+# EAN Barcode Export
+# ---------------------------------------------------------------------------
+
+def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
+    """Render the EAN barcode export tab.
+
+    Allows the user to upload an invoice (CSV / PDF), match its lines
+    to the product catalogue, and download a scannable document with
+    SKU, product number, title, variant name, quantity, and EAN barcode.
+    """
+    st.markdown(
+        "Upload an **invoice** (CSV or PDF) to match its lines to "
+        "products and generate a scannable EAN barcode document. "
+        "The output includes SKU, product number, title, variant name, "
+        "quantity, and EAN barcode — ready for scanning."
+    )
+
+    if 'EAN' not in work_df.columns:
+        st.warning(
+            "EAN data is not available. Re-run optimisation to fetch "
+            "EAN codes from the shop API."
+        )
+        return
+
+    inv_file = st.file_uploader(
+        "Upload Invoice",
+        type=['csv', 'pdf'],
+        key="_ean_invoice_file",
+        label_visibility="collapsed",
+    )
+
+    with st.expander("Advanced: File Encoding", expanded=False):
+        enc_label = st.selectbox(
+            "Invoice file encoding",
+            options=list(ENCODING_OPTIONS.keys()),
+            index=0,
+            help=(
+                "Choose 'Auto-detect' to let the app guess the encoding, "
+                "or pick a specific one if characters look wrong."
+            ),
+            key="_ean_encoding",
+        )
+    selected_encoding = ENCODING_OPTIONS[enc_label]
+
+    if inv_file is not None:
+        try:
+            inv_bytes = inv_file.getvalue()
+            inv_df = parse_supplier_file(
+                inv_bytes, inv_file.name, selected_encoding,
+            )
+        except Exception as exc:
+            st.error(f"Failed to parse invoice file: {exc}")
+            inv_df = None
+
+        if inv_df is not None and not inv_df.empty:
+            detected = detect_invoice_columns(inv_df)
+
+            col_names = ['(none)'] + list(inv_df.columns)
+            ecol1, ecol2, ecol3 = st.columns(3)
+            with ecol1:
+                sku_idx = (
+                    col_names.index(detected['sku'])
+                    if detected['sku'] in col_names else 0
+                )
+                inv_sku_col = st.selectbox(
+                    "SKU / Article column",
+                    col_names,
+                    index=sku_idx,
+                    help="Column with the product SKU or article number.",
+                    key="_ean_sku_col",
+                )
+            with ecol2:
+                qty_idx = (
+                    col_names.index(detected['qty'])
+                    if detected['qty'] in col_names else 0
+                )
+                inv_qty_col = st.selectbox(
+                    "Quantity / Amount column",
+                    col_names,
+                    index=qty_idx,
+                    help=(
+                        "Column with the quantity or amount. "
+                        "Select '(none)' to default all quantities to 1."
+                    ),
+                    key="_ean_qty_col",
+                )
+            with ecol3:
+                ean_threshold = st.slider(
+                    "Match threshold",
+                    min_value=50,
+                    max_value=100,
+                    value=70,
+                    help=(
+                        "Minimum similarity score (%) for fuzzy SKU "
+                        "matching. Lower = more matches but less precise."
+                    ),
+                    key="_ean_threshold",
+                )
+
+            if inv_sku_col != '(none)':
+                qty_col = (
+                    inv_qty_col if inv_qty_col != '(none)' else None
+                )
+                export_df = build_ean_export(
+                    products_df=work_df,
+                    invoice_df=inv_df,
+                    invoice_sku_col=inv_sku_col,
+                    invoice_qty_col=qty_col,
+                    threshold=ean_threshold,
+                )
+
+                if export_df.empty:
+                    st.warning(
+                        "No matches found. Try lowering the match "
+                        "threshold or checking the SKU column."
+                    )
+                else:
+                    st.markdown(
+                        f"**{len(export_df)}** matched line"
+                        f"{'s' if len(export_df) != 1 else ''} "
+                        f"ready for export"
+                    )
+                    st.dataframe(
+                        export_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            'Match %': st.column_config.ProgressColumn(
+                                'Match %',
+                                min_value=0,
+                                max_value=100,
+                                format="%d%%",
+                            ),
+                            'Amount': st.column_config.NumberColumn(
+                                'Amount',
+                                format="%.0f",
+                            ),
+                        },
+                    )
+
+                    csv_data = (
+                        "\ufeff"
+                        + export_df.to_csv(sep=';', index=False)
+                    )
+                    st.download_button(
+                        label="Download EAN Barcode Document (CSV)",
+                        data=csv_data.encode('utf-8'),
+                        file_name="ean_barcode_export.csv",
+                        mime="text/csv; charset=utf-8",
+                        use_container_width=True,
+                        key="_ean_download",
+                    )
+            else:
+                st.info(
+                    "Select the **SKU / Article** column above to "
+                    "start matching."
+                )
+    else:
+        st.info(
+            "Upload an invoice file (CSV or PDF) to match products "
+            "and generate a scannable EAN barcode document."
+        )
 
 
 # ---------------------------------------------------------------------------
