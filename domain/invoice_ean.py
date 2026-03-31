@@ -328,6 +328,9 @@ _BOUNDARY_CACHE: dict[str, re.Pattern[str]] = {}
 # --- Size-abbreviation aliases ---
 # Each tuple is a group of equivalent size names (all lower-cased).
 # Any member can match any other member in the same group.
+# Compound sizes include both hyphenated and concatenated forms
+# (e.g. "x-large" and "xlarge") because both appear in the wild.
+# Simple sizes like "small" or "large" need no concatenated form.
 
 _SIZE_GROUPS: list[tuple[str, ...]] = [
     ('xxs', 'xx-small', 'xxsmall'),
@@ -353,7 +356,11 @@ def _size_aliases(name: str) -> frozenset[str]:
 
 
 def _boundary_pattern(key: str) -> re.Pattern[str]:
-    """Get or compile a word-boundary regex for *key* (lower-cased)."""
+    """Get or compile a word-boundary regex for *key*.
+
+    The key is lower-cased internally — callers need not pre-normalise.
+    """
+    key = key.lower()
     pat = _BOUNDARY_CACHE.get(key)
     if pat is None:
         pat = re.compile(
