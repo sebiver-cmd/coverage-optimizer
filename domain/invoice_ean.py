@@ -198,6 +198,12 @@ def build_ean_export(
     return pd.DataFrame(rows)
 
 
+def _variant_in_context(vt: str, context: str) -> bool:
+    """Check whether a variant name appears in the context string."""
+    vt = vt.strip()
+    return bool(vt) and vt.lower() in context
+
+
 def _narrow_variants(
     matched_products: pd.DataFrame,
     inv_sku: str,
@@ -228,7 +234,7 @@ def _narrow_variants(
         return matched_products
 
     hit_mask = variant_types.apply(
-        lambda vt: bool(vt.strip()) and vt.strip().lower() in context
+        lambda vt: _variant_in_context(vt, context)
     )
     if hit_mask.any() and hit_mask.sum() < len(matched_products):
         return matched_products.loc[hit_mask]
