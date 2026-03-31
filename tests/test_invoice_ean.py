@@ -8,6 +8,8 @@ import pytest
 from domain.invoice_ean import (
     detect_invoice_columns,
     build_ean_export,
+    _variant_in_context,
+    _parse_qty,
 )
 
 
@@ -434,3 +436,200 @@ class TestVariantNarrowing:
             products, invoice, 'Article', 'Quantity', threshold=70,
         )
         assert not result.empty
+
+
+# ---------------------------------------------------------------------------
+# _parse_qty
+# ---------------------------------------------------------------------------
+
+class TestParseQty:
+    """Tests for robust quantity parsing."""
+
+    def test_simple_integer(self):
+        assert _parse_qty('5') == 5.0
+
+    def test_simple_float(self):
+        assert _parse_qty('2.5') == 2.5
+
+    def test_comma_decimal(self):
+        assert _parse_qty('2,5') == 2.5
+
+    def test_unit_suffix_stk(self):
+        assert _parse_qty('5stk') == 5.0
+
+    def test_unit_suffix_pcs(self):
+        assert _parse_qty('10pcs') == 10.0
+
+    def test_unit_suffix_with_space(self):
+        assert _parse_qty('7 stk') == 7.0
+
+    def test_empty_string(self):
+        assert _parse_qty('') == 1.0
+
+    def test_none_value(self):
+        assert _parse_qty(None) == 1.0
+
+    def test_nan_value(self):
+        assert _parse_qty(float('nan')) == 1.0
+
+    def test_non_numeric(self):
+        assert _parse_qty('abc') == 1.0
+
+    def test_numeric_from_int(self):
+        assert _parse_qty(10) == 10.0
+
+    def test_numeric_from_float(self):
+        assert _parse_qty(3.5) == 3.5
+
+
+# ---------------------------------------------------------------------------
+# _variant_in_context (word boundary matching)
+# ---------------------------------------------------------------------------
+
+class TestVariantInContext:
+    """Tests for word-boundary variant matching."""
+
+    def test_exact_word_match(self):
+        assert _variant_in_context('XL', 'psw 003 xl')
+
+    def test_short_variant_no_false_positive(self):
+        """'S' should NOT match inside 'PSW'."""
+        assert not _variant_in_context('S', 'psw 003')
+
+    def test_short_variant_matches_standalone(self):
+        """'S' should match when it's a standalone word."""
+        assert _variant_in_context('S', 'shirt s')
+
+    def test_l_not_in_xl(self):
+        """'L' should NOT match inside 'XL'."""
+        assert not _variant_in_context('L', 'psw 003 xl')
+
+    def test_l_standalone(self):
+        """'L' should match when standalone."""
+        assert _variant_in_context('L', 'shirt l blue')
+
+    def test_size_cm_match(self):
+        assert _variant_in_context('190 cm', 'tbl-01 190 cm')
+
+    def test_slash_separated(self):
+        assert _variant_in_context('Red', 'red/large')
+
+    def test_empty_variant(self):
+        assert not _variant_in_context('', 'some context')
+
+    def test_case_insensitive(self):
+        assert _variant_in_context('XL', 'PSW 003 XL')
+
+
+# ---------------------------------------------------------------------------
+# Stricter SKU matching with title + SKU
+# ---------------------------------------------------------------------------
+
+class TestStricterSKUMatching:
+    """Tests for matching that uses both SKU and description/title."""
+
+    @staticmethod
+    def _size_variants():
+        """Products with S/M/L/XL variants."""
+        return _make_products(
+            NUMBER=['PSW 003', 'PSW 003', 'PSW 003', 'PSW 003'],
+            VARIANT_ID=['10', '11', '12', '13'],
+            VARIANT_TYPES=['S', 'M', 'L', 'XL'],
+            EAN=['5700000000001', '5700000000002', '5700000000003', '5700000000004'],
+            TITLE_DK=['Shirt', 'Shirt', 'Shirt', 'Shirt'],
+            BUY_PRICE=['50,00', '50,00', '50,00', '50,00'],
+            PRICE=['100,00', '100,00', '100,00', '100,00'],
+            BUY_PRICE_NUM=[50.0, 50.0, 50.0, 50.0],
+            PRICE_NUM=[100.0, 100.0, 100.0, 100.0],
+            PRODUCT_ID=['1', '1', '1', '1'],
+            PRODUCER=['Brand A', 'Brand A', 'Brand A', 'Brand A'],
+            PRODUCER_ID=[1, 1, 1, 1],
+            ONLINE=[True, True, True, True],
+        )
+
+    def test_sku_with_variant_suffix_xl(self):
+        """Invoice SKU 'PSW 003 XL' should match only XL variant."""
+        products = self._size_variants()
+        invoice = pd.DataFrame({
+            'Article': ['PSW 003 XL'],
+            'Quantity': ['3'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=50,
+        )
+        assert len(result) == 1
+        assert result.iloc[0]['Variant Name'] == 'XL'
+        assert result.iloc[0]['EAN'] == '5700000000004'
+
+    def test_sku_with_variant_suffix_s(self):
+        """Invoice SKU 'PSW 003 S' should match only S variant."""
+        products = self._size_variants()
+        invoice = pd.DataFrame({
+            'Article': ['PSW 003 S'],
+            'Quantity': ['2'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=50,
+        )
+        assert len(result) == 1
+        assert result.iloc[0]['Variant Name'] == 'S'
+        assert result.iloc[0]['EAN'] == '5700000000001'
+
+    def test_sku_with_variant_suffix_m(self):
+        """Invoice SKU 'PSW 003 M' should match only M variant."""
+        products = self._size_variants()
+        invoice = pd.DataFrame({
+            'Article': ['PSW 003 M'],
+            'Quantity': ['4'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=50,
+        )
+        assert len(result) == 1
+        assert result.iloc[0]['Variant Name'] == 'M'
+        assert result.iloc[0]['EAN'] == '5700000000002'
+
+    def test_amount_preserved_with_variant_sku(self):
+        """Amount should be correctly read even with variant-appended SKUs."""
+        products = self._size_variants()
+        invoice = pd.DataFrame({
+            'Article': ['PSW 003 XL', 'PSW 003 M'],
+            'Quantity': ['7', '12'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=50,
+        )
+        xl_rows = result.loc[result['Variant Name'] == 'XL']
+        assert not xl_rows.empty
+        assert xl_rows.iloc[0]['Amount'] == 7.0
+
+        m_rows = result.loc[result['Variant Name'] == 'M']
+        assert not m_rows.empty
+        assert m_rows.iloc[0]['Amount'] == 12.0
+
+    def test_description_col_narrows_variant(self):
+        """Description column should help narrow to the correct variant."""
+        products = self._size_variants()
+        invoice = pd.DataFrame({
+            'Article': ['PSW 003'],
+            'Quantity': ['5'],
+            'Description': ['Shirt XL'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=70,
+            invoice_desc_col='Description',
+        )
+        assert len(result) == 1
+        assert result.iloc[0]['Variant Name'] == 'XL'
+
+    def test_base_sku_without_variant_hint_returns_all(self):
+        """Base SKU without variant info returns all variants."""
+        products = self._size_variants()
+        invoice = pd.DataFrame({
+            'Article': ['PSW 003'],
+            'Quantity': ['1'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=70,
+        )
+        assert len(result) == 4
