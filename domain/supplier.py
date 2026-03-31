@@ -64,12 +64,12 @@ DEFAULT_CURRENCY_RATES = {
 # --- Multi-language column name patterns for auto-detection ---
 
 _SKU_NAMES = [
-    'sku', 'article', 'artikelnr', 'varenr', 'varenummer', 'item',
-    'item number', 'itemnumber', 'part', 'part number', 'partnumber',
-    'artikelnummer', 'product number', 'productnumber', 'produktnummer',
-    'model', 'mpn', 'reference', 'ref', 'nummer', 'number',
-    'art.nr', 'art. nr.', 'artnr', 'bestillingsnr', 'ordernumber',
-    'artikelcode', 'itemcode', 'code', 'produktnr',
+    'sku', 'article', 'article no', 'artikelnr', 'varenr', 'varenummer',
+    'item', 'item number', 'itemnumber', 'part', 'part number',
+    'partnumber', 'artikelnummer', 'product number', 'productnumber',
+    'produktnummer', 'model', 'mpn', 'reference', 'ref', 'nummer',
+    'number', 'art.nr', 'art. nr.', 'artnr', 'bestillingsnr',
+    'ordernumber', 'artikelcode', 'itemcode', 'code', 'produktnr',
 ]
 _PRICE_NAMES = [
     'price', 'pris', 'preis', 'unit price', 'enhedspris',
@@ -115,6 +115,20 @@ def normalize_sku(sku: str) -> str:
     return s
 
 
+def _dedupe_columns(headers: list[str]) -> list[str]:
+    """Make column names unique to prevent concat/reindex errors."""
+    seen: dict[str, int] = {}
+    result: list[str] = []
+    for h in headers:
+        if h in seen:
+            seen[h] += 1
+            result.append(f"{h}_{seen[h]}" if h else f"_{seen[h]}")
+        else:
+            seen[h] = 0
+            result.append(h)
+    return result
+
+
 def parse_supplier_file(raw_bytes: bytes, filename: str, encoding: str = 'auto'):
     """Parse a supplier CSV or PDF into a DataFrame.
 
@@ -133,14 +147,19 @@ def parse_supplier_file(raw_bytes: bytes, filename: str, encoding: str = 'auto')
             for page in pdf.pages:
                 for table in (page.extract_tables() or []):
                     if table and len(table) > 1:
-                        headers = [str(h or '').strip() for h in table[0]]
+                        headers = _dedupe_columns(
+                            [str(h or '').strip() for h in table[0]]
+                        )
                         rows = [
                             [str(c or '').strip() for c in row]
                             for row in table[1:]
                         ]
                         tables.append(pd.DataFrame(rows, columns=headers))
         if tables:
-            return pd.concat(tables, ignore_index=True)
+            try:
+                return pd.concat(tables, ignore_index=True)
+            except Exception:
+                tables = []
 
         # Retry with relaxed table-detection (text-based strategies)
         _text_settings = {
@@ -151,14 +170,28 @@ def parse_supplier_file(raw_bytes: bytes, filename: str, encoding: str = 'auto')
             for page in pdf.pages:
                 for table in (page.extract_tables(table_settings=_text_settings) or []):
                     if table and len(table) > 1 and len(table[0]) > 1:
-                        headers = [str(h or '').strip() for h in table[0]]
+                        headers = _dedupe_columns(
+                            [str(h or '').strip() for h in table[0]]
+                        )
+                        # Skip tables where the majority of headers are empty
+                        # — those are unlikely to be real structured data.
+                        non_empty = sum(
+                            1 for h in headers
+                            if h and not h.startswith('_')
+                            and len(h) > 1 and not h.isdigit()
+                        )
+                        if non_empty < max(2, len(headers) // 2):
+                            continue
                         rows = [
                             [str(c or '').strip() for c in row]
                             for row in table[1:]
                         ]
                         tables.append(pd.DataFrame(rows, columns=headers))
         if tables:
-            return pd.concat(tables, ignore_index=True)
+            try:
+                return pd.concat(tables, ignore_index=True)
+            except Exception:
+                tables = []
 
         # Fallback: extract raw text and parse as CSV-like data
         text_parts: list[str] = []
@@ -190,6 +223,41 @@ def parse_supplier_file(raw_bytes: bytes, filename: str, encoding: str = 'auto')
             except (pd.errors.ParserError, pd.errors.EmptyDataError,
                     ValueError, TypeError):
                 pass
+
+            # Try regex extraction for invoice / order-style PDFs whose
+            # lines follow:  ItemNo  ArticleNo  Description  Qty+Unit  Price  Total
+            _item_re = re.compile(
+                r'^\s*(\d{2,4})\s+'
+                r'(.+?)\s+'
+                r'(\d+\s*(?:pcs|prs|Paar|Stk|St|ml|kg|sets?|pieces?)\w*)\s+'
+                r'([\d]+[,.][\d]+)\s+'
+                r'([\d]+[,.]\d+)\s*$',
+                re.IGNORECASE | re.MULTILINE,
+            )
+            _item_matches = _item_re.findall(full_text)
+            if _item_matches:
+                _parsed_rows: list[dict] = []
+                for _m in _item_matches:
+                    _art_desc = _m[1].strip()
+                    _art_split = re.match(
+                        r'^([A-Z0-9][A-Z0-9 ./-]*?\d[\w]*)\s+(.+)$',
+                        _art_desc,
+                    )
+                    if _art_split:
+                        _art = _art_split.group(1).strip()
+                        _desc = _art_split.group(2).strip()
+                    else:
+                        _art = _art_desc
+                        _desc = ''
+                    _parsed_rows.append({
+                        'Item': _m[0],
+                        'Article No': _art,
+                        'Designation': _desc,
+                        'Qty': _m[2],
+                        'Unit Price': _m[3],
+                        'Item Value': _m[4],
+                    })
+                return pd.DataFrame(_parsed_rows).astype(str)
 
         raise ValueError(
             "No tables found in the PDF. "
