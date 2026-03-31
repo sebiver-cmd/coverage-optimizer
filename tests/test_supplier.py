@@ -27,7 +27,7 @@ def _make_table_pdf(headers: list[str], rows: list[list[str]]) -> bytes:
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font('Helvetica', size=10)
-    col_w = 180 / len(headers)
+    col_w = 180 / max(len(headers), 1)
     for h in headers:
         pdf.cell(col_w, 8, h, border=1)
     pdf.ln()

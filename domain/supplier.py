@@ -158,7 +158,8 @@ def parse_supplier_file(raw_bytes: bytes, filename: str, encoding: str = 'auto')
                     )
                     if len(df.columns) > 1:
                         return df
-                except Exception:
+                except (pd.errors.ParserError, pd.errors.EmptyDataError,
+                        ValueError, TypeError):
                     continue
 
         raise ValueError(
