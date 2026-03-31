@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pandas as pd
 import pytest
 
 from domain.invoice_ean import (
     detect_invoice_columns,
     build_ean_export,
+    generate_barcode_pdf,
+    _render_barcode_image,
     _variant_in_context,
     _parse_qty,
 )
@@ -633,3 +637,132 @@ class TestStricterSKUMatching:
             products, invoice, 'Article', 'Quantity', threshold=70,
         )
         assert len(result) == 4
+
+
+# ---------------------------------------------------------------------------
+# Barcode image rendering
+# ---------------------------------------------------------------------------
+
+class TestRenderBarcodeImage:
+    """Tests for _render_barcode_image()."""
+
+    def test_valid_ean13(self):
+        """Valid 13-digit EAN returns a PNG buffer."""
+        buf = _render_barcode_image('5701234567890')
+        assert buf is not None
+        data = buf.read()
+        assert len(data) > 0
+        # PNG magic bytes
+        assert data[:4] == b'\x89PNG'
+
+    def test_valid_ean13_twelve_digits(self):
+        """12-digit EAN (check digit computed) returns a PNG buffer."""
+        buf = _render_barcode_image('570123456789')
+        assert buf is not None
+        assert buf.read()[:4] == b'\x89PNG'
+
+    def test_valid_ean8(self):
+        """Valid 8-digit EAN returns a PNG buffer."""
+        buf = _render_barcode_image('96385074')
+        assert buf is not None
+        assert buf.read()[:4] == b'\x89PNG'
+
+    def test_empty_string(self):
+        """Empty string returns None."""
+        assert _render_barcode_image('') is None
+
+    def test_none_value(self):
+        """None returns None."""
+        assert _render_barcode_image(None) is None
+
+    def test_non_numeric(self):
+        """Non-numeric string returns None."""
+        assert _render_barcode_image('ABCDEF') is None
+
+    def test_strips_non_digits(self):
+        """Non-digit characters are stripped before rendering."""
+        buf = _render_barcode_image('570-1234-567890')
+        assert buf is not None
+
+
+# ---------------------------------------------------------------------------
+# Barcode PDF generation
+# ---------------------------------------------------------------------------
+
+class TestGenerateBarcodePdf:
+    """Tests for generate_barcode_pdf()."""
+
+    def test_basic_pdf_output(self):
+        """Generates a valid PDF with barcode labels."""
+        df = pd.DataFrame({
+            'SKU': ['INV-001', 'INV-002'],
+            'Product Number': ['SKU-001', 'SKU-002'],
+            'Title': ['Widget A', 'Widget B'],
+            'Variant Name': ['', 'Red / Large'],
+            'Amount': [3, 1],
+            'EAN': ['5701234567890', '5709876543210'],
+            'Match %': [100, 85],
+        })
+        pdf_bytes = generate_barcode_pdf(df)
+        assert isinstance(pdf_bytes, bytes)
+        assert len(pdf_bytes) > 0
+        assert pdf_bytes[:5] == b'%PDF-'
+
+    def test_empty_dataframe(self):
+        """Empty DataFrame produces a valid PDF with placeholder text."""
+        df = pd.DataFrame(columns=[
+            'SKU', 'Product Number', 'Title', 'Variant Name',
+            'Amount', 'EAN', 'Match %',
+        ])
+        pdf_bytes = generate_barcode_pdf(df)
+        assert isinstance(pdf_bytes, bytes)
+        assert pdf_bytes[:5] == b'%PDF-'
+
+    def test_missing_ean_handled(self):
+        """Rows without a valid EAN produce labels with text fallback."""
+        df = pd.DataFrame({
+            'SKU': ['INV-001'],
+            'Product Number': ['SKU-001'],
+            'Title': ['Widget A'],
+            'Variant Name': [''],
+            'Amount': [1],
+            'EAN': [''],
+            'Match %': [100],
+        })
+        pdf_bytes = generate_barcode_pdf(df)
+        assert isinstance(pdf_bytes, bytes)
+        assert pdf_bytes[:5] == b'%PDF-'
+
+    def test_multiple_pages(self):
+        """Many rows produce a multi-page PDF."""
+        n = 30  # Enough for multiple pages (fits ~10 per page)
+        df = pd.DataFrame({
+            'SKU': [f'INV-{i:03d}' for i in range(n)],
+            'Product Number': [f'P-{i:03d}' for i in range(n)],
+            'Title': [f'Product {i}' for i in range(n)],
+            'Variant Name': [''] * n,
+            'Amount': [1] * n,
+            'EAN': ['5701234567890'] * n,
+            'Match %': [100] * n,
+        })
+        pdf_bytes = generate_barcode_pdf(df)
+        assert isinstance(pdf_bytes, bytes)
+        assert pdf_bytes[:5] == b'%PDF-'
+
+    def test_barcode_lib_missing_fallback(self):
+        """When python-barcode is missing, labels render text instead."""
+        df = pd.DataFrame({
+            'SKU': ['INV-001'],
+            'Product Number': ['SKU-001'],
+            'Title': ['Widget A'],
+            'Variant Name': [''],
+            'Amount': [1],
+            'EAN': ['5701234567890'],
+            'Match %': [100],
+        })
+        with patch(
+            'domain.invoice_ean._render_barcode_image', return_value=None,
+        ):
+            pdf_bytes = generate_barcode_pdf(df)
+        assert isinstance(pdf_bytes, bytes)
+        assert pdf_bytes[:5] == b'%PDF-'

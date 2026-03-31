@@ -5,3 +5,6 @@ requests
 zeep
 rapidfuzz
 pdfplumber
+python-barcode
+Pillow
+fpdf2

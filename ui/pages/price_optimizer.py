@@ -45,6 +45,7 @@ from domain.supplier import (
 from domain.invoice_ean import (
     detect_invoice_columns,
     build_ean_export,
+    generate_barcode_pdf,
 )
 
 logger = logging.getLogger(__name__)
@@ -1817,14 +1818,27 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
                         "\ufeff"
                         + export_df.to_csv(sep=';', index=False)
                     )
-                    st.download_button(
-                        label="Download EAN Barcode Document (CSV)",
-                        data=csv_data.encode('utf-8'),
-                        file_name="ean_barcode_export.csv",
-                        mime="text/csv; charset=utf-8",
-                        use_container_width=True,
-                        key="_ean_download",
-                    )
+
+                    dl_col1, dl_col2 = st.columns(2)
+                    with dl_col1:
+                        pdf_bytes = generate_barcode_pdf(export_df)
+                        st.download_button(
+                            label="Download Barcode PDF",
+                            data=pdf_bytes,
+                            file_name="ean_barcode_export.pdf",
+                            mime="application/pdf",
+                            use_container_width=True,
+                            key="_ean_download_pdf",
+                        )
+                    with dl_col2:
+                        st.download_button(
+                            label="Download Data (CSV)",
+                            data=csv_data.encode('utf-8'),
+                            file_name="ean_barcode_export.csv",
+                            mime="text/csv; charset=utf-8",
+                            use_container_width=True,
+                            key="_ean_download",
+                        )
             else:
                 st.info(
                     "Select the **SKU / Article** column above to "
