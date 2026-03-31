@@ -449,6 +449,98 @@ def _render_filters(
 
 
 # ---------------------------------------------------------------------------
+# Pricing helpers (shared by summary & filters)
+# ---------------------------------------------------------------------------
+
+def _prepare_pricing_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy of *df* with numeric pricing columns appended.
+
+    New columns added:
+
+    * ``old_price`` – numeric value parsed from ``PRICE``.
+    * ``new_price`` – numeric value parsed from ``NEW_PRICE``.
+    * ``change_pct`` – percentage change from old to new price
+      (e.g. ``+10.0`` for a 10 % increase).  Set to ``0.0`` when
+      ``old_price`` is zero to avoid division-by-zero errors.
+
+    The original DataFrame is **not** mutated.
+    """
+    out = df.copy()
+    out["old_price"] = out["PRICE"].apply(clean_price)
+    out["new_price"] = out["NEW_PRICE"].apply(clean_price)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        out["change_pct"] = np.where(
+            out["old_price"] != 0,
+            (out["new_price"] - out["old_price"]) / out["old_price"] * 100,
+            0.0,
+        )
+    return out
+
+
+def apply_result_filters(
+    df: pd.DataFrame,
+    direction: str = "All",
+    pct_min: float = 0.0,
+    pct_max: float | None = None,
+    search_text: str = "",
+) -> pd.DataFrame:
+    """Apply client-side filters to a prepared pricing DataFrame.
+
+    Parameters
+    ----------
+    df
+        DataFrame that already contains ``old_price``, ``new_price`` and
+        ``change_pct`` columns (as produced by :func:`_prepare_pricing_columns`).
+    direction
+        One of ``"All"``, ``"Only increases"``, ``"Only decreases"``,
+        ``"Only unchanged"``.
+    pct_min, pct_max
+        Keep rows whose *absolute* ``change_pct`` falls within
+        ``[pct_min, pct_max]``.  ``pct_max=None`` means no upper bound.
+    search_text
+        Case-insensitive substring match against ``NUMBER`` and
+        ``TITLE_DK`` columns (when present).
+
+    Returns
+    -------
+    pd.DataFrame
+        Filtered copy of *df*.
+    """
+    filtered = df.copy()
+
+    # Direction filter
+    if direction == "Only increases":
+        filtered = filtered[filtered["new_price"] > filtered["old_price"]]
+    elif direction == "Only decreases":
+        filtered = filtered[filtered["new_price"] < filtered["old_price"]]
+    elif direction == "Only unchanged":
+        filtered = filtered[filtered["new_price"] == filtered["old_price"]]
+
+    # Absolute % change range
+    if pct_max is not None:
+        filtered = filtered[
+            filtered["change_pct"].abs().between(pct_min, pct_max)
+        ]
+    elif pct_min > 0:
+        filtered = filtered[filtered["change_pct"].abs() >= pct_min]
+
+    # Text search (case-insensitive substring on SKU / product name)
+    if search_text:
+        mask = pd.Series(False, index=filtered.index)
+        if "NUMBER" in filtered.columns:
+            mask = mask | filtered["NUMBER"].astype(str).str.contains(
+                search_text, case=False, na=False,
+            )
+        if "TITLE_DK" in filtered.columns:
+            mask = mask | filtered["TITLE_DK"].astype(str).str.contains(
+                search_text, case=False, na=False,
+            )
+        filtered = filtered[mask]
+
+    return filtered
+
+
+# ---------------------------------------------------------------------------
 # Result Summary Panel
 # ---------------------------------------------------------------------------
 
@@ -469,19 +561,13 @@ def _render_result_summary(final_df: pd.DataFrame) -> None:
     if final_df.empty:
         return
 
-    # --- Parse formatted prices to numeric values ---
-    old_prices = final_df["PRICE"].apply(clean_price)
-    new_prices = final_df["NEW_PRICE"].apply(clean_price)
+    # --- Reuse shared helper for numeric columns ---
+    prepared = _prepare_pricing_columns(final_df)
+    old_prices = prepared["old_price"]
+    new_prices = prepared["new_price"]
+    pct_change = prepared["change_pct"].values
 
-    # Percentage change per product (guard against zero old price)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        pct_change = np.where(
-            old_prices != 0,
-            (new_prices - old_prices) / old_prices * 100,
-            0.0,
-        )
-
-    total_products = len(final_df)
+    total_products = len(prepared)
     changed_mask = old_prices != new_prices
     changed_products = int(changed_mask.sum())
 
@@ -516,7 +602,7 @@ def _render_result_summary(final_df: pd.DataFrame) -> None:
 
     # --- Top 5 increases / decreases ---
     detail_df = pd.DataFrame({
-        "NUMBER": final_df["NUMBER"].values,
+        "NUMBER": prepared["NUMBER"].values,
         "Old Price": old_prices.values,
         "New Price": new_prices.values,
         "Change %": np.round(pct_change, 2),
@@ -654,13 +740,66 @@ def _render_analysis(
     # --- Result Summary Panel ---
     _render_result_summary(final_df)
 
+    # --- Client-side result filters ---
+    final_df_prepared = _prepare_pricing_columns(final_df)
+
+    with st.expander("Filters", expanded=False):
+        flt_col1, flt_col2, flt_col3 = st.columns(3)
+        with flt_col1:
+            direction = st.radio(
+                "Price change direction",
+                options=["All", "Only increases", "Only decreases", "Only unchanged"],
+                index=0,
+                key="_result_direction",
+            )
+        with flt_col2:
+            max_abs_change = float(
+                final_df_prepared["change_pct"].abs().max()
+                if not final_df_prepared.empty
+                else 0.0
+            )
+            max_abs_change = max(max_abs_change, 5.0)
+            pct_min, pct_max = st.slider(
+                "Absolute % change range",
+                min_value=0.0,
+                max_value=round(max_abs_change, 1),
+                value=(0.0, round(max_abs_change, 1)),
+                step=0.1,
+                key="_result_pct_range",
+            )
+        with flt_col3:
+            search_text = st.text_input(
+                "Search by SKU or name",
+                value="",
+                key="_result_search",
+            ).strip()
+
+    filtered_df = apply_result_filters(
+        final_df_prepared,
+        direction=direction,
+        pct_min=pct_min,
+        pct_max=pct_max,
+        search_text=search_text,
+    )
+
+    # Drop helper columns before display (keep original formatted columns)
+    _helper_cols = ["old_price", "new_price", "change_pct"]
+    filtered_display = filtered_df.drop(columns=_helper_cols, errors="ignore")
+
     # --- Data Tabs ---
     _buy_price_col = "BUY_PRICE"
-    _display_all = final_df.copy()
-    _display_all[_buy_price_col] = work_df['BUY_PRICE_NUM']
+
+    # Full (unfiltered) display DataFrame — used by Adjusted Only,
+    # Import Preview, Supplier Match, Downloads, and Push-to-Shop.
+    _display_all_full = final_df.copy()
+    _display_all_full[_buy_price_col] = work_df['BUY_PRICE_NUM']
+
+    # Filtered display DataFrame — used only for the "All Products" tab.
+    _display_all = filtered_display.copy()
+    _display_all[_buy_price_col] = work_df.loc[filtered_display.index, 'BUY_PRICE_NUM']
 
     _disabled_cols = [
-        c for c in _display_all.columns if c != _buy_price_col
+        c for c in _display_all_full.columns if c != _buy_price_col
     ]
     _col_config = {
         _buy_price_col: st.column_config.NumberColumn(
@@ -681,10 +820,10 @@ def _render_analysis(
 
     # Determine which columns to display
     if show_advanced:
-        _visible_cols = list(_display_all.columns)
+        _visible_cols = list(_display_all_full.columns)
     else:
         _visible_cols = [
-            c for c in _SIMPLE_COLUMNS if c in _display_all.columns
+            c for c in _SIMPLE_COLUMNS if c in _display_all_full.columns
         ]
         # Always include BUY_PRICE even if not in the simple list
         if _buy_price_col not in _visible_cols:
@@ -698,20 +837,23 @@ def _render_analysis(
     ])
 
     with tab_all:
-        st.data_editor(
-            _display_all[_visible_cols],
-            disabled=[c for c in _visible_cols if c != _buy_price_col],
-            column_config=_col_config,
-            use_container_width=True,
-            hide_index=True,
-            key="_ed_all",
-        )
+        if _display_all.empty:
+            st.info("No products match the current filters.")
+        else:
+            st.data_editor(
+                _display_all[_visible_cols],
+                disabled=[c for c in _visible_cols if c != _buy_price_col],
+                column_config=_col_config,
+                use_container_width=True,
+                hide_index=True,
+                key="_ed_all",
+            )
 
     with tab_adjusted:
-        _adj_full = _display_all[adjusted_mask]
+        _adj_full = _display_all_full[adjusted_mask]
         _display_adj = _adj_full[_visible_cols].reset_index(drop=True)
         st.session_state["_adj_index_map"] = list(
-            _display_all.index[adjusted_mask]
+            _display_all_full.index[adjusted_mask]
         )
         if _display_adj.empty:
             st.info("All products already meet the minimum margin \u2013 no adjustments needed.")
@@ -729,9 +871,9 @@ def _render_analysis(
         if import_df.empty:
             st.info("No products needed adjustment \u2013 nothing to import.")
         else:
-            adjusted_full = _display_all[adjusted_mask]
+            adjusted_full = _display_all_full[adjusted_mask]
             st.session_state["_imp_index_map"] = list(
-                _display_all.index[adjusted_mask]
+                _display_all_full.index[adjusted_mask]
             )
             st.markdown(
                 f"**{adjusted_count}** product"
