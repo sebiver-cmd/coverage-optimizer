@@ -293,3 +293,144 @@ class TestBuildEanExport:
                 'Amount', 'EAN', 'Match %',
             ]
             assert list(result.columns) == expected
+
+
+class TestVariantNarrowing:
+    """Tests for narrowing variant matches by variant name."""
+
+    @staticmethod
+    def _size_products():
+        """Products with size-based variants (e.g. dining table)."""
+        return _make_products(
+            NUMBER=['TBL-01', 'TBL-01', 'TBL-01', 'SKU-002'],
+            VARIANT_ID=['10', '11', '12', ''],
+            VARIANT_TYPES=['160 cm', '190 cm', '220 cm', ''],
+            EAN=['5700000000160', '5700000000190', '5700000000220', '5709876543210'],
+            TITLE_DK=['Dining Table', 'Dining Table', 'Dining Table', 'Widget B'],
+            BUY_PRICE=['500,00', '600,00', '700,00', '200,00'],
+            PRICE=['1000,00', '1200,00', '1400,00', '400,00'],
+            BUY_PRICE_NUM=[500.0, 600.0, 700.0, 200.0],
+            PRICE_NUM=[1000.0, 1200.0, 1400.0, 400.0],
+            PRODUCT_ID=['1', '1', '1', '2'],
+            PRODUCER=['Brand A', 'Brand A', 'Brand A', 'Brand B'],
+            PRODUCER_ID=[1, 1, 1, 2],
+            ONLINE=[True, True, True, True],
+        )
+
+    def test_narrows_by_variant_in_sku(self):
+        """Invoice SKU 'TBL-01 190 cm' should match only the 190 cm variant."""
+        products = self._size_products()
+        invoice = pd.DataFrame({
+            'Article': ['TBL-01 190 cm'],
+            'Quantity': ['1'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=50,
+        )
+        assert len(result) == 1
+        assert result.iloc[0]['Variant Name'] == '190 cm'
+        assert result.iloc[0]['EAN'] == '5700000000190'
+
+    def test_narrows_by_variant_in_description(self):
+        """Variant name in description column narrows the match."""
+        products = self._size_products()
+        invoice = pd.DataFrame({
+            'Article': ['TBL-01'],
+            'Quantity': ['2'],
+            'Description': ['Dining Table 220 cm'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=70,
+            invoice_desc_col='Description',
+        )
+        assert len(result) == 1
+        assert result.iloc[0]['Variant Name'] == '220 cm'
+        assert result.iloc[0]['EAN'] == '5700000000220'
+
+    def test_no_variant_hint_returns_all(self):
+        """When no variant info in invoice, all variants are returned."""
+        products = self._size_products()
+        invoice = pd.DataFrame({
+            'Article': ['TBL-01'],
+            'Quantity': ['3'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=70,
+        )
+        # All 3 size variants should be returned
+        assert len(result) == 3
+
+    def test_no_narrowing_for_single_variant(self):
+        """Single-row products are never narrowed (no-op)."""
+        products = _make_products()
+        invoice = _make_invoice()
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=70,
+        )
+        sku1 = result.loc[result['SKU'] == 'SKU-001']
+        assert len(sku1) == 1
+
+    def test_color_variant_narrowing(self):
+        """Narrowing works with color variants too."""
+        products = _make_products(
+            NUMBER=['SHIRT-01', 'SHIRT-01', 'SHIRT-01'],
+            VARIANT_ID=['20', '21', '22'],
+            VARIANT_TYPES=['Red', 'Blue', 'Green'],
+            EAN=['5700000000001', '5700000000002', '5700000000003'],
+            TITLE_DK=['T-Shirt', 'T-Shirt', 'T-Shirt'],
+            BUY_PRICE=['50,00', '50,00', '50,00'],
+            PRICE=['100,00', '100,00', '100,00'],
+            BUY_PRICE_NUM=[50.0, 50.0, 50.0],
+            PRICE_NUM=[100.0, 100.0, 100.0],
+            PRODUCT_ID=['5', '5', '5'],
+            PRODUCER=['Brand C', 'Brand C', 'Brand C'],
+            PRODUCER_ID=[3, 3, 3],
+            ONLINE=[True, True, True],
+        )
+        invoice = pd.DataFrame({
+            'Article': ['SHIRT-01'],
+            'Quantity': ['4'],
+            'Description': ['T-Shirt Blue'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=70,
+            invoice_desc_col='Description',
+        )
+        assert len(result) == 1
+        assert result.iloc[0]['Variant Name'] == 'Blue'
+        assert result.iloc[0]['EAN'] == '5700000000002'
+
+    def test_case_insensitive_narrowing(self):
+        """Variant narrowing is case-insensitive."""
+        products = self._size_products()
+        invoice = pd.DataFrame({
+            'Article': ['TBL-01 160 CM'],
+            'Quantity': ['1'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=50,
+        )
+        assert len(result) == 1
+        assert result.iloc[0]['Variant Name'] == '160 cm'
+
+    def test_desc_col_none_ignored(self):
+        """Passing invoice_desc_col=None doesn't break anything."""
+        products = self._size_products()
+        invoice = pd.DataFrame({
+            'Article': ['TBL-01'],
+            'Quantity': ['1'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=70,
+            invoice_desc_col=None,
+        )
+        assert len(result) == 3
+
+    def test_backward_compat_no_desc_col(self):
+        """Calling without invoice_desc_col still works (backward compat)."""
+        products = _make_products()
+        invoice = _make_invoice()
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=70,
+        )
+        assert not result.empty
