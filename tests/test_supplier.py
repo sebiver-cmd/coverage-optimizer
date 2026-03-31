@@ -13,6 +13,7 @@ from domain.supplier import (
     detect_encoding,
     detect_supplier_columns,
     normalize_sku,
+    match_supplier_to_products,
     _dedupe_columns,
 )
 
@@ -312,6 +313,89 @@ class TestParseSupplierFilePDFInvoiceRegex(unittest.TestCase):
         self.assertEqual(result['sku'], 'Article No')
         self.assertEqual(result['price'], 'Unit Price')
         self.assertEqual(result['description'], 'Designation')
+
+
+class TestMatchSupplierToProducts(unittest.TestCase):
+    """Tests for match_supplier_to_products with enhanced matching."""
+
+    def test_exact_match_after_normalization(self):
+        result = match_supplier_to_products(
+            ['TO-AFK-110'], ['AFK110'],
+        )
+        self.assertEqual(result['TO-AFK-110']['sku'], 'AFK110')
+        self.assertEqual(result['TO-AFK-110']['score'], 100)
+        self.assertEqual(result['TO-AFK-110']['alternatives'], [])
+
+    def test_fuzzy_match_returns_best(self):
+        result = match_supplier_to_products(
+            ['AFK110X'], ['AFK110', 'BCD220'], threshold=50,
+        )
+        self.assertEqual(result['AFK110X']['sku'], 'AFK110')
+        self.assertGreater(result['AFK110X']['score'], 50)
+
+    def test_no_match_returns_alternatives(self):
+        result = match_supplier_to_products(
+            ['ZZZZZ'], ['AFK110', 'BCD220'], threshold=95,
+        )
+        self.assertIsNone(result['ZZZZZ']['sku'])
+        self.assertEqual(result['ZZZZZ']['score'], 0)
+        self.assertIsInstance(result['ZZZZZ']['alternatives'], list)
+
+    def test_name_based_reranking(self):
+        """When SKU scores are close, name similarity should pick the
+        correct product."""
+        result = match_supplier_to_products(
+            ['AFK11'], ['AFK110', 'AFK120'], threshold=50,
+            supplier_names={'AFK11': 'Judogi white'},
+            product_names={'AFK110': 'Judogi white', 'AFK120': 'Belt black'},
+        )
+        self.assertEqual(result['AFK11']['sku'], 'AFK110')
+
+    def test_alternatives_returned(self):
+        result = match_supplier_to_products(
+            ['AFK1'], ['AFK110', 'AFK120', 'AFK130'],
+            threshold=30, top_n=3,
+        )
+        data = result['AFK1']
+        total = (1 if data['sku'] else 0) + len(data['alternatives'])
+        self.assertGreaterEqual(total, 2)
+
+    def test_empty_sku_skipped(self):
+        result = match_supplier_to_products(['', '  '], ['AFK110'])
+        self.assertEqual(len(result), 0)
+
+    def test_name_fallback_suggestions(self):
+        """When SKU gives no match, name-based suggestions should appear."""
+        result = match_supplier_to_products(
+            ['ZZZZ'], ['AFK110'], threshold=95,
+            supplier_names={'ZZZZ': 'Judogi white'},
+            product_names={'AFK110': 'Judogi white'},
+        )
+        data = result['ZZZZ']
+        self.assertIsNone(data['sku'])
+        self.assertGreater(len(data['alternatives']), 0)
+        # The name-based suggestion should include AFK110
+        alt_skus = [sku for sku, _ in data['alternatives']]
+        self.assertIn('AFK110', alt_skus)
+
+    def test_result_dict_structure(self):
+        """Every match result must have 'sku', 'score', 'alternatives'."""
+        result = match_supplier_to_products(
+            ['AFK110', 'UNKNOWN'], ['AFK110'], threshold=90,
+        )
+        for key in result.values():
+            self.assertIn('sku', key)
+            self.assertIn('score', key)
+            self.assertIn('alternatives', key)
+
+    def test_top_n_limits_alternatives(self):
+        result = match_supplier_to_products(
+            ['A'], ['A1', 'A2', 'A3', 'A4', 'A5', 'A6'],
+            threshold=10, top_n=2,
+        )
+        data = result['A']
+        # Best + alternatives should not exceed top_n + 1
+        self.assertLessEqual(len(data['alternatives']), 2)
 
 
 if __name__ == '__main__':

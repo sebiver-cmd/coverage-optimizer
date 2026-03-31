@@ -1402,7 +1402,7 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
             detected = detect_supplier_columns(sup_df)
 
             col_names = ['(none)'] + list(sup_df.columns)
-            scol1, scol2, scol3 = st.columns(3)
+            scol1, scol2, scol3, scol4 = st.columns(4)
             with scol1:
                 sku_idx = (
                     col_names.index(detected['sku'])
@@ -1429,6 +1429,19 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                 sup_disc_col = st.selectbox(
                     "Discount column", col_names, index=disc_idx,
                     help="Column containing discount percentages (optional).",
+                )
+            with scol4:
+                desc_idx = (
+                    col_names.index(detected['description'])
+                    if detected['description'] in col_names else 0
+                )
+                sup_desc_col = st.selectbox(
+                    "Name / Designation column", col_names,
+                    index=desc_idx,
+                    help=(
+                        "Column with the product name or designation "
+                        "(optional, improves matching accuracy)."
+                    ),
                 )
 
             cur_col1, cur_col2, cur_col3 = st.columns(3)
@@ -1481,10 +1494,26 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                 )
                 product_skus = work_df['NUMBER'].dropna().astype(str).str.strip()
 
+                # Build name mappings for enhanced matching
+                supplier_names = None
+                if sup_desc_col != '(none)':
+                    supplier_names = dict(zip(
+                        sup_df[sup_sku_col].astype(str).str.strip(),
+                        sup_df[sup_desc_col].astype(str).str.strip(),
+                    ))
+                product_names = None
+                if 'TITLE_DK' in work_df.columns:
+                    product_names = dict(zip(
+                        work_df['NUMBER'].astype(str).str.strip(),
+                        work_df['TITLE_DK'].astype(str).str.strip(),
+                    ))
+
                 matches = match_supplier_to_products(
                     supplier_skus.tolist(),
                     product_skus.tolist(),
                     threshold=match_threshold,
+                    supplier_names=supplier_names,
+                    product_names=product_names,
                 )
 
                 disc_col_name = (
@@ -1503,15 +1532,76 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                             hide_index=True,
                         )
 
-                if not matches:
+                # Split into auto-matched and unmatched
+                auto_matches = {
+                    k: v for k, v in matches.items()
+                    if v['sku'] is not None
+                }
+                unmatched = {
+                    k: v for k, v in matches.items()
+                    if v['sku'] is None and v['alternatives']
+                }
+
+                # Manual selection for unmatched SKUs
+                manual_matches: dict = {}
+                if unmatched:
+                    with st.expander(
+                        f"\u26a0\ufe0f {len(unmatched)} unmatched SKU(s) "
+                        "\u2014 select matches manually",
+                        expanded=True,
+                    ):
+                        for sup_sku, mdata in unmatched.items():
+                            alts = mdata['alternatives']
+                            options = ['(skip \u2014 no match)']
+                            for alt_sku, alt_score in alts:
+                                lbl = alt_sku
+                                if (product_names
+                                        and alt_sku in product_names):
+                                    lbl += (
+                                        f" \u2014 "
+                                        f"{product_names[alt_sku]}"
+                                    )
+                                lbl += f" ({alt_score}%)"
+                                options.append(lbl)
+
+                            sup_label = sup_sku
+                            if (supplier_names
+                                    and sup_sku in supplier_names):
+                                sup_label += (
+                                    f" \u2014 "
+                                    f"{supplier_names[sup_sku]}"
+                                )
+
+                            sel = st.selectbox(
+                                sup_label, options,
+                                key=f"_manual_match_{sup_sku}",
+                            )
+                            if sel != '(skip \u2014 no match)':
+                                idx = options.index(sel) - 1
+                                alt_sku, alt_score = alts[idx]
+                                manual_matches[sup_sku] = {
+                                    'sku': alt_sku,
+                                    'score': alt_score,
+                                    'alternatives': alts,
+                                }
+
+                all_matches = {**auto_matches, **manual_matches}
+
+                if not all_matches:
                     st.warning(
                         "No SKU matches found. Try lowering the "
                         "match threshold or checking the SKU column."
                     )
                 else:
+                    desc_col_name = (
+                        sup_desc_col
+                        if sup_desc_col != '(none)' else None
+                    )
                     match_rows = _build_match_rows(
-                        matches, sup_df, sup_sku_col, sup_price_col,
-                        disc_lines, exchange_rate, sup_currency, work_df,
+                        all_matches, sup_df, sup_sku_col,
+                        sup_price_col, disc_lines, exchange_rate,
+                        sup_currency, work_df,
+                        sup_desc_col=desc_col_name,
                     )
 
                     if match_rows:
@@ -1565,10 +1655,15 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
 def _build_match_rows(
     matches, sup_df, sup_sku_col, sup_price_col,
     disc_lines, exchange_rate, sup_currency, work_df,
+    sup_desc_col=None,
 ):
     """Build the match result rows for supplier matching."""
     match_rows = []
-    for sup_sku, (prod_sku, score) in matches.items():
+    for sup_sku, match_data in matches.items():
+        prod_sku = match_data['sku']
+        score = match_data['score']
+        if prod_sku is None:
+            continue
         sup_row = sup_df.loc[
             sup_df[sup_sku_col].astype(str).str.strip() == sup_sku
         ]
@@ -1597,9 +1692,18 @@ def _build_match_rows(
                 prod_mask, 'BUY_PRICE_NUM'
             ].iloc[0]
 
+        sup_name = ''
+        if sup_desc_col and sup_desc_col in sup_row.columns:
+            sup_name = str(sup_row.iloc[0][sup_desc_col]).strip()
+
+        prod_name = ''
         prod_price_row = work_df.loc[prod_mask]
         variant_name = ''
         if not prod_price_row.empty:
+            if 'TITLE_DK' in prod_price_row.columns:
+                prod_name = str(
+                    prod_price_row['TITLE_DK'].iloc[0]
+                ).strip()
             variant_name = str(
                 prod_price_row['VARIANT_TYPES'].iloc[0]
             ).strip() if 'VARIANT_TYPES' in prod_price_row.columns else ''
@@ -1620,7 +1724,9 @@ def _build_match_rows(
 
         match_rows.append({
             'Supplier SKU': sup_sku,
+            'Supplier Name': sup_name,
             'Product SKU': prod_sku,
+            'Product Name': prod_name,
             'Variant Name': variant_name,
             'Score': score,
             f'Price ({sup_currency})': round(price_val, 2),

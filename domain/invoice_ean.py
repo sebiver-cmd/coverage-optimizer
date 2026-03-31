@@ -165,7 +165,11 @@ def build_ean_export(
     )
 
     rows: list[dict] = []
-    for inv_sku, (matched_key, score) in matches.items():
+    for inv_sku, match_data in matches.items():
+        matched_key = match_data['sku']
+        score = match_data['score']
+        if matched_key is None:
+            continue
         qty_val = qty_map.get(inv_sku, 1.0)
 
         # Resolve the matched key to a product NUMBER and optional variant
