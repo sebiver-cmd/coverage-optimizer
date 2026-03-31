@@ -69,7 +69,7 @@ Implemented a shared `ui/backend_url.py` and refactored Streamlit callers to use
 # Stage 2.5 — Batch manifest (still no shop writes)
 
 ## Task 2.5.1 — Persist dry‑run manifest + return `batch_id`
-- [ ] Task 2.5.1
+- [x] Task 2.5.1
 
 ### Goal
 Create deterministic “approved change set” so later apply can use exactly what was reviewed.
@@ -215,7 +215,7 @@ Then STOP and say: “Say ‘Next’ to continue.”
 - [x] 1.2
 - [x] 1.3
 - [x] 2.1
-- [ ] 2.5.1
+- [x] 2.5.1
 - [ ] 3.1
 - [ ] 4.1
 - [ ] 4.2
