@@ -11,7 +11,7 @@ import streamlit as st
 
 from domain.pricing import MIN_COVERAGE_RATE, BEAUTIFY_LAST_DIGIT
 from ui.styles import DASHBOARD_CSS
-from ui.pages import home, price_optimizer, placeholders
+from ui.pages import home, price_optimizer
 from ui.backend_url import normalize_base_url, check_backend_connected
 
 # --- Page Configuration ---
@@ -27,7 +27,6 @@ st.markdown(DASHBOARD_CSS, unsafe_allow_html=True)
 _PAGES = [
     "Dashboard",
     "Price Optimizer",
-    "Reports",
 ]
 
 # ---------------------------------------------------------------------------
@@ -95,7 +94,7 @@ with st.sidebar:
     )
 
     # --- Backend connectivity status ---
-    _ok, _msg = check_backend_connected(backend_url, api_username, api_password)
+    _ok, _msg = check_backend_connected(backend_url)
     if _ok:
         st.success(_msg)
     else:
@@ -134,6 +133,3 @@ elif page == "Price Optimizer":
         dry_run=dry_run,
         backend_url=backend_url,
     )
-
-elif page == "Reports":
-    placeholders.render_reports()

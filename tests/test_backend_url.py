@@ -80,7 +80,7 @@ class TestCheckBackendConnected:
         mock_resp.raise_for_status = MagicMock()
         mock_get.return_value = mock_resp
 
-        ok, msg = check_backend_connected("http://127.0.0.1:8000", "u", "p")
+        ok, msg = check_backend_connected("http://127.0.0.1:8000")
         assert ok is True
         assert msg == "Backend connected"
 
@@ -88,7 +88,7 @@ class TestCheckBackendConnected:
     def test_returns_false_on_connection_error(self, mock_get):
         mock_get.side_effect = requests.ConnectionError("refused")
 
-        ok, msg = check_backend_connected("http://127.0.0.1:8000", "u", "p")
+        ok, msg = check_backend_connected("http://127.0.0.1:8000")
         assert ok is False
         assert "refused" in msg
 
@@ -96,7 +96,7 @@ class TestCheckBackendConnected:
     def test_returns_false_on_timeout(self, mock_get):
         mock_get.side_effect = requests.Timeout("timed out")
 
-        ok, msg = check_backend_connected("http://127.0.0.1:8000", "u", "p")
+        ok, msg = check_backend_connected("http://127.0.0.1:8000")
         assert ok is False
         assert "timed out" in msg
 
@@ -106,7 +106,7 @@ class TestCheckBackendConnected:
         mock_resp.raise_for_status.side_effect = requests.HTTPError("500 Server Error")
         mock_get.return_value = mock_resp
 
-        ok, msg = check_backend_connected("http://127.0.0.1:8000", "u", "p")
+        ok, msg = check_backend_connected("http://127.0.0.1:8000")
         assert ok is False
         assert "500" in msg
 
@@ -116,20 +116,29 @@ class TestCheckBackendConnected:
         mock_resp.raise_for_status = MagicMock()
         mock_get.return_value = mock_resp
 
-        check_backend_connected("http://localhost:8000", "u", "p")
+        check_backend_connected("http://localhost:8000")
         called_url = mock_get.call_args[0][0]
-        assert called_url == "http://127.0.0.1:8000/brands"
+        assert called_url == "http://127.0.0.1:8000/health"
 
     @patch("ui.backend_url.requests.get")
-    def test_passes_credentials_as_params(self, mock_get):
+    def test_uses_health_endpoint(self, mock_get):
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
         mock_get.return_value = mock_resp
 
-        check_backend_connected("http://127.0.0.1:8000", "myuser", "mypass")
+        check_backend_connected("http://127.0.0.1:8000")
+        called_url = mock_get.call_args[0][0]
+        assert called_url == "http://127.0.0.1:8000/health"
+
+    @patch("ui.backend_url.requests.get")
+    def test_no_credentials_sent(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        check_backend_connected("http://127.0.0.1:8000")
         _, kwargs = mock_get.call_args
-        assert kwargs["params"]["api_username"] == "myuser"
-        assert kwargs["params"]["api_password"] == "mypass"
+        assert "params" not in kwargs
 
     @patch("ui.backend_url.requests.get")
     def test_custom_timeout(self, mock_get):
@@ -137,6 +146,6 @@ class TestCheckBackendConnected:
         mock_resp.raise_for_status = MagicMock()
         mock_get.return_value = mock_resp
 
-        check_backend_connected("http://127.0.0.1:8000", "u", "p", timeout_s=10.0)
+        check_backend_connected("http://127.0.0.1:8000", timeout_s=10.0)
         _, kwargs = mock_get.call_args
         assert kwargs["timeout"] == 10.0

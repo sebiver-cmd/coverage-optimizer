@@ -12,16 +12,15 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.optimizer_api import OptimizeRequest, run_optimization
+from backend.apply_constants import BATCH_DIR, UUID_RE
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +56,7 @@ class DryRunChangeRow(BaseModel):
 
     NUMBER: str
     TITLE_DK: str
+    buy_price: float = 0.0
     old_price: float
     new_price: float
     change_pct: float
@@ -84,14 +84,6 @@ class DryRunResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 router = APIRouter(tags=["apply-prices"])
-
-# Directory where batch manifests are persisted.
-_BATCH_DIR = Path("data/apply_batches")
-
-# Strict UUID-4 pattern (lowercase hex with hyphens).
-_UUID_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-)
 
 
 @router.post("/apply-prices/dry-run", response_model=DryRunResponse)
@@ -128,6 +120,7 @@ def dry_run_apply(payload: DryRunRequest) -> DryRunResponse:
             DryRunChangeRow(
                 NUMBER=row.item_number,
                 TITLE_DK=row.title,
+                buy_price=row.buy_price,
                 old_price=old_price,
                 new_price=new_price,
                 change_pct=change_pct,
@@ -159,8 +152,8 @@ def dry_run_apply(payload: DryRunRequest) -> DryRunResponse:
         "summary": summary.model_dump(),
     }
 
-    _BATCH_DIR.mkdir(parents=True, exist_ok=True)
-    manifest_path = _BATCH_DIR / f"{batch_id}.json"
+    BATCH_DIR.mkdir(parents=True, exist_ok=True)
+    manifest_path = BATCH_DIR / f"{batch_id}.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     logger.info("Persisted dry-run manifest: %s", manifest_path)
 
@@ -178,10 +171,10 @@ def get_batch(batch_id: str) -> dict:
     ``batch_id`` is strictly validated as a UUID-4 string to prevent
     path-traversal attacks.
     """
-    if not _UUID_RE.match(batch_id):
+    if not UUID_RE.match(batch_id):
         raise HTTPException(status_code=422, detail="Invalid batch_id format.")
 
-    manifest_path = _BATCH_DIR / f"{batch_id}.json"
+    manifest_path = BATCH_DIR / f"{batch_id}.json"
     if not manifest_path.is_file():
         raise HTTPException(status_code=404, detail="Batch not found.")
 

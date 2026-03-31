@@ -17,6 +17,12 @@ import numpy as np
 from dandomain_api import DanDomainClient, DanDomainAPIError
 from push_safety import build_push_updates
 from ui.backend_url import normalize_backend_url, normalize_base_url
+from domain.risk_analysis import (
+    compute_largest_decreases,
+    compute_near_cost_warnings,
+    compute_change_histogram,
+    NEAR_COST_MARGIN_THRESHOLD,
+)
 
 from domain.pricing import (
     VAT_RATE,
@@ -514,6 +520,52 @@ def _render_filters(
 # Dry-Run Preview
 # ---------------------------------------------------------------------------
 
+def _apply_batch(
+    backend_url: str,
+    batch_id: str,
+    api_username: str,
+    api_password: str,
+    site_id: int = 1,
+) -> dict | None:
+    """Call ``POST /apply-prices/apply`` on the FastAPI backend.
+
+    Returns the response dict on success, or *None* on error.
+    """
+    base = _normalize_base_url(backend_url)
+    url = f"{base}/apply-prices/apply"
+    body = {
+        "batch_id": batch_id,
+        "confirm": True,
+        "api_username": api_username,
+        "api_password": api_password,
+        "site_id": site_id,
+    }
+    try:
+        resp = requests.post(url, json=body, timeout=_BACKEND_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.response.json().get("detail", "")
+        except Exception:
+            detail = exc.response.text[:200] if exc.response is not None else ""
+        st.error(f"Apply failed ({exc.response.status_code}): {detail}")
+        return None
+    except requests.ConnectionError:
+        st.error(
+            "Could not connect to the backend.  "
+            "Make sure the FastAPI server is running and the Backend URL is correct."
+        )
+        return None
+    except requests.RequestException:
+        st.error(
+            "Apply failed.  "
+            "Please check the Backend URL and server logs for details."
+        )
+        return None
+
+
 def _fetch_batch(backend_url: str, batch_id: str) -> dict | None:
     """Call ``GET /apply-prices/batch/{batch_id}`` on the FastAPI backend.
 
@@ -545,6 +597,22 @@ def _fetch_batch(backend_url: str, batch_id: str) -> dict | None:
             "Please check the Backend URL and server logs for details."
         )
         return None
+
+
+def _check_apply_enabled(backend_url: str) -> bool:
+    """Check whether the backend has apply enabled via environment gating.
+
+    Calls ``GET /apply-prices/status`` and returns the ``enabled`` flag.
+    Returns *False* on any error (connection failure, unexpected response).
+    """
+    base = _normalize_base_url(backend_url)
+    url = f"{base}/apply-prices/status"
+    try:
+        resp = requests.get(url, timeout=_BACKEND_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json().get("enabled", False)
+    except Exception:
+        return False
 
 
 def _render_dry_run_preview(
@@ -677,6 +745,171 @@ def _render_dry_run_preview(
         else:
             st.info("No changes in this batch.")
 
+    # --- Apply prices section ---
+    # Determine the active batch_id from dry-run or loaded batch.
+    active_batch_id = None
+    active_changes = None
+    if dryrun is not None and dryrun.get("batch_id"):
+        active_batch_id = dryrun["batch_id"]
+        active_changes = dryrun.get("changes", [])
+    elif loaded_batch is not None and loaded_batch.get("batch_id"):
+        active_batch_id = loaded_batch["batch_id"]
+        active_changes = loaded_batch.get("changes", [])
+
+    if active_batch_id and active_changes:
+        _render_apply_section(
+            backend_url=backend_url,
+            batch_id=active_batch_id,
+            changes=active_changes,
+        )
+
+
+def _render_apply_section(
+    backend_url: str,
+    batch_id: str,
+    changes: list[dict],
+) -> None:
+    """Render the apply-prices UI with confirmation and guardrail summary.
+
+    Shown only when a valid ``batch_id`` exists (from a dry-run or
+    loaded batch).  Requires the user to type ``APPLY`` to confirm.
+
+    If the backend reports that apply is disabled (environment gate),
+    a warning is shown instead of the confirmation controls.
+    """
+    st.markdown("---")
+    st.markdown("#### Apply prices")
+
+    # Environment gate check
+    if not _check_apply_enabled(backend_url):
+        st.warning(
+            "Apply is disabled on the backend.  "
+            "Set SB_OPTIMA_ENABLE_APPLY=true on the server to enable."
+        )
+        return
+
+    # Guardrail summary
+    total_rows = len(changes)
+    max_abs_pct = max(
+        (abs(c.get("change_pct", 0)) for c in changes), default=0
+    )
+    non_positive = sum(
+        1 for c in changes
+        if not isinstance(c.get("new_price"), (int, float))
+        or c.get("new_price", 0) <= 0
+    )
+    below_cost = sum(
+        1 for c in changes
+        if isinstance(c.get("buy_price"), (int, float))
+        and c["buy_price"] > 0
+        and isinstance(c.get("new_price"), (int, float))
+        and c["new_price"] <= c["buy_price"]
+    )
+    over_pct = sum(
+        1 for c in changes
+        if abs(c.get("change_pct", 0)) > 30
+    )
+
+    # Per-row issues that will be skipped (not batch-level rejects)
+    skippable = non_positive + below_cost + over_pct
+
+    g1, g2, g3, g4 = st.columns(4)
+    g1.metric("Rows", f"{total_rows:,}", help="Max 100 per batch")
+    g2.metric(
+        "Max change %",
+        f"{max_abs_pct:.1f}%",
+        help="Rows with abs(change_pct) > 30% will be skipped",
+    )
+    g3.metric(
+        "Below cost",
+        f"{below_cost}",
+        help="Rows where new_price <= buy_price (will be skipped)",
+    )
+    g4.metric(
+        "Will skip",
+        f"{skippable}",
+        help="Total rows that will be skipped by per-row guardrails",
+    )
+
+    # Batch-level hard reject (>100 rows)
+    if total_rows > 100:
+        st.error(f"Batch has {total_rows} rows (max 100). Apply will be rejected.")
+        return
+
+    # Per-row soft guardrail warnings
+    if skippable > 0:
+        st.warning(
+            f"{skippable} row(s) will be skipped due to per-row guardrails "
+            f"({non_positive} invalid price, {over_pct} over change %, "
+            f"{below_cost} below cost). "
+            f"{total_rows - skippable} row(s) will be applied."
+        )
+
+    # Confirmation input
+    confirm_text = st.text_input(
+        'Type "APPLY" to confirm',
+        placeholder="APPLY",
+        key="_apply_confirm_text",
+    )
+    confirmed = confirm_text.strip() == "APPLY"
+
+    opt_params = st.session_state.get("_opt_params", {})
+
+    if st.button(
+        "Apply prices",
+        disabled=not confirmed,
+        type="primary",
+        key="_btn_apply_prices",
+    ):
+        with st.spinner("Applying prices to webshop..."):
+            result = _apply_batch(
+                backend_url=backend_url,
+                batch_id=batch_id,
+                api_username=opt_params.get("api_username", ""),
+                api_password=opt_params.get("api_password", ""),
+                site_id=opt_params.get("site_id", 1),
+            )
+            if result is not None:
+                st.session_state["_apply_result"] = result
+
+    # Display apply result
+    apply_result = st.session_state.get("_apply_result")
+    if apply_result is not None:
+        applied = apply_result.get("applied_count", 0)
+        skipped_list = apply_result.get("skipped", [])
+        failed_list = apply_result.get("failed", [])
+
+        if not skipped_list and not failed_list:
+            st.success(
+                f"Applied {applied} price(s) successfully."
+            )
+        else:
+            st.info(
+                f"Applied {applied}, "
+                f"skipped {len(skipped_list)}, "
+                f"failed {len(failed_list)}."
+            )
+
+        if skipped_list:
+            st.markdown("**Skipped rows** (per-row guardrails)")
+            st.dataframe(
+                pd.DataFrame(skipped_list),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        if failed_list:
+            st.markdown("**Failed rows** (write errors)")
+            st.dataframe(
+                pd.DataFrame(failed_list),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        r1, r2 = st.columns(2)
+        r1.caption(f"Started: {apply_result.get('started_at', 'N/A')}")
+        r2.caption(f"Finished: {apply_result.get('finished_at', 'N/A')}")
+
 
 # ---------------------------------------------------------------------------
 # Result Summary Panel
@@ -785,6 +1018,67 @@ def _render_result_summary(final_df: pd.DataFrame) -> None:
     st.markdown("---")
 
 
+def _render_risk_view(
+    final_df: pd.DataFrame,
+    buy_prices: pd.Series,
+) -> None:
+    """Render a risk-analysis panel below the result summary.
+
+    Shows three sections inside a collapsible expander:
+
+    1. **Largest price decreases** — products with the biggest drop.
+    2. **Near-cost warnings** — products whose new price is dangerously
+       close to buy/cost price (low margin).
+    3. **Price-change histogram** — distribution of percentage changes.
+
+    Parameters
+    ----------
+    final_df
+        Display DataFrame with Danish-formatted ``PRICE`` and ``NEW_PRICE``
+        columns.
+    buy_prices
+        Numeric buy-price series aligned with *final_df* rows.
+    """
+    if final_df.empty:
+        return
+
+    with st.expander("Risk Analysis", expanded=False):
+        # --- 1. Largest decreases ---
+        st.markdown("**Largest Price Decreases**")
+        decreases_df = compute_largest_decreases(final_df, top_n=10)
+        if decreases_df.empty:
+            st.caption("No price decreases detected.")
+        else:
+            st.dataframe(decreases_df, use_container_width=True, hide_index=True)
+
+        st.markdown("")
+
+        # --- 2. Near-cost warnings ---
+        st.markdown("**Near-Cost Warnings**")
+        st.caption(
+            f"Products where the new price margin is below "
+            f"{int(NEAR_COST_MARGIN_THRESHOLD * 100)}%."
+        )
+        near_cost_df = compute_near_cost_warnings(final_df, buy_prices)
+        if near_cost_df.empty:
+            st.caption("No near-cost warnings.")
+        else:
+            st.dataframe(near_cost_df, use_container_width=True, hide_index=True)
+
+        st.markdown("")
+
+        # --- 3. Price-change histogram ---
+        st.markdown("**Price Change Distribution**")
+        labels, counts = compute_change_histogram(final_df)
+        if labels:
+            chart_df = pd.DataFrame({"Change %": labels, "Products": counts})
+            st.bar_chart(chart_df, x="Change %", y="Products")
+        else:
+            st.caption("No data for histogram.")
+
+    st.markdown("---")
+
+
 # ---------------------------------------------------------------------------
 # Analysis, Data Tabs, Downloads, Push
 # ---------------------------------------------------------------------------
@@ -888,6 +1182,9 @@ def _render_analysis(
 
     # --- Result Summary Panel ---
     _render_result_summary(final_df)
+
+    # --- Risk Analysis Panel ---
+    _render_risk_view(final_df, work_df["BUY_PRICE_NUM"])
 
     # --- Data Tabs ---
     _buy_price_col = "BUY_PRICE"

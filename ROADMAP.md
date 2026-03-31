@@ -130,7 +130,7 @@ Then STOP and say: “Say ‘Next’ to continue.”
 # Stage 3 — Real apply (writes enabled) with strict guardrails
 
 ## Task 3.1 — Apply stored manifest: `POST /apply-prices/apply` (small batches)
-- [ ] Task 3.1
+- [x] Task 3.1
 
 ### Claude prompt (copy/paste)
 ```text
@@ -192,7 +192,7 @@ Then STOP and say: “Say ‘Next’ to continue.”
 # Stage 4 — Production safety improvements
 
 ## Task 4.1 — Per‑row margin/cost guardrails (partial success)
-- [ ] Task 4.1
+- [x] Task 4.1
 
 ### Goal
 Ensure **no individual product** is pushed below cost or below your global minimum coverage rate, while still allowing partial success (apply valid rows, reject unsafe ones with reasons).
@@ -259,7 +259,7 @@ Then STOP and say: “Say ‘Next’ to continue.”
 ---
 
 ## Task 4.2 — Environment gating (enable apply only when SB_OPTIMA_ENABLE_APPLY=true)
-- [ ] Task 4.2
+- [x] Task 4.2
 
 ### Goal
 Prevent accidental real applies in environments where they shouldn’t happen (e.g., local dev, demo). Only allow the apply endpoint when a specific environment flag is enabled.
@@ -325,7 +325,7 @@ Then STOP and say: “Say ‘Next’ to continue.”
 ---
 
 ## Task 4.3 — Add `GET /health` and use it for UI connectivity status
-- [ ] Task 4.3
+- [x] Task 4.3
 
 ### Goal
 Provide a standard health endpoint that tells the UI and ops whether the backend is up, what version is running, and whether apply is enabled, and use it instead of hitting /brands for health.
@@ -389,7 +389,7 @@ Then STOP and say: “Say ‘Next’ to continue.”
 # Stage 5 — Optional analyst features (read‑only)
 
 ## Task 5.1 — Risk view (largest decreases, near-cost warnings, histogram)
-- [ ] Task 5.1
+- [x] Task 5.1
 
 ### Goal
 Give analysts a “risk” lens on an optimization run: highlight large decreases, near-cost prices, and the distribution of percentage changes. This is read-only analysis on the optimization results.
@@ -462,8 +462,8 @@ Then STOP and say: “Say ‘Next’ to continue.”
 - [x] 1.3
 - [x] 2.1
 - [x] 2.5.1
-- [ ] 3.1
-- [ ] 4.1
-- [ ] 4.2
-- [ ] 4.3
-- [ ] 5.1
+- [x] 3.1
+- [x] 4.1
+- [x] 4.2
+- [x] 4.3
+- [x] 5.1
