@@ -88,6 +88,14 @@ class TestNormalizeSku(unittest.TestCase):
     def test_empty_string(self):
         self.assertEqual(normalize_sku(''), '')
 
+    def test_comma_removed(self):
+        """Commas in article numbers (e.g. European decimal) are stripped."""
+        self.assertEqual(normalize_sku('GTR 4,5'), 'GTR45')
+
+    def test_comma_and_prefix(self):
+        """Prefix + comma normalises the same as comma-only."""
+        self.assertEqual(normalize_sku('TO-GTR-4,5'), 'GTR45')
+
 
 class TestDetectSupplierColumns(unittest.TestCase):
     def test_detects_all_columns(self):
@@ -396,6 +404,14 @@ class TestMatchSupplierToProducts(unittest.TestCase):
         data = result['A']
         # Alternatives list should not exceed top_n
         self.assertLessEqual(len(data['alternatives']), 2)
+
+    def test_comma_article_exact_match(self):
+        """Supplier SKU with comma matches product with same comma."""
+        result = match_supplier_to_products(
+            ['GTR 4,5'], ['TO-GTR-4,5'],
+        )
+        self.assertEqual(result['GTR 4,5']['sku'], 'TO-GTR-4,5')
+        self.assertEqual(result['GTR 4,5']['score'], 100)
 
 
 if __name__ == '__main__':

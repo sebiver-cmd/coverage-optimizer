@@ -132,6 +132,7 @@ def match_invoice_to_products(
         .astype(str)
         .str.strip()
         .loc[lambda s: s != '']
+        .drop_duplicates()
     )
 
     # Pre-compute a per-row SKU → quantity mapping so that we look up
@@ -271,13 +272,27 @@ def build_export_from_matches(
 
         # If the match resolved to a specific variant, narrow to that
         if vtype:
-            vt_mask = (
+            vt_col = (
                 matched_products['VARIANT_TYPES']
-                .fillna('').astype(str).str.strip() == vtype
+                .fillna('').astype(str).str.strip()
             )
-            specific = matched_products.loc[vt_mask]
+            # Exact match
+            specific = matched_products.loc[vt_col == vtype]
+            if specific.empty:
+                # Size-alias match (e.g. "L" ↔ "Large")
+                aliases = _size_aliases(vtype)
+                if aliases:
+                    specific = matched_products.loc[
+                        vt_col.str.lower().isin(aliases)
+                    ]
             if not specific.empty:
                 matched_products = specific
+            elif len(matched_products) > 1:
+                # vtype didn't match exactly; fall back to narrowing
+                inv_desc = desc_map.get(inv_sku, '')
+                matched_products = _narrow_variants(
+                    matched_products, inv_sku, inv_desc,
+                )
         elif len(matched_products) > 1:
             # Fall back to description-based narrowing using SKU text,
             # the optional description column, and product titles.
@@ -310,24 +325,77 @@ def build_export_from_matches(
 
 _BOUNDARY_CACHE: dict[str, re.Pattern[str]] = {}
 
+# --- Size-abbreviation aliases ---
+# Each tuple is a group of equivalent size names (all lower-cased).
+# Any member can match any other member in the same group.
+# Compound sizes include both hyphenated and concatenated forms
+# (e.g. "x-large" and "xlarge") because both appear in the wild.
+# Simple sizes like "small" or "large" need no concatenated form.
 
-def _variant_in_context(vt: str, context: str) -> bool:
-    """Check whether a variant name appears in the context string.
+_SIZE_GROUPS: list[tuple[str, ...]] = [
+    ('xxs', 'xx-small', 'xxsmall'),
+    ('xs', 'x-small', 'xsmall'),
+    ('s', 'small'),
+    ('m', 'medium', 'med'),
+    ('l', 'large'),
+    ('xl', 'x-large', 'xlarge'),
+    ('xxl', 'xx-large', 'xxlarge', '2xl'),
+    ('xxxl', 'xxx-large', 'xxxlarge', '3xl'),
+]
 
-    Uses word-boundary matching so that short names like ``"S"`` or ``"L"``
-    do not accidentally match inside unrelated words (e.g. ``"PSW"``).
+_SIZE_ALIAS_MAP: dict[str, frozenset[str]] = {}
+for _grp in _SIZE_GROUPS:
+    _fs = frozenset(_grp)
+    for _member in _grp:
+        _SIZE_ALIAS_MAP[_member] = _fs
+
+
+def _size_aliases(name: str) -> frozenset[str]:
+    """Return the set of equivalent size names for *name*, or empty."""
+    return _SIZE_ALIAS_MAP.get(name.lower().strip(), frozenset())
+
+
+def _boundary_pattern(key: str) -> re.Pattern[str]:
+    """Get or compile a word-boundary regex for *key*.
+
+    The key is lower-cased internally — callers need not pre-normalise.
     """
-    vt = vt.strip()
-    if not vt:
-        return False
-    key = vt.lower()
+    key = key.lower()
     pat = _BOUNDARY_CACHE.get(key)
     if pat is None:
         pat = re.compile(
             r'(?<![A-Za-z0-9])' + re.escape(key) + r'(?![A-Za-z0-9])'
         )
         _BOUNDARY_CACHE[key] = pat
-    return bool(pat.search(context.lower()))
+    return pat
+
+
+def _variant_in_context(vt: str, context: str) -> bool:
+    """Check whether a variant name appears in the context string.
+
+    Uses word-boundary matching so that short names like ``"S"`` or ``"L"``
+    do not accidentally match inside unrelated words (e.g. ``"PSW"``).
+
+    Also recognises standard size abbreviations: ``XS`` ↔ ``X-Small``,
+    ``S`` ↔ ``Small``, ``M`` ↔ ``Medium``, ``L`` ↔ ``Large``,
+    ``XL`` ↔ ``X-Large``, and so on.
+    """
+    vt = vt.strip()
+    if not vt:
+        return False
+    key = vt.lower()
+    context_lower = context.lower()
+
+    # Direct word-boundary match
+    if _boundary_pattern(key).search(context_lower):
+        return True
+
+    # Size-alias match: check if any equivalent size name appears
+    for alias in _size_aliases(key):
+        if alias != key and _boundary_pattern(alias).search(context_lower):
+            return True
+
+    return False
 
 
 def _parse_qty(raw: object) -> float:
