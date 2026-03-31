@@ -13,6 +13,7 @@ from domain.supplier import (
     detect_encoding,
     detect_supplier_columns,
     normalize_sku,
+    _dedupe_columns,
 )
 
 
@@ -210,6 +211,107 @@ class TestParseSupplierFilePDFNoPdfplumber(unittest.TestCase):
             with self.assertRaises(ValueError) as ctx:
                 parse_supplier_file(b'%PDF-dummy', 'file.pdf')
             self.assertIn('pdfplumber', str(ctx.exception))
+
+
+class TestDedupeColumns(unittest.TestCase):
+    """Tests for _dedupe_columns helper."""
+
+    def test_unique_headers_unchanged(self):
+        self.assertEqual(
+            _dedupe_columns(['A', 'B', 'C']),
+            ['A', 'B', 'C'],
+        )
+
+    def test_empty_string_duplicates(self):
+        result = _dedupe_columns(['', '', ''])
+        self.assertEqual(len(result), len(set(result)))
+
+    def test_mixed_duplicates(self):
+        result = _dedupe_columns(['SKU', '', 'Price', ''])
+        self.assertEqual(len(result), len(set(result)))
+        self.assertEqual(result[0], 'SKU')
+        self.assertEqual(result[2], 'Price')
+
+
+class TestParseSupplierFilePDFDuplicateHeaders(unittest.TestCase):
+    """PDFs whose relaxed extraction produces duplicate column names."""
+
+    def test_duplicate_column_headers_do_not_crash(self):
+        """Concat of tables with duplicate empty headers must not raise
+        'Reindexing only valid with uniquely valued Index objects'."""
+        # Build two DataFrames with duplicate column names — the exact
+        # situation that caused the original crash.
+        headers_a = ['X', '', '', 'Y']
+        headers_b = ['X', '', 'Z']
+        rows_a = [['1', '2', '3', '4']]
+        rows_b = [['a', 'b', 'c']]
+
+        import pandas as _pd
+        from domain.supplier import _dedupe_columns
+        df_a = _pd.DataFrame(rows_a, columns=_dedupe_columns(headers_a))
+        df_b = _pd.DataFrame(rows_b, columns=_dedupe_columns(headers_b))
+        # Should not raise
+        result = _pd.concat([df_a, df_b], ignore_index=True)
+        self.assertEqual(len(result), 2)
+
+
+class TestParseSupplierFilePDFInvoiceRegex(unittest.TestCase):
+    """Invoice-style PDFs parsed by the regex fallback."""
+
+    def test_invoice_lines_extracted(self):
+        """PDF with invoice-style lines (item no, article, qty, price)
+        should be parsed by the regex fallback when table extraction
+        returns nothing useful."""
+        lines = [
+            'Proforma Invoice No. 12345',
+            'Item Article No Designation QtyUnit Unit Price Item Value',
+            '[EUR] [EUR]',
+            '001 AFK 150 Judogi DAX KIDS white, size 150 10pcs 22,00 220,00',
+            'Customstariffe No 62043290',
+            '002 ATBK 190 Karategi TOKAIDO, black, size 190 5pcs 41,90 209,50',
+            'Customstariffe No 62042280',
+        ]
+        pdf_bytes = _make_text_pdf(lines)
+        # Mock table extraction to return nothing so we hit text fallback
+        _orig_open = __import__('pdfplumber').open
+
+        class _FakePage:
+            def __init__(self, real_page):
+                self._real = real_page
+
+            def extract_tables(self, **kw):
+                return []
+
+            def extract_text(self, **kw):
+                return self._real.extract_text(**kw)
+
+        class _FakePDF:
+            def __init__(self, real_pdf):
+                self._real = real_pdf
+                self.pages = [_FakePage(p) for p in real_pdf.pages]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                self._real.__exit__(*a)
+
+        def _mock_open(f):
+            real = _orig_open(f)
+            return _FakePDF(real.__enter__())
+
+        with patch('domain.supplier.pdfplumber.open', side_effect=_mock_open):
+            df = parse_supplier_file(pdf_bytes, 'invoice.pdf')
+        self.assertGreaterEqual(len(df), 2)
+        self.assertIn('Article No', df.columns)
+        self.assertIn('Unit Price', df.columns)
+
+    def test_article_no_column_detected(self):
+        df = pd.DataFrame(columns=['Article No', 'Designation', 'Unit Price'])
+        result = detect_supplier_columns(df)
+        self.assertEqual(result['sku'], 'Article No')
+        self.assertEqual(result['price'], 'Unit Price')
+        self.assertEqual(result['description'], 'Designation')
 
 
 if __name__ == '__main__':

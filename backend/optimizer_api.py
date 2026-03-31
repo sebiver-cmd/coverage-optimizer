@@ -125,6 +125,7 @@ class ProductRow(BaseModel):
     needs_adjustment: bool
     variant_id: str = ""
     variant_types: str = ""
+    ean: str = ""
 
 
 class OptimizeSummary(BaseModel):
@@ -295,6 +296,7 @@ def run_optimization(payload: OptimizeRequest) -> OptimizeResponse:
                     needs_adjustment=bool(adjusted_mask[i]),
                     variant_id=str(row.get("VARIANT_ID", "")),
                     variant_types=str(row.get("VARIANT_TYPES", "")),
+                    ean=str(row.get("EAN", "")),
                 )
             )
 

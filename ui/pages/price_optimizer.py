@@ -200,6 +200,7 @@ def _build_dataframes_from_response(
             "PRICE_NUM": r["current_price"],
             "VARIANT_ID": r["variant_id"],
             "VARIANT_TYPES": r["variant_types"],
+            "EAN": r.get("ean", ""),
         })
     raw_df = pd.DataFrame(raw_records)
 
@@ -1596,7 +1597,11 @@ def _build_match_rows(
             ].iloc[0]
 
         prod_price_row = work_df.loc[prod_mask]
+        variant_name = ''
         if not prod_price_row.empty:
+            variant_name = str(
+                prod_price_row['VARIANT_TYPES'].iloc[0]
+            ).strip() if 'VARIANT_TYPES' in prod_price_row.columns else ''
             sell_ex_vat = (
                 prod_price_row['PRICE_NUM'].iloc[0] / (1 + VAT_RATE)
             )
@@ -1615,6 +1620,7 @@ def _build_match_rows(
         match_rows.append({
             'Supplier SKU': sup_sku,
             'Product SKU': prod_sku,
+            'Variant Name': variant_name,
             'Score': score,
             f'Price ({sup_currency})': round(price_val, 2),
             'Discount %': disc_pct if disc_pct > 0 else '',
