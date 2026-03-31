@@ -593,6 +593,22 @@ def _fetch_batch(backend_url: str, batch_id: str) -> dict | None:
         return None
 
 
+def _check_apply_enabled(backend_url: str) -> bool:
+    """Check whether the backend has apply enabled via environment gating.
+
+    Calls ``GET /apply-prices/status`` and returns the ``enabled`` flag.
+    Returns *False* on any error (connection failure, unexpected response).
+    """
+    base = _normalize_base_url(backend_url)
+    url = f"{base}/apply-prices/status"
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        return resp.json().get("enabled", False)
+    except Exception:
+        return False
+
+
 def _render_dry_run_preview(
     display_all: pd.DataFrame,
     backend_url: str,
@@ -751,9 +767,20 @@ def _render_apply_section(
 
     Shown only when a valid ``batch_id`` exists (from a dry-run or
     loaded batch).  Requires the user to type ``APPLY`` to confirm.
+
+    If the backend reports that apply is disabled (environment gate),
+    a warning is shown instead of the confirmation controls.
     """
     st.markdown("---")
     st.markdown("#### Apply prices")
+
+    # Environment gate check
+    if not _check_apply_enabled(backend_url):
+        st.warning(
+            "Apply is disabled on the backend.  "
+            "Set SB_OPTIMA_ENABLE_APPLY=true on the server to enable."
+        )
+        return
 
     # Guardrail summary
     total_rows = len(changes)

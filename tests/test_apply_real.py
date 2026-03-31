@@ -11,11 +11,13 @@ Validates:
 - double-apply is blocked (409).
 - invalid / missing batch_id handled correctly.
 - audit log is written (includes skipped_count).
+- environment gating: apply only works when SB_OPTIMA_ENABLE_APPLY=true.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import uuid
 from pathlib import Path
@@ -90,6 +92,15 @@ def _apply_payload(batch_id: str, confirm: bool = True) -> dict:
         "api_password": "secret",
         "site_id": 1,
     }
+
+
+@pytest.fixture(autouse=True)
+def _enable_apply(monkeypatch):
+    """Enable the apply endpoint for all tests by default.
+
+    Individual tests can override by setting the env var differently.
+    """
+    monkeypatch.setenv("SB_OPTIMA_ENABLE_APPLY", "true")
 
 
 @pytest.fixture(autouse=True)
@@ -927,3 +938,120 @@ class TestValidateRow:
         reason = _validate_row(row)
         assert reason is not None
         assert "change_pct" in reason
+
+
+# ---------------------------------------------------------------------------
+# Tests – environment gating
+# ---------------------------------------------------------------------------
+
+
+class TestEnvironmentGating:
+    """Apply is only allowed when SB_OPTIMA_ENABLE_APPLY=true."""
+
+    def test_apply_rejected_when_disabled(self, monkeypatch):
+        """403 when env var is not set to 'true'."""
+        monkeypatch.setenv("SB_OPTIMA_ENABLE_APPLY", "false")
+        bid = str(uuid.uuid4())
+        _make_manifest(bid)
+
+        resp = client.post(
+            "/apply-prices/apply",
+            json=_apply_payload(bid),
+        )
+        assert resp.status_code == 403
+        assert "disabled" in resp.json()["detail"].lower()
+
+    def test_apply_rejected_when_env_missing(self, monkeypatch):
+        """403 when env var is absent."""
+        monkeypatch.delenv("SB_OPTIMA_ENABLE_APPLY", raising=False)
+        bid = str(uuid.uuid4())
+        _make_manifest(bid)
+
+        resp = client.post(
+            "/apply-prices/apply",
+            json=_apply_payload(bid),
+        )
+        assert resp.status_code == 403
+
+    def test_apply_rejected_when_env_empty(self, monkeypatch):
+        """403 when env var is empty string."""
+        monkeypatch.setenv("SB_OPTIMA_ENABLE_APPLY", "")
+        bid = str(uuid.uuid4())
+        _make_manifest(bid)
+
+        resp = client.post(
+            "/apply-prices/apply",
+            json=_apply_payload(bid),
+        )
+        assert resp.status_code == 403
+
+    @patch("backend.apply_real_api.DanDomainClient")
+    def test_apply_allowed_when_enabled(self, mock_cls, monkeypatch):
+        """200 when env var is 'true'."""
+        monkeypatch.setenv("SB_OPTIMA_ENABLE_APPLY", "true")
+        bid = str(uuid.uuid4())
+        _make_manifest(bid)
+
+        mock_instance = MagicMock()
+        mock_instance.update_prices_batch.return_value = {
+            "success": 2,
+            "failed": 0,
+            "errors": [],
+        }
+        mock_cls.return_value = mock_instance
+
+        resp = client.post(
+            "/apply-prices/apply",
+            json=_apply_payload(bid),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["applied_count"] == 2
+
+    @patch("backend.apply_real_api.DanDomainClient")
+    def test_apply_allowed_case_insensitive(self, mock_cls, monkeypatch):
+        """Env var check is case-insensitive: 'True', 'TRUE' also work."""
+        monkeypatch.setenv("SB_OPTIMA_ENABLE_APPLY", "True")
+        bid = str(uuid.uuid4())
+        _make_manifest(bid)
+
+        mock_instance = MagicMock()
+        mock_instance.update_prices_batch.return_value = {
+            "success": 2,
+            "failed": 0,
+            "errors": [],
+        }
+        mock_cls.return_value = mock_instance
+
+        resp = client.post(
+            "/apply-prices/apply",
+            json=_apply_payload(bid),
+        )
+        assert resp.status_code == 200
+
+
+class TestApplyStatusEndpoint:
+    """GET /apply-prices/status reports whether apply is enabled."""
+
+    def test_status_enabled(self, monkeypatch):
+        monkeypatch.setenv("SB_OPTIMA_ENABLE_APPLY", "true")
+        resp = client.get("/apply-prices/status")
+        assert resp.status_code == 200
+        assert resp.json() == {"enabled": True}
+
+    def test_status_disabled(self, monkeypatch):
+        monkeypatch.setenv("SB_OPTIMA_ENABLE_APPLY", "false")
+        resp = client.get("/apply-prices/status")
+        assert resp.status_code == 200
+        assert resp.json() == {"enabled": False}
+
+    def test_status_missing_env(self, monkeypatch):
+        monkeypatch.delenv("SB_OPTIMA_ENABLE_APPLY", raising=False)
+        resp = client.get("/apply-prices/status")
+        assert resp.status_code == 200
+        assert resp.json() == {"enabled": False}
+
+    def test_status_case_insensitive(self, monkeypatch):
+        monkeypatch.setenv("SB_OPTIMA_ENABLE_APPLY", "TRUE")
+        resp = client.get("/apply-prices/status")
+        assert resp.status_code == 200
+        assert resp.json() == {"enabled": True}

@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -130,10 +131,38 @@ def _validate_row(row: dict) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Environment gating
+# ---------------------------------------------------------------------------
+
+#: Environment variable name that must be ``"true"`` to enable the apply endpoint.
+ENABLE_APPLY_ENV = "SB_OPTIMA_ENABLE_APPLY"
+
+
+def is_apply_enabled() -> bool:
+    """Return *True* only when the apply endpoint is explicitly enabled.
+
+    Reads ``SB_OPTIMA_ENABLE_APPLY`` from the environment.  The value
+    must be the literal string ``"true"`` (case-insensitive) to enable
+    writes.  Any other value — including absent — means disabled.
+    """
+    return os.environ.get(ENABLE_APPLY_ENV, "").strip().lower() == "true"
+
+
+# ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
 
 router = APIRouter(tags=["apply-prices"])
+
+
+@router.get("/apply-prices/status")
+def apply_status() -> dict[str, bool]:
+    """Report whether the apply endpoint is currently enabled.
+
+    Returns ``{"enabled": true}`` when ``SB_OPTIMA_ENABLE_APPLY=true``
+    is set, otherwise ``{"enabled": false}``.
+    """
+    return {"enabled": is_apply_enabled()}
 
 
 @router.post("/apply-prices/apply", response_model=ApplyResponse)
@@ -146,7 +175,20 @@ def apply_prices(payload: ApplyRequest) -> ApplyResponse:
 
     Per-row guardrails (price, change_pct, margin) skip individual rows
     rather than rejecting the entire batch, enabling partial success.
+
+    Requires ``SB_OPTIMA_ENABLE_APPLY=true`` environment variable to be
+    set; returns 403 otherwise.
     """
+    # -1. Environment gate -----------------------------------------------
+    if not is_apply_enabled():
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Apply is disabled.  Set environment variable "
+                "SB_OPTIMA_ENABLE_APPLY=true to enable."
+            ),
+        )
+
     started_at = datetime.now(timezone.utc).isoformat()
 
     # 0. confirm must be true -------------------------------------------
