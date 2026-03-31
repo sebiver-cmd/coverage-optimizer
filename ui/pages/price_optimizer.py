@@ -17,6 +17,11 @@ import numpy as np
 from dandomain_api import DanDomainClient, DanDomainAPIError
 from push_safety import build_push_updates
 from ui.backend_url import normalize_backend_url, normalize_base_url
+from domain.risk_analysis import (
+    compute_largest_decreases,
+    compute_near_cost_warnings,
+    compute_change_histogram,
+)
 
 from domain.pricing import (
     VAT_RATE,
@@ -1012,6 +1017,64 @@ def _render_result_summary(final_df: pd.DataFrame) -> None:
     st.markdown("---")
 
 
+def _render_risk_view(
+    final_df: pd.DataFrame,
+    buy_prices: pd.Series,
+) -> None:
+    """Render a risk-analysis panel below the result summary.
+
+    Shows three sections inside a collapsible expander:
+
+    1. **Largest price decreases** — products with the biggest drop.
+    2. **Near-cost warnings** — products whose new price is dangerously
+       close to buy/cost price (low margin).
+    3. **Price-change histogram** — distribution of percentage changes.
+
+    Parameters
+    ----------
+    final_df
+        Display DataFrame with Danish-formatted ``PRICE`` and ``NEW_PRICE``
+        columns.
+    buy_prices
+        Numeric buy-price series aligned with *final_df* rows.
+    """
+    if final_df.empty:
+        return
+
+    with st.expander("Risk Analysis", expanded=False):
+        # --- 1. Largest decreases ---
+        st.markdown("**Largest Price Decreases**")
+        decreases_df = compute_largest_decreases(final_df, top_n=10)
+        if decreases_df.empty:
+            st.caption("No price decreases detected.")
+        else:
+            st.dataframe(decreases_df, use_container_width=True, hide_index=True)
+
+        st.markdown("")
+
+        # --- 2. Near-cost warnings ---
+        st.markdown("**Near-Cost Warnings**")
+        st.caption("Products where the new price margin is below 10%.")
+        near_cost_df = compute_near_cost_warnings(final_df, buy_prices)
+        if near_cost_df.empty:
+            st.caption("No near-cost warnings.")
+        else:
+            st.dataframe(near_cost_df, use_container_width=True, hide_index=True)
+
+        st.markdown("")
+
+        # --- 3. Price-change histogram ---
+        st.markdown("**Price Change Distribution**")
+        labels, counts = compute_change_histogram(final_df)
+        if labels:
+            chart_df = pd.DataFrame({"Change %": labels, "Products": counts})
+            st.bar_chart(chart_df, x="Change %", y="Products")
+        else:
+            st.caption("No data for histogram.")
+
+    st.markdown("---")
+
+
 # ---------------------------------------------------------------------------
 # Analysis, Data Tabs, Downloads, Push
 # ---------------------------------------------------------------------------
@@ -1115,6 +1178,9 @@ def _render_analysis(
 
     # --- Result Summary Panel ---
     _render_result_summary(final_df)
+
+    # --- Risk Analysis Panel ---
+    _render_risk_view(final_df, work_df["BUY_PRICE_NUM"])
 
     # --- Data Tabs ---
     _buy_price_col = "BUY_PRICE"
