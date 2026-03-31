@@ -139,12 +139,32 @@ def parse_supplier_file(raw_bytes: bytes, filename: str, encoding: str = 'auto')
                             for row in table[1:]
                         ]
                         tables.append(pd.DataFrame(rows, columns=headers))
-        if not tables:
-            raise ValueError(
-                "No tables found in the PDF. "
-                "Try converting it to CSV first."
-            )
-        return pd.concat(tables, ignore_index=True)
+        if tables:
+            return pd.concat(tables, ignore_index=True)
+
+        # Fallback: extract raw text and parse as CSV-like data
+        text_parts: list[str] = []
+        with pdfplumber.open(io.BytesIO(raw_bytes)) as pdf:
+            for page in pdf.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text_parts.append(page_text)
+        if text_parts:
+            full_text = '\n'.join(text_parts)
+            for sep in [';', ',', '\t', '|']:
+                try:
+                    df = pd.read_csv(
+                        io.StringIO(full_text), sep=sep, dtype=str,
+                    )
+                    if len(df.columns) > 1:
+                        return df
+                except Exception:
+                    continue
+
+        raise ValueError(
+            "No tables found in the PDF. "
+            "Try converting it to CSV first."
+        )
 
     # Assume CSV-like for everything else
     if encoding == 'auto':
