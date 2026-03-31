@@ -7,11 +7,13 @@ active page module.
 
 import os
 
+import requests
 import streamlit as st
 
 from domain.pricing import MIN_COVERAGE_RATE, BEAUTIFY_LAST_DIGIT
 from ui.styles import DASHBOARD_CSS
 from ui.pages import home, price_optimizer, placeholders
+from ui.pages.price_optimizer import _normalize_base_url
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -88,10 +90,22 @@ with st.sidebar:
     st.caption("BACKEND")
     backend_url = st.text_input(
         "Backend URL",
-        value=os.environ.get("SB_OPTIMA_BACKEND_URL", "http://localhost:8000"),
-        placeholder="http://localhost:8000",
+        value=os.environ.get("SB_OPTIMA_BACKEND_URL", "http://127.0.0.1:8000"),
+        placeholder="http://127.0.0.1:8000",
         help="URL of the SB-Optima FastAPI backend.",
     )
+
+    # --- Backend connectivity status ---
+    _check_url = _normalize_base_url(backend_url)
+    try:
+        _resp = requests.get(f"{_check_url}/brands", timeout=5)
+        _resp.raise_for_status()
+        st.success("Backend connected")
+    except Exception as _exc:
+        st.error("Backend not reachable")
+        st.caption("Try http://127.0.0.1:8000")
+        with st.expander("Details"):
+            st.code(str(_exc))
 
     st.divider()
     _active_beautify = st.session_state.get("_cc_beautify_digit", BEAUTIFY_LAST_DIGIT)

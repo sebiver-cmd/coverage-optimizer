@@ -17,6 +17,7 @@ import pytest
 
 # Import the private helpers directly from the module.
 from ui.pages.price_optimizer import (
+    _normalize_backend_url,
     _normalize_base_url,
     _fetch_brands_from_backend,
     _run_backend_optimization,
@@ -128,7 +129,7 @@ class TestFetchBrands:
         )
 
         url_called = mock_get.call_args[0][0]
-        assert url_called == "http://localhost:8000/brands"
+        assert url_called == "http://127.0.0.1:8000/brands"
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +352,7 @@ class TestNormalizeBaseUrl:
         assert _normalize_base_url("  http://127.0.0.1:8000/  ") == "http://127.0.0.1:8000"
 
     def test_localhost_url(self):
-        assert _normalize_base_url("http://localhost:8000") == "http://localhost:8000"
+        assert _normalize_base_url("http://localhost:8000") == "http://127.0.0.1:8000"
 
     def test_produces_correct_optimize_url(self):
         base = _normalize_base_url("http://127.0.0.1:8000/")
@@ -365,6 +366,28 @@ class TestNormalizeBaseUrl:
         base = _normalize_base_url("http://127.0.0.1:8000/")
         url = f"{base}/optimize/"
         assert "//" not in url.split("://", 1)[1]
+
+
+class TestNormalizeBackendUrl:
+    """Tests for ``_normalize_backend_url`` (localhost → 127.0.0.1)."""
+
+    def test_localhost_with_port(self):
+        assert _normalize_backend_url("http://localhost:8000") == "http://127.0.0.1:8000"
+
+    def test_localhost_with_port_and_trailing_slash(self):
+        assert _normalize_backend_url("http://localhost:8000/") == "http://127.0.0.1:8000/"
+
+    def test_localhost_without_port(self):
+        assert _normalize_backend_url("http://localhost") == "http://127.0.0.1"
+
+    def test_non_local_host_unchanged(self):
+        assert _normalize_backend_url("http://myserver.com:8000") == "http://myserver.com:8000"
+
+    def test_127_0_0_1_unchanged(self):
+        assert _normalize_backend_url("http://127.0.0.1:8000") == "http://127.0.0.1:8000"
+
+    def test_whitespace_stripped(self):
+        assert _normalize_backend_url("  http://localhost:8000  ") == "http://127.0.0.1:8000"
 
 
 # ---------------------------------------------------------------------------

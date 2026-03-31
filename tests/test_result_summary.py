@@ -21,15 +21,18 @@ from ui.pages.price_optimizer import _render_result_summary
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_final_df(rows: list[dict]) -> pd.DataFrame:
+def _make_final_df(rows: list[dict], *, include_title: bool = False) -> pd.DataFrame:
     """Build a minimal ``final_df`` with Danish-formatted prices."""
     records = []
     for r in rows:
-        records.append({
+        rec: dict = {
             "NUMBER": r["number"],
             "PRICE": format_dk(r["old_price"]),
             "NEW_PRICE": format_dk(r["new_price"]),
-        })
+        }
+        if include_title:
+            rec["TITLE_DK"] = r.get("title", "")
+        records.append(rec)
     return pd.DataFrame(records)
 
 
@@ -197,3 +200,38 @@ class TestRenderResultSummary:
         # Z1 counted as increase (0% change), Z2 as increase (50%)
         # avg = (0 + 50) / 2 = 25%
         m3.metric.assert_called_once_with("Avg Increase", "+25.00%")
+
+    @patch("ui.pages.price_optimizer.st")
+    def test_top5_includes_title_dk_when_present(self, mock_st):
+        """Top 5 tables should include TITLE_DK when the column exists."""
+        df = _make_final_df(
+            [
+                {"number": "T1", "old_price": 100.0, "new_price": 150.0, "title": "Widget A"},
+                {"number": "T2", "old_price": 100.0, "new_price": 130.0, "title": "Widget B"},
+            ],
+            include_title=True,
+        )
+
+        _setup_mocks(mock_st)
+        _render_result_summary(df)
+
+        dataframe_calls = mock_st.dataframe.call_args_list
+        assert len(dataframe_calls) == 1  # only increases
+        shown_df = dataframe_calls[0][0][0]
+        assert "TITLE_DK" in shown_df.columns
+        assert shown_df.iloc[0]["TITLE_DK"] == "Widget A"
+
+    @patch("ui.pages.price_optimizer.st")
+    def test_top5_omits_title_dk_when_absent(self, mock_st):
+        """Top 5 tables should not contain TITLE_DK when the column is missing."""
+        df = _make_final_df([
+            {"number": "N1", "old_price": 100.0, "new_price": 150.0},
+        ])
+
+        _setup_mocks(mock_st)
+        _render_result_summary(df)
+
+        dataframe_calls = mock_st.dataframe.call_args_list
+        assert len(dataframe_calls) == 1
+        shown_df = dataframe_calls[0][0][0]
+        assert "TITLE_DK" not in shown_df.columns

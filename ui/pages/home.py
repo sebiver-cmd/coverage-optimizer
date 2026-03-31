@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from dandomain_api import DanDomainClient, DanDomainAPIError
 from domain.pricing import MIN_COVERAGE_RATE, BEAUTIFY_LAST_DIGIT
-from domain.product_loader import fetch_products
 
 
 def render(
@@ -58,39 +56,12 @@ def render(
             unsafe_allow_html=True,
         )
     else:
-        if st.button("Fetch Products from API", type="primary"):
-            try:
-                with st.spinner("Fetching products from the API..."):
-                    progress_text = st.empty()
-
-                    def _api_progress(count):
-                        progress_text.text(f"Fetched {count} products...")
-
-                    with DanDomainClient(api_username, api_password) as client:
-                        raw_df, brand_id_map = fetch_products(
-                            client,
-                            include_variants=True,
-                            progress_callback=_api_progress,
-                        )
-
-                    progress_text.empty()
-
-                if raw_df.empty:
-                    st.warning("No products found.")
-                else:
-                    st.session_state["_api_raw_df"] = raw_df
-                    st.session_state["_api_brand_id_map"] = brand_id_map
-                    st.session_state["_api_brands"] = sorted(
-                        brand_id_map.keys(),
-                        key=lambda pid: brand_id_map[pid].lower(),
-                    )
-
-                    st.success(
-                        f"Loaded **{len(raw_df)}** product rows "
-                        f"({raw_df['PRODUCT_ID'].nunique()} base products)."
-                    )
-            except (DanDomainAPIError, ValueError, AttributeError) as exc:
-                st.error(f"API import failed: {exc}")
+        st.button("Fetch Products from API", type="primary", disabled=True)
+        st.info(
+            "This step is no longer required. "
+            "The Price Optimizer fetches product data automatically "
+            "when you run optimisation."
+        )
 
     st.markdown("")
     st.divider()
