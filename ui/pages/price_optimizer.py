@@ -602,7 +602,7 @@ def _check_apply_enabled(backend_url: str) -> bool:
     base = _normalize_base_url(backend_url)
     url = f"{base}/apply-prices/status"
     try:
-        resp = requests.get(url, timeout=10)
+        resp = requests.get(url, timeout=_BACKEND_TIMEOUT)
         resp.raise_for_status()
         return resp.json().get("enabled", False)
     except Exception:

@@ -489,7 +489,7 @@ class TestMarginCostGuardrail:
                 "TITLE_DK": "Widget",
                 "buy_price": 0.0,
                 "old_price": 100.0,
-                "new_price": 50.0,
+                "new_price": 90.0,
                 "change_pct": -10.0,
             },
         ]
