@@ -17,7 +17,7 @@ import math
 import numpy as np
 import pandas as pd
 
-from domain.pricing import clean_price
+from domain.pricing import clean_price, VAT_RATE
 
 # ---------------------------------------------------------------------------
 # Configurable thresholds
@@ -127,7 +127,7 @@ def compute_near_cost_warnings(
     if final_df.empty:
         return pd.DataFrame()
 
-    vat_rate = 0.25  # Danish VAT
+    vat_rate = VAT_RATE
     new_prices = final_df["NEW_PRICE"].apply(clean_price)
     new_prices_ex_vat = new_prices / (1 + vat_rate)
 

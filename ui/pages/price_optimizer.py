@@ -21,6 +21,7 @@ from domain.risk_analysis import (
     compute_largest_decreases,
     compute_near_cost_warnings,
     compute_change_histogram,
+    NEAR_COST_MARGIN_THRESHOLD,
 )
 
 from domain.pricing import (
@@ -1054,7 +1055,10 @@ def _render_risk_view(
 
         # --- 2. Near-cost warnings ---
         st.markdown("**Near-Cost Warnings**")
-        st.caption("Products where the new price margin is below 10%.")
+        st.caption(
+            f"Products where the new price margin is below "
+            f"{int(NEAR_COST_MARGIN_THRESHOLD * 100)}%."
+        )
         near_cost_df = compute_near_cost_warnings(final_df, buy_prices)
         if near_cost_df.empty:
             st.caption("No near-cost warnings.")
