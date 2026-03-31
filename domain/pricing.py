@@ -101,6 +101,7 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
         item_number = p.get('ItemNumber', '')
         price = p.get('Price', 0)
         buy_price = p.get('BuyingPrice', 0)
+        ean = str(p.get('Ean') or '').strip()
         # Online status for post-fetch filtering
         _status_raw = p.get('Status')
         _is_online = (
@@ -153,6 +154,8 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
                 vid = v.get('Id', '') if isinstance(v, dict) else getattr(v, 'Id', '')
                 vprice = v.get('Price', price) if isinstance(v, dict) else getattr(v, 'Price', price)
                 vbuy = v.get('BuyingPrice', buy_price) if isinstance(v, dict) else getattr(v, 'BuyingPrice', buy_price)
+                vean_raw = v.get('Ean', '') if isinstance(v, dict) else getattr(v, 'Ean', '')
+                vean = str(vean_raw).strip() if vean_raw else ean
                 rows.append({
                     'PRODUCT_ID': format_int_col(pid),
                     'TITLE_DK': title,
@@ -164,6 +167,7 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
                     'PRODUCER': producer,
                     'PRODUCER_ID': producer_id,
                     'ONLINE': _is_online,
+                    'EAN': vean,
                 })
         else:
             rows.append({
@@ -177,6 +181,7 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
                 'PRODUCER': producer,
                 'PRODUCER_ID': producer_id,
                 'ONLINE': _is_online,
+                'EAN': ean,
             })
 
     if not rows:

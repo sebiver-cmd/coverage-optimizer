@@ -268,9 +268,9 @@ class DanDomainClient:
         extended_fields = (
             "Id,ItemNumber,Title,Price,BuyingPrice,"
             "ProducerId,CategoryId,Variants,"
-            "VariantTypes,Status"
+            "VariantTypes,Status,Ean"
         )
-        extended_variant_fields = "Id,ItemNumber,Title,Price,BuyingPrice"
+        extended_variant_fields = "Id,ItemNumber,Title,Price,BuyingPrice,Ean"
         try:
             self._call("Product_SetFields", Fields=extended_fields)
         except DanDomainAPIError:
