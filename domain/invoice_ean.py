@@ -4,6 +4,10 @@ Parses an invoice (CSV / PDF), matches its SKUs to the product catalogue
 using fuzzy matching, and builds an export DataFrame with:
   SKU · Product Number · Title · Variant Name · Amount · EAN Barcode
 
+This module is the **single source of truth** for all SKU matching logic.
+Both Supplier price-list matching and Invoice/EAN matching use the same
+functions defined here.
+
 The export document is **read-only** — it is never used for API imports.
 """
 
@@ -14,9 +18,9 @@ import math
 import re
 
 import pandas as pd
+from rapidfuzz import fuzz, process as rfprocess
 
 from domain.supplier import (
-    match_supplier_to_products,
     parse_supplier_file,
     detect_supplier_columns,
 )
@@ -58,6 +62,254 @@ def detect_invoice_columns(df: pd.DataFrame) -> dict[str, str | None]:
         'qty': qty_col,
         'description': base['description'],
     }
+
+
+# ---------------------------------------------------------------------------
+# SKU normalisation & fuzzy matching (single source of truth)
+# ---------------------------------------------------------------------------
+
+def normalize_sku(sku: str) -> str:
+    """Normalise a SKU for fuzzy comparison.
+
+    Strips common prefixes (e.g. ``TO-``, ``DK-``), removes all
+    separators (``-``, ``_``, space, ``.``, ``/``) and uppercases
+    the result so that ``"AFK 110"`` and ``"TO-AFK-110"`` both become
+    ``"AFK110"``.
+    """
+    s = str(sku).upper().strip()
+    s = re.sub(r'^[A-Z]{1,3}[-_]', '', s)
+    s = re.sub(r'[-_\s./,]', '', s)
+    return s
+
+
+def match_supplier_to_products(
+    supplier_skus, product_skus, threshold=65, *,
+    supplier_names=None, product_names=None, top_n=5,
+):
+    """Fuzzy-match supplier SKUs to product SKUs.
+
+    When *supplier_names* (supplier SKU → designation / description)
+    and *product_names* (product SKU → product title) are provided,
+    description similarity is used as a secondary signal to choose the
+    absolute closest match from all candidates.
+
+    Returns ``{supplier_sku: {'sku': best_product_sku | None,
+    'score': int, 'alternatives': [(product_sku, score), …]}}``.
+    ``sku`` is ``None`` when no match exceeds *threshold*.
+    """
+    norm_to_orig: dict[str, str] = {}
+    for sku in product_skus:
+        norm = normalize_sku(sku)
+        if norm and norm not in norm_to_orig:
+            norm_to_orig[norm] = sku
+
+    norm_list = list(norm_to_orig.keys())
+
+    _prod_names: dict[str, str] = {}
+    if product_names:
+        for psku, pname in product_names.items():
+            _prod_names[psku] = str(pname).strip()
+
+    matches: dict[str, dict] = {}
+
+    for sup_sku in supplier_skus:
+        norm_sup = normalize_sku(sup_sku)
+        if not norm_sup:
+            continue
+
+        sup_name = ''
+        if supplier_names and sup_sku in supplier_names:
+            sup_name = str(supplier_names[sup_sku]).strip()
+
+        # Exact normalised-SKU match
+        if norm_sup in norm_to_orig:
+            matches[sup_sku] = {
+                'sku': norm_to_orig[norm_sup],
+                'score': 100,
+                'alternatives': [],
+            }
+            continue
+
+        # Fuzzy SKU match — read through ALL candidates above cutoff
+        results = rfprocess.extract(
+            norm_sup, norm_list, scorer=fuzz.ratio,
+            score_cutoff=threshold, limit=None,
+        )
+
+        if results:
+            ranked = _rank_candidates(
+                results, norm_to_orig, sup_name, _prod_names,
+            )
+            best_sku, best_score = ranked[0]
+            matches[sup_sku] = {
+                'sku': best_sku,
+                'score': best_score,
+                'alternatives': ranked[1:top_n + 1],
+            }
+            continue
+
+        # No match above threshold — provide suggestions
+        score_map: dict[str, int] = {}
+
+        sku_suggestions = rfprocess.extract(
+            norm_sup, norm_list, scorer=fuzz.ratio,
+            score_cutoff=30, limit=top_n,
+        )
+        if sku_suggestions:
+            for psku, sc in _rank_candidates(
+                sku_suggestions, norm_to_orig, sup_name, _prod_names,
+            ):
+                if psku not in score_map or sc > score_map[psku]:
+                    score_map[psku] = sc
+
+        if sup_name and _prod_names:
+            for psku, nscore in _name_based_candidates(
+                sup_name, _prod_names, top_n,
+            ):
+                if psku not in score_map or nscore > score_map[psku]:
+                    score_map[psku] = nscore
+
+        ranked = sorted(
+            score_map.items(), key=lambda x: x[1], reverse=True,
+        )[:top_n]
+
+        matches[sup_sku] = {
+            'sku': None,
+            'score': 0,
+            'alternatives': ranked,
+        }
+
+    return matches
+
+
+def _rank_candidates(results, norm_to_orig, sup_name, prod_names):
+    """Re-rank fuzzy-match candidates using SKU + name similarity.
+
+    Uses an adaptive weighting strategy: when the SKU score is weak
+    (< 80) and a strong name match exists, name similarity gets a
+    higher weight (50 %) so that designation / product-title information
+    can rescue otherwise borderline SKU matches.
+    """
+    candidates: list[tuple[str, int]] = []
+    for match_norm, sku_score, _ in results:
+        orig_sku = norm_to_orig[match_norm]
+        combined = int(sku_score)
+        if sup_name and orig_sku in prod_names:
+            name_score = max(
+                fuzz.token_set_ratio(
+                    sup_name.upper(), prod_names[orig_sku].upper(),
+                ),
+                fuzz.token_sort_ratio(
+                    sup_name.upper(), prod_names[orig_sku].upper(),
+                ),
+            )
+            # Adaptive weighting: lean on name similarity more when
+            # the SKU match is weak.
+            if sku_score < 80 and name_score > sku_score:
+                combined = int(0.5 * sku_score + 0.5 * name_score)
+            else:
+                combined = int(0.7 * sku_score + 0.3 * name_score)
+        candidates.append((orig_sku, combined))
+
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    return candidates
+
+
+def _name_based_candidates(sup_name, prod_names, top_n=5):
+    """Find product candidates based on name / designation similarity.
+
+    Uses the best of ``token_set_ratio`` and ``token_sort_ratio`` to
+    handle reordered words and partial overlaps robustly.
+    """
+    if not sup_name or not prod_names:
+        return []
+
+    name_to_skus: dict[str, list[str]] = {}
+    for psku, pname in prod_names.items():
+        upper = pname.upper().strip()
+        if upper:
+            name_to_skus.setdefault(upper, []).append(psku)
+
+    if not name_to_skus:
+        return []
+
+    name_list = list(name_to_skus.keys())
+    sup_upper = sup_name.upper().strip()
+
+    # Use token_set_ratio (good for subset matches) and also try
+    # token_sort_ratio (good for reordered words), keep the best.
+    results_set = rfprocess.extract(
+        sup_upper, name_list,
+        scorer=fuzz.token_set_ratio, limit=top_n,
+    )
+    results_sort = rfprocess.extract(
+        sup_upper, name_list,
+        scorer=fuzz.token_sort_ratio, limit=top_n,
+    )
+
+    # Merge both result sets, keeping the higher score per name.
+    best: dict[str, int] = {}
+    for matched_name, score, _ in (results_set or []) + (results_sort or []):
+        if matched_name not in best or score > best[matched_name]:
+            best[matched_name] = int(score)
+
+    candidates: list[tuple[str, int]] = []
+    for matched_name, score in best.items():
+        for psku in name_to_skus[matched_name]:
+            candidates.append((psku, score))
+
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    return candidates[:top_n]
+
+
+def search_products(
+    query: str,
+    product_skus: list[str],
+    product_names: dict[str, str] | None = None,
+    top_n: int = 10,
+) -> list[tuple[str, int]]:
+    """Search product catalogue by SKU or name for manual matching.
+
+    Returns up to *top_n* results as ``[(product_sku, score), …]``,
+    sorted by descending relevance.  Designed for the "search for
+    correct product" UI in the suggested-matchings panel.
+    """
+    if not query or not product_skus:
+        return []
+
+    query_upper = query.upper().strip()
+    score_map: dict[str, int] = {}
+
+    # SKU-based search
+    norm_to_orig: dict[str, str] = {}
+    for sku in product_skus:
+        norm = normalize_sku(sku)
+        if norm and norm not in norm_to_orig:
+            norm_to_orig[norm] = sku
+    norm_list = list(norm_to_orig.keys())
+
+    sku_results = rfprocess.extract(
+        normalize_sku(query), norm_list,
+        scorer=fuzz.ratio, limit=top_n,
+    )
+    for match_norm, score, _ in (sku_results or []):
+        orig = norm_to_orig[match_norm]
+        if orig not in score_map or score > score_map[orig]:
+            score_map[orig] = int(score)
+
+    # Name-based search
+    if product_names:
+        name_candidates = _name_based_candidates(
+            query, product_names, top_n,
+        )
+        for psku, nscore in name_candidates:
+            if psku not in score_map or nscore > score_map[psku]:
+                score_map[psku] = nscore
+
+    ranked = sorted(
+        score_map.items(), key=lambda x: x[1], reverse=True,
+    )[:top_n]
+    return ranked
 
 
 def build_ean_export(
@@ -188,6 +440,10 @@ def match_invoice_to_products(
             if composite not in composite_lookup:
                 composite_lookup[composite] = (num, vtype)
                 augmented_skus.append(composite)
+                # Map composite keys to the same title so name-based
+                # reranking also works for variant-level matches.
+                if title:
+                    title_lookup[composite] = title
 
     # Build name lookups so match_supplier_to_products can use product
     # name / designation similarity as a secondary reranking signal.
@@ -349,22 +605,71 @@ for _grp in _SIZE_GROUPS:
     for _member in _grp:
         _SIZE_ALIAS_MAP[_member] = _fs
 
+# --- Colour / material translation aliases (Danish ↔ English) ---
+# Each tuple is a group of equivalent names (all lower-cased).
+# Matching is bidirectional: "rød" matches "red" and vice versa.
+
+_TRANSLATION_GROUPS: list[tuple[str, ...]] = [
+    # Colours – Danish ↔ English
+    ('rød', 'red'),
+    ('blå', 'blue'),
+    ('grøn', 'green'),
+    ('gul', 'yellow'),
+    ('hvid', 'white'),
+    ('sort', 'black'),
+    ('grå', 'grey', 'gray'),
+    ('lilla', 'purple'),
+    ('orange', 'orange'),
+    ('rosa', 'lyserød', 'pink'),
+    ('brun', 'brown'),
+    ('turkis', 'turquoise'),
+    ('guld', 'gold'),
+    ('sølv', 'silver'),
+    ('beige', 'beige'),
+    ('marineblå', 'navy'),
+    ('bordeaux', 'burgundy', 'vinrød'),
+    # Materials – Danish ↔ English (common in product variants)
+    ('bomuld', 'cotton'),
+    ('uld', 'wool'),
+    ('læder', 'leather'),
+    ('silke', 'silk'),
+    ('polyester', 'polyester'),
+    ('stål', 'steel'),
+    ('træ', 'wood'),
+]
+
+_TRANSLATION_MAP: dict[str, frozenset[str]] = {}
+for _grp in _TRANSLATION_GROUPS:
+    _fs = frozenset(_grp)
+    for _member in _grp:
+        _TRANSLATION_MAP[_member] = _fs
+
 
 def _size_aliases(name: str) -> frozenset[str]:
     """Return the set of equivalent size names for *name*, or empty."""
     return _SIZE_ALIAS_MAP.get(name.lower().strip(), frozenset())
 
 
+def _translation_aliases(name: str) -> frozenset[str]:
+    """Return translations for *name* (e.g. rød ↔ red), or empty."""
+    return _TRANSLATION_MAP.get(name.lower().strip(), frozenset())
+
+
 def _boundary_pattern(key: str) -> re.Pattern[str]:
     """Get or compile a word-boundary regex for *key*.
 
     The key is lower-cased internally — callers need not pre-normalise.
+    The Unicode range ``\\u00c0–\\u024f`` extends word boundaries to
+    cover Latin Extended characters (Danish ø, å, æ, etc.) so that
+    translated colour names are not split mid-word.
     """
     key = key.lower()
     pat = _BOUNDARY_CACHE.get(key)
     if pat is None:
         pat = re.compile(
-            r'(?<![A-Za-z0-9])' + re.escape(key) + r'(?![A-Za-z0-9])'
+            r'(?<![A-Za-z0-9\u00c0-\u024f])'
+            + re.escape(key)
+            + r'(?![A-Za-z0-9\u00c0-\u024f])'
         )
         _BOUNDARY_CACHE[key] = pat
     return pat
@@ -381,9 +686,12 @@ def _variant_in_context(vt: str, context: str) -> bool:
     **any** part matches (allowing partial info such as only size or only
     colour to narrow the candidate set).
 
-    Also recognises standard size abbreviations: ``XS`` ↔ ``X-Small``,
-    ``S`` ↔ ``Small``, ``M`` ↔ ``Medium``, ``L`` ↔ ``Large``,
-    ``XL`` ↔ ``X-Large``, and so on.
+    Also recognises:
+    - Standard size abbreviations: ``XS`` ↔ ``X-Small``,
+      ``S`` ↔ ``Small``, ``M`` ↔ ``Medium``, ``L`` ↔ ``Large``,
+      ``XL`` ↔ ``X-Large``, and so on.
+    - Colour / material translations: ``rød`` ↔ ``red``,
+      ``blå`` ↔ ``blue``, ``hvid`` ↔ ``white``, etc.
     """
     vt = vt.strip()
     if not vt:
@@ -404,6 +712,11 @@ def _variant_in_context(vt: str, context: str) -> bool:
 
     # Size-alias match: check if any equivalent size name appears
     for alias in _size_aliases(key):
+        if alias != key and _boundary_pattern(alias).search(context_lower):
+            return True
+
+    # Translation match: check if any translated equivalent appears
+    for alias in _translation_aliases(key):
         if alias != key and _boundary_pattern(alias).search(context_lower):
             return True
 

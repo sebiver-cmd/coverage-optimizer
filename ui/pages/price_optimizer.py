@@ -39,7 +39,6 @@ from domain.supplier import (
     ENCODING_OPTIONS,
     parse_supplier_file,
     detect_supplier_columns,
-    match_supplier_to_products,
     detect_discount_lines,
 )
 from domain.invoice_ean import (
@@ -48,6 +47,7 @@ from domain.invoice_ean import (
     match_invoice_to_products,
     build_export_from_matches,
     generate_barcode_pdf,
+    search_products,
 )
 
 logger = logging.getLogger(__name__)
@@ -1489,70 +1489,36 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                 )
 
             if sup_sku_col != '(none)' and sup_price_col != '(none)':
-                supplier_skus = (
-                    sup_df[sup_sku_col].dropna()
-                    .astype(str).str.strip()
-                    .loc[lambda s: s != '']
+                # Use the unified matching function (same one
+                # used by EAN matching) for consistent behaviour.
+                desc_col_for_match = (
+                    sup_desc_col
+                    if sup_desc_col != '(none)' else None
                 )
 
-                # Build augmented product-SKU pool with composite
-                # keys (NUMBER + VARIANT_TYPES) so that supplier
-                # SKUs containing variant info can match directly —
-                # same approach used by the EAN matching flow.
-                composite_lookup: dict[str, tuple[str, str]] = {}
-                augmented_skus: list[str] = []
-                title_lookup: dict[str, str] = {}
+                mdata = match_invoice_to_products(
+                    products_df=work_df,
+                    invoice_df=sup_df,
+                    invoice_sku_col=sup_sku_col,
+                    invoice_qty_col=None,
+                    threshold=match_threshold,
+                    invoice_desc_col=desc_col_for_match,
+                )
 
-                _nums = (
-                    work_df['NUMBER'].fillna('').astype(str)
-                    .str.strip()
+                matches = mdata['matches']
+                composite_lookup = mdata['composite_lookup']
+                title_lookup = mdata['title_lookup']
+                product_names = (
+                    title_lookup if title_lookup else None
                 )
-                _vtypes = (
-                    work_df['VARIANT_TYPES'].fillna('').astype(str)
-                    .str.strip()
-                    if 'VARIANT_TYPES' in work_df.columns
-                    else pd.Series('', index=work_df.index)
-                )
-                _titles = (
-                    work_df['TITLE_DK'].fillna('').astype(str)
-                    .str.strip()
-                    if 'TITLE_DK' in work_df.columns
-                    else pd.Series('', index=work_df.index)
-                )
-                for num, vtype, title in zip(
-                    _nums, _vtypes, _titles
-                ):
-                    if not num:
-                        continue
-                    if num not in composite_lookup:
-                        composite_lookup[num] = (num, '')
-                        augmented_skus.append(num)
-                        if title:
-                            title_lookup[num] = title
-                    if vtype:
-                        composite = f"{num} {vtype}"
-                        if composite not in composite_lookup:
-                            composite_lookup[composite] = (num, vtype)
-                            augmented_skus.append(composite)
 
-                # Build name mappings for enhanced matching
+                # Build supplier name lookup for display
                 supplier_names = None
                 if sup_desc_col != '(none)':
                     supplier_names = dict(zip(
                         sup_df[sup_sku_col].astype(str).str.strip(),
                         sup_df[sup_desc_col].astype(str).str.strip(),
                     ))
-                product_names = (
-                    title_lookup if title_lookup else None
-                )
-
-                matches = match_supplier_to_products(
-                    supplier_skus.tolist(),
-                    augmented_skus,
-                    threshold=match_threshold,
-                    supplier_names=supplier_names,
-                    product_names=product_names,
-                )
 
                 # Resolve augmented keys back to plain NUMBERs
                 # so that downstream code can look up products.
@@ -1587,11 +1553,26 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                 # Build variant lookup for display in suggestions
                 _variant_lookup: dict[str, list[str]] = {}
                 if 'VARIANT_TYPES' in work_df.columns:
+                    _nums = (
+                        work_df['NUMBER'].fillna('').astype(str)
+                        .str.strip()
+                    )
+                    _vtypes = (
+                        work_df['VARIANT_TYPES'].fillna('').astype(str)
+                        .str.strip()
+                    )
                     for _n, _vt in zip(_nums, _vtypes):
                         if _n and _vt:
                             _variant_lookup.setdefault(
                                 _n, []
                             ).append(_vt)
+
+                # Build flat product SKU list for search
+                _all_product_skus = list({
+                    str(n).strip()
+                    for n in work_df['NUMBER'].dropna()
+                    if str(n).strip()
+                })
 
                 # Split into auto-matched and unmatched
                 auto_matches = {
@@ -1606,23 +1587,52 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                 # Manual selection for unmatched SKUs
                 manual_matches: dict = {}
                 if unmatched:
-                    with st.expander(
-                        f"\u26a0\ufe0f {len(unmatched)} unmatched SKU(s) "
-                        "\u2014 select matches",
-                        expanded=True,
-                    ):
-                        st.caption(
-                            "These supplier SKUs could not be "
-                            "automatically matched. Pick the correct "
-                            "product from the suggestions, or skip."
-                        )
-                        for sup_sku, mdata in unmatched.items():
-                            alts = mdata['alternatives']
+                    st.markdown(
+                        f"\u26a0\ufe0f **{len(unmatched)} unmatched "
+                        f"SKU(s)** \u2014 select matches or search"
+                    )
+                    st.caption(
+                        "These supplier SKUs could not be "
+                        "automatically matched. Pick from the "
+                        "suggestions or type to search all products."
+                    )
+                    for sup_sku, mdata_item in unmatched.items():
+                        alts = mdata_item['alternatives']
+
+                        sup_label = f"\U0001f50d **{sup_sku}**"
+                        if (supplier_names
+                                and sup_sku in supplier_names):
+                            sup_label += (
+                                f" \u2014 "
+                                f"{supplier_names[sup_sku][:60]}"
+                            )
+                        st.markdown(sup_label)
+
+                        _sc, _sb = st.columns([1, 2])
+                        with _sc:
+                            search_q = st.text_input(
+                                "Search products",
+                                key=f"_sup_search_{sup_sku}",
+                                placeholder="Type to search…",
+                                label_visibility="collapsed",
+                            )
+                        with _sb:
+                            if search_q:
+                                hits = search_products(
+                                    search_q,
+                                    _all_product_skus,
+                                    product_names,
+                                )
+                                candidates = hits
+                            else:
+                                candidates = alts
+
                             options = ['(skip \u2014 no match)']
-                            for alt_sku, alt_score in alts:
+                            for alt_sku, alt_score in candidates:
                                 lbl = alt_sku
                                 if (product_names
-                                        and alt_sku in product_names):
+                                        and alt_sku
+                                        in product_names):
                                     lbl += (
                                         f" \u2014 "
                                         f"{product_names[alt_sku]}"
@@ -1631,28 +1641,26 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                                     lbl += (
                                         " ["
                                         + ", ".join(
-                                            _variant_lookup[alt_sku]
+                                            _variant_lookup[
+                                                alt_sku
+                                            ]
                                         )
                                         + "]"
                                     )
                                 lbl += f" ({alt_score}%)"
                                 options.append(lbl)
 
-                            sup_label = f"\U0001f50d {sup_sku}"
-                            if (supplier_names
-                                    and sup_sku in supplier_names):
-                                sup_label += (
-                                    f" \u2014 "
-                                    f"{supplier_names[sup_sku][:60]}"
-                                )
-
                             sel = st.selectbox(
-                                sup_label, options,
+                                "Match",
+                                options,
                                 key=f"_manual_match_{sup_sku}",
+                                label_visibility="collapsed",
                             )
                             if sel != '(skip \u2014 no match)':
                                 idx = options.index(sel) - 1
-                                alt_sku, alt_score = alts[idx]
+                                alt_sku, alt_score = (
+                                    candidates[idx]
+                                )
                                 manual_matches[sup_sku] = {
                                     'sku': alt_sku,
                                     'score': alt_score,
@@ -2002,6 +2010,16 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
                                 inv_df.at[idx, desc_col] or ''
                             ).strip()
 
+                # Build flat product SKU list for search
+                _ean_product_skus = list({
+                    str(n).strip()
+                    for n in work_df['NUMBER'].dropna()
+                    if str(n).strip()
+                })
+                _ean_product_names = (
+                    title_lookup if title_lookup else None
+                )
+
                 # Split into auto-matched and unmatched
                 auto_matched = {
                     k: v for k, v in raw_matches.items()
@@ -2015,22 +2033,49 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
                 # Step 2: manual matching for unmatched items
                 manual_overrides: dict[str, str] = {}
                 if unmatched:
-                    with st.expander(
-                        f"\u26a0\ufe0f {len(unmatched)} unmatched "
-                        f"invoice line(s) \u2014 select matches",
-                        expanded=True,
-                    ):
-                        st.caption(
-                            "These invoice SKUs could not be "
-                            "automatically matched. Pick the correct "
-                            "product from the suggestions, or skip."
-                        )
-                        for inv_sku, md in unmatched.items():
-                            alts = md['alternatives']
+                    st.markdown(
+                        f"\u26a0\ufe0f **{len(unmatched)} unmatched "
+                        f"invoice line(s)** \u2014 select matches "
+                        f"or search"
+                    )
+                    st.caption(
+                        "These invoice SKUs could not be "
+                        "automatically matched. Pick from the "
+                        "suggestions or type to search all products."
+                    )
+                    for inv_sku, md in unmatched.items():
+                        alts = md['alternatives']
+
+                        inv_label = f"\U0001f50d **{inv_sku}**"
+                        if inv_sku in inv_names and inv_names[inv_sku]:
+                            inv_label += (
+                                f" \u2014 "
+                                f"{inv_names[inv_sku][:60]}"
+                            )
+                        st.markdown(inv_label)
+
+                        _ec, _eb = st.columns([1, 2])
+                        with _ec:
+                            ean_search_q = st.text_input(
+                                "Search products",
+                                key=f"_ean_search_{inv_sku}",
+                                placeholder="Type to search…",
+                                label_visibility="collapsed",
+                            )
+                        with _eb:
+                            if ean_search_q:
+                                hits = search_products(
+                                    ean_search_q,
+                                    _ean_product_skus,
+                                    _ean_product_names,
+                                )
+                                candidates = hits
+                            else:
+                                candidates = alts
+
                             options = ['(skip \u2014 no match)']
-                            for alt_sku, alt_score in alts:
+                            for alt_sku, alt_score in candidates:
                                 lbl = alt_sku
-                                # Show product title
                                 _num, _vt = ean_composite.get(
                                     alt_sku, (alt_sku, '')
                                 )
@@ -2039,26 +2084,20 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
                                         f" \u2014 "
                                         f"{title_lookup[_num]}"
                                     )
-                                # Show variant name when present
                                 if _vt:
                                     lbl += f" [{_vt}]"
                                 lbl += f" ({alt_score}%)"
                                 options.append(lbl)
 
-                            inv_label = f"\U0001f50d {inv_sku}"
-                            if inv_sku in inv_names and inv_names[inv_sku]:
-                                inv_label += (
-                                    f" \u2014 "
-                                    f"{inv_names[inv_sku][:60]}"
-                                )
-
                             sel = st.selectbox(
-                                inv_label, options,
+                                "Match",
+                                options,
                                 key=f"_ean_manual_{inv_sku}",
+                                label_visibility="collapsed",
                             )
                             if sel != '(skip \u2014 no match)':
                                 idx = options.index(sel) - 1
-                                alt_sku, _ = alts[idx]
+                                alt_sku, _ = candidates[idx]
                                 manual_overrides[inv_sku] = alt_sku
 
                 # Step 3: build the export with manual overrides
