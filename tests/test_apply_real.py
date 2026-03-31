@@ -381,9 +381,9 @@ class TestMarginCostGuardrail:
                 "NUMBER": "SKU-001",
                 "TITLE_DK": "Widget",
                 "buy_price": 100.0,
-                "old_price": 200.0,
-                "new_price": 90.0,
-                "change_pct": -5.0,
+                "old_price": 120.0,
+                "new_price": 95.0,
+                "change_pct": -20.83,
             },
         ]
         _make_manifest(bid, changes=changes)
@@ -414,9 +414,9 @@ class TestMarginCostGuardrail:
                 "NUMBER": "SKU-001",
                 "TITLE_DK": "Widget",
                 "buy_price": 100.0,
-                "old_price": 200.0,
+                "old_price": 120.0,
                 "new_price": 100.0,
-                "change_pct": -10.0,
+                "change_pct": -16.67,
             },
         ]
         _make_manifest(bid, changes=changes)
@@ -445,9 +445,9 @@ class TestMarginCostGuardrail:
                 "NUMBER": "SKU-001",
                 "TITLE_DK": "Widget",
                 "buy_price": 100.0,
-                "old_price": 200.0,
+                "old_price": 120.0,
                 "new_price": 101.0,
-                "change_pct": -5.0,
+                "change_pct": -15.83,
             },
         ]
         _make_manifest(bid, changes=changes)
@@ -564,9 +564,9 @@ class TestPartialSuccess:
                 "NUMBER": "SKU-003",
                 "TITLE_DK": "Below Cost",
                 "buy_price": 100.0,
-                "old_price": 200.0,
+                "old_price": 120.0,
                 "new_price": 90.0,
-                "change_pct": -5.0,
+                "change_pct": -25.0,
             },
             {
                 "NUMBER": "SKU-004",
@@ -612,9 +612,9 @@ class TestPartialSuccess:
                 "NUMBER": "SKU-001",
                 "TITLE_DK": "Below Cost",
                 "buy_price": 200.0,
-                "old_price": 300.0,
-                "new_price": 150.0,
-                "change_pct": -5.0,
+                "old_price": 220.0,
+                "new_price": 180.0,
+                "change_pct": -18.18,
             },
             {
                 "NUMBER": "SKU-002",
@@ -762,9 +762,9 @@ class TestValidManifestApply:
                 "NUMBER": "SKU-002",
                 "TITLE_DK": "Below Cost",
                 "buy_price": 200.0,
-                "old_price": 300.0,
-                "new_price": 150.0,
-                "change_pct": -5.0,
+                "old_price": 220.0,
+                "new_price": 180.0,
+                "change_pct": -18.18,
             },
         ]
         _make_manifest(bid, changes=changes)
