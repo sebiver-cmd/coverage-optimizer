@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from dandomain_api import DanDomainClient, DanDomainAPIError
 from backend.optimizer_api import router as optimizer_router
 from backend.brands_api import router as brands_router
+from backend.apply_prices_api import router as apply_prices_router
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ app = FastAPI(
 
 app.include_router(optimizer_router)
 app.include_router(brands_router)
+app.include_router(apply_prices_router)
 
 
 # ---------------------------------------------------------------------------
