@@ -291,11 +291,20 @@ def detect_supplier_columns(df):
     }
 
 
-def match_supplier_to_products(supplier_skus, product_skus, threshold=65):
+def match_supplier_to_products(
+    supplier_skus, product_skus, threshold=65, *,
+    supplier_names=None, product_names=None, top_n=5,
+):
     """Fuzzy-match supplier SKUs to product SKUs.
 
-    Returns ``{supplier_sku: (product_sku, score)}`` for every match
-    above *threshold*.
+    When *supplier_names* (supplier SKU → designation / description)
+    and *product_names* (product SKU → product title) are provided,
+    description similarity is used as a secondary signal to choose the
+    absolute closest match from all candidates.
+
+    Returns ``{supplier_sku: {'sku': best_product_sku | None,
+    'score': int, 'alternatives': [(product_sku, score), …]}}``.
+    ``sku`` is ``None`` when no match exceeds *threshold*.
     """
     norm_to_orig: dict[str, str] = {}
     for sku in product_skus:
@@ -304,23 +313,128 @@ def match_supplier_to_products(supplier_skus, product_skus, threshold=65):
             norm_to_orig[norm] = sku
 
     norm_list = list(norm_to_orig.keys())
-    matches: dict[str, tuple[str, int]] = {}
+
+    _prod_names: dict[str, str] = {}
+    if product_names:
+        for psku, pname in product_names.items():
+            _prod_names[psku] = str(pname).strip()
+
+    matches: dict[str, dict] = {}
 
     for sup_sku in supplier_skus:
         norm_sup = normalize_sku(sup_sku)
         if not norm_sup:
             continue
+
+        sup_name = ''
+        if supplier_names and sup_sku in supplier_names:
+            sup_name = str(supplier_names[sup_sku]).strip()
+
+        # Exact normalised-SKU match
         if norm_sup in norm_to_orig:
-            matches[sup_sku] = (norm_to_orig[norm_sup], 100)
+            matches[sup_sku] = {
+                'sku': norm_to_orig[norm_sup],
+                'score': 100,
+                'alternatives': [],
+            }
             continue
-        result = rfprocess.extractOne(
-            norm_sup, norm_list, scorer=fuzz.ratio, score_cutoff=threshold,
+
+        # Fuzzy SKU match — read through ALL candidates above cutoff
+        results = rfprocess.extract(
+            norm_sup, norm_list, scorer=fuzz.ratio,
+            score_cutoff=threshold, limit=None,
         )
-        if result:
-            match_norm, score, _ = result
-            matches[sup_sku] = (norm_to_orig[match_norm], int(score))
+
+        if results:
+            ranked = _rank_candidates(
+                results, norm_to_orig, sup_name, _prod_names,
+            )
+            best_sku, best_score = ranked[0]
+            matches[sup_sku] = {
+                'sku': best_sku,
+                'score': best_score,
+                'alternatives': ranked[1:top_n + 1],
+            }
+            continue
+
+        # No match above threshold — provide suggestions
+        score_map: dict[str, int] = {}
+
+        sku_suggestions = rfprocess.extract(
+            norm_sup, norm_list, scorer=fuzz.ratio,
+            score_cutoff=30, limit=top_n,
+        )
+        if sku_suggestions:
+            for psku, sc in _rank_candidates(
+                sku_suggestions, norm_to_orig, sup_name, _prod_names,
+            ):
+                if psku not in score_map or sc > score_map[psku]:
+                    score_map[psku] = sc
+
+        if sup_name and _prod_names:
+            for psku, nscore in _name_based_candidates(
+                sup_name, _prod_names, top_n,
+            ):
+                if psku not in score_map or nscore > score_map[psku]:
+                    score_map[psku] = nscore
+
+        ranked = sorted(
+            score_map.items(), key=lambda x: x[1], reverse=True,
+        )[:top_n]
+
+        matches[sup_sku] = {
+            'sku': None,
+            'score': 0,
+            'alternatives': ranked,
+        }
 
     return matches
+
+
+def _rank_candidates(results, norm_to_orig, sup_name, prod_names):
+    """Re-rank fuzzy-match candidates using SKU + name similarity."""
+    candidates: list[tuple[str, int]] = []
+    for match_norm, sku_score, _ in results:
+        orig_sku = norm_to_orig[match_norm]
+        combined = int(sku_score)
+        if sup_name and orig_sku in prod_names:
+            name_score = fuzz.token_set_ratio(
+                sup_name.upper(), prod_names[orig_sku].upper(),
+            )
+            combined = int(0.7 * sku_score + 0.3 * name_score)
+        candidates.append((orig_sku, combined))
+
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    return candidates
+
+
+def _name_based_candidates(sup_name, prod_names, top_n=5):
+    """Find product candidates based on name / designation similarity."""
+    if not sup_name or not prod_names:
+        return []
+
+    name_to_skus: dict[str, list[str]] = {}
+    for psku, pname in prod_names.items():
+        upper = pname.upper().strip()
+        if upper:
+            name_to_skus.setdefault(upper, []).append(psku)
+
+    if not name_to_skus:
+        return []
+
+    name_list = list(name_to_skus.keys())
+    results = rfprocess.extract(
+        sup_name.upper().strip(), name_list,
+        scorer=fuzz.token_set_ratio, limit=top_n,
+    )
+
+    candidates: list[tuple[str, int]] = []
+    for matched_name, score, _ in results:
+        for psku in name_to_skus[matched_name]:
+            candidates.append((psku, int(score)))
+
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    return candidates[:top_n]
 
 
 def detect_discount_lines(df, discount_col=None):
