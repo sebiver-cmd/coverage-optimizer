@@ -158,7 +158,7 @@ def parse_supplier_file(raw_bytes: bytes, filename: str, encoding: str = 'auto')
         if tables:
             try:
                 return pd.concat(tables, ignore_index=True)
-            except Exception:
+            except (pd.errors.InvalidIndexError, ValueError):
                 tables = []
 
         # Retry with relaxed table-detection (text-based strategies)
@@ -190,7 +190,7 @@ def parse_supplier_file(raw_bytes: bytes, filename: str, encoding: str = 'auto')
         if tables:
             try:
                 return pd.concat(tables, ignore_index=True)
-            except Exception:
+            except (pd.errors.InvalidIndexError, ValueError):
                 tables = []
 
         # Fallback: extract raw text and parse as CSV-like data
@@ -230,8 +230,8 @@ def parse_supplier_file(raw_bytes: bytes, filename: str, encoding: str = 'auto')
                 r'^\s*(\d{2,4})\s+'
                 r'(.+?)\s+'
                 r'(\d+\s*(?:pcs|prs|Paar|Stk|St|ml|kg|sets?|pieces?)\w*)\s+'
-                r'([\d]+[,.][\d]+)\s+'
-                r'([\d]+[,.]\d+)\s*$',
+                r'(\d+[,.]\d+)\s+'
+                r'(\d+[,.]\d+)\s*$',
                 re.IGNORECASE | re.MULTILINE,
             )
             _item_matches = _item_re.findall(full_text)
