@@ -307,7 +307,7 @@ def render(
     api_ready: bool,
     site_id: int,
     dry_run: bool,
-    backend_url: str = "http://localhost:8000",
+    backend_url: str = "http://127.0.0.1:8000",
 ) -> None:
     """Render the full Price Optimizer page.
 
@@ -720,7 +720,7 @@ def _render_analysis(
     price_pct: float,
     include_buy_price: bool,
     beautify_digit: int,
-    backend_url: str = "http://localhost:8000",
+    backend_url: str = "http://127.0.0.1:8000",
 ) -> None:
     """Render analysis results, data tabs, downloads, and push-to-shop.
 
