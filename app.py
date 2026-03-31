@@ -101,7 +101,7 @@ with st.sidebar:
         _resp = requests.get(f"{_check_url}/brands", timeout=5)
         _resp.raise_for_status()
         st.success("Backend connected")
-    except Exception as _exc:
+    except requests.RequestException as _exc:
         st.error("Backend not reachable")
         st.caption("Try http://127.0.0.1:8000")
         with st.expander("Details"):

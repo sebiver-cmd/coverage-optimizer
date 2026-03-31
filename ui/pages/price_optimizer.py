@@ -691,7 +691,7 @@ def _render_result_summary(final_df: pd.DataFrame) -> None:
         )
 
     # --- Top 5 increases / decreases ---
-    detail_cols: dict[str, np.ndarray] = {
+    detail_cols = {
         "NUMBER": final_df["NUMBER"].values,
     }
     # Include product title when available.
