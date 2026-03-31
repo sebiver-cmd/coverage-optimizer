@@ -17,11 +17,14 @@ import pytest
 
 # Import the private helpers directly from the module.
 from ui.pages.price_optimizer import (
-    _normalize_backend_url,
-    _normalize_base_url,
     _fetch_brands_from_backend,
     _run_backend_optimization,
     _build_dataframes_from_response,
+)
+# Normalisation now lives in the shared module.
+from ui.backend_url import (
+    normalize_backend_url as _normalize_backend_url,
+    normalize_base_url as _normalize_base_url,
 )
 
 

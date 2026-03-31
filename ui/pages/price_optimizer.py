@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import time
-from urllib.parse import urlparse, urlunparse
 
 import requests
 import streamlit as st
@@ -17,6 +16,7 @@ import numpy as np
 
 from dandomain_api import DanDomainClient, DanDomainAPIError
 from push_safety import build_push_updates
+from ui.backend_url import normalize_backend_url, normalize_base_url
 
 from domain.pricing import (
     VAT_RATE,
@@ -54,34 +54,9 @@ _BACKEND_TIMEOUT = 120
 # Backend helpers (read-only HTTP calls to the FastAPI backend)
 # ---------------------------------------------------------------------------
 
-def _normalize_backend_url(url: str) -> str:
-    """Normalize a backend URL so ``localhost`` becomes ``127.0.0.1``.
-
-    This avoids IPv6/IPv4 issues on Windows where ``localhost`` may
-    resolve to ``::1`` rather than ``127.0.0.1``.  Non-local hosts are
-    returned unchanged.
-    """
-    url = url.strip()
-    parsed = urlparse(url)
-    hostname = parsed.hostname or ""
-    if hostname == "localhost":
-        # Replace only the hostname portion, preserving port / path / etc.
-        netloc = "127.0.0.1"
-        if parsed.port:
-            netloc = f"127.0.0.1:{parsed.port}"
-        parsed = parsed._replace(netloc=netloc)
-    return urlunparse(parsed)
-
-
-def _normalize_base_url(base_url: str) -> str:
-    """Normalize the backend base URL so it can be safely joined with endpoint paths.
-
-    - Strips leading/trailing whitespace.
-    - Replaces ``localhost`` with ``127.0.0.1`` (IPv4 stability on Windows).
-    - Strips trailing slashes.
-    - Leaves scheme/host/port otherwise unchanged.
-    """
-    return _normalize_backend_url(base_url).rstrip("/")
+# Backward-compatible aliases – all logic lives in ui.backend_url now.
+_normalize_backend_url = normalize_backend_url
+_normalize_base_url = normalize_base_url
 
 
 def _fetch_brands_from_backend(
