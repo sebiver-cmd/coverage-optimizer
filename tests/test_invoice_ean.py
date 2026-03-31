@@ -10,6 +10,8 @@ import pytest
 from domain.invoice_ean import (
     detect_invoice_columns,
     build_ean_export,
+    match_invoice_to_products,
+    build_export_from_matches,
     generate_barcode_pdf,
     _render_barcode_image,
     _variant_in_context,
@@ -637,6 +639,232 @@ class TestStricterSKUMatching:
             products, invoice, 'Article', 'Quantity', threshold=70,
         )
         assert len(result) == 4
+
+
+# ---------------------------------------------------------------------------
+# Manual overrides and match_invoice_to_products
+# ---------------------------------------------------------------------------
+
+class TestManualOverrides:
+    """Tests for manual override matching via the two-step API."""
+
+    @staticmethod
+    def _size_variants():
+        return _make_products(
+            NUMBER=['PSW 003', 'PSW 003', 'PSW 003', 'PSW 003'],
+            VARIANT_ID=['10', '11', '12', '13'],
+            VARIANT_TYPES=['S', 'M', 'L', 'XL'],
+            EAN=['5700000000001', '5700000000002', '5700000000003', '5700000000004'],
+            TITLE_DK=['Shirt', 'Shirt', 'Shirt', 'Shirt'],
+            BUY_PRICE=['50,00', '50,00', '50,00', '50,00'],
+            PRICE=['100,00', '100,00', '100,00', '100,00'],
+            BUY_PRICE_NUM=[50.0, 50.0, 50.0, 50.0],
+            PRICE_NUM=[100.0, 100.0, 100.0, 100.0],
+            PRODUCT_ID=['1', '1', '1', '1'],
+            PRODUCER=['Brand A', 'Brand A', 'Brand A', 'Brand A'],
+            PRODUCER_ID=[1, 1, 1, 1],
+            ONLINE=[True, True, True, True],
+        )
+
+    def test_match_invoice_returns_dict_keys(self):
+        """match_invoice_to_products returns the expected keys."""
+        products = self._size_variants()
+        invoice = pd.DataFrame({
+            'Article': ['PSW 003 XL'],
+            'Quantity': ['3'],
+        })
+        mdata = match_invoice_to_products(
+            products, invoice, 'Article', 'Quantity', threshold=50,
+        )
+        assert 'matches' in mdata
+        assert 'composite_lookup' in mdata
+        assert 'title_lookup' in mdata
+        assert 'qty_map' in mdata
+        assert 'desc_map' in mdata
+
+    def test_manual_override_adds_unmatched(self):
+        """Manual overrides can add matches for previously unmatched SKUs."""
+        products = _make_products()
+        invoice = pd.DataFrame({
+            'Article': ['NOPE-1'],
+            'Quantity': ['5'],
+        })
+        mdata = match_invoice_to_products(
+            products, invoice, 'Article', 'Quantity', threshold=95,
+        )
+        # Verify it would be unmatched without override
+        result_no_override = build_export_from_matches(products, mdata)
+        assert result_no_override.empty
+
+        # Manually override to match SKU-001
+        result_with = build_export_from_matches(
+            products, mdata,
+            manual_overrides={'NOPE-1': 'SKU-001'},
+        )
+        assert len(result_with) == 1
+        assert result_with.iloc[0]['Product Number'] == 'SKU-001'
+        assert result_with.iloc[0]['Amount'] == 5.0
+
+    def test_manual_override_replaces_auto_match(self):
+        """Manual overrides replace existing auto-matched results."""
+        products = _make_products()
+        invoice = pd.DataFrame({
+            'Article': ['SKU-001'],
+            'Quantity': ['3'],
+        })
+        mdata = match_invoice_to_products(
+            products, invoice, 'Article', 'Quantity', threshold=70,
+        )
+        # Auto match should find SKU-001
+        auto_result = build_export_from_matches(products, mdata)
+        assert auto_result.iloc[0]['Product Number'] == 'SKU-001'
+
+        # Override to SKU-002
+        result = build_export_from_matches(
+            products, mdata,
+            manual_overrides={'SKU-001': 'SKU-002'},
+        )
+        assert result.iloc[0]['Product Number'] == 'SKU-002'
+
+    def test_manual_override_via_build_ean_export(self):
+        """build_ean_export accepts manual_overrides for backward compat."""
+        products = _make_products()
+        invoice = pd.DataFrame({
+            'Article': ['NOPE-1'],
+            'Quantity': ['2'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=95,
+            manual_overrides={'NOPE-1': 'SKU-003'},
+        )
+        assert len(result) == 1
+        assert result.iloc[0]['Product Number'] == 'SKU-003'
+
+    def test_name_matching_improves_ean_results(self):
+        """Passing description column enables name-based reranking."""
+        products = _make_products(
+            NUMBER=['AB-100', 'AB-101'],
+            VARIANT_ID=['', ''],
+            VARIANT_TYPES=['', ''],
+            EAN=['5700000000010', '5700000000020'],
+            TITLE_DK=['Karate Gi White', 'Boxing Glove Red'],
+            BUY_PRICE=['50,00', '60,00'],
+            PRICE=['100,00', '120,00'],
+            BUY_PRICE_NUM=[50.0, 60.0],
+            PRICE_NUM=[100.0, 120.0],
+            PRODUCT_ID=['1', '2'],
+            PRODUCER=['Brand A', 'Brand B'],
+            PRODUCER_ID=[1, 2],
+            ONLINE=[True, True],
+        )
+        invoice = pd.DataFrame({
+            'Article': ['AB100'],
+            'Quantity': ['1'],
+            'Description': ['Karate Gi White'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=50,
+            invoice_desc_col='Description',
+        )
+        assert not result.empty
+        assert result.iloc[0]['Product Number'] == 'AB-100'
+
+
+class TestPDFVariantSuffixParsing:
+    """Tests for PDF invoice regex parsing with variant suffixes."""
+
+    def _parse_with_regex(self, lines: list[str]) -> pd.DataFrame:
+        """Run the invoice regex parser used by parse_supplier_file.
+
+        Reproduces the _item_re + _art_split logic from the last-resort
+        fallback of the PDF parsing pipeline.
+        """
+        import re
+
+        full_text = '\n'.join(lines)
+
+        _item_re = re.compile(
+            r'^\s*(\d{2,4})\s+'
+            r'(.+?)\s+'
+            r'(\d+\s*(?:pcs|prs|Paar|Stk|St|ml|kg|sets?|pieces?)\w*)\s+'
+            r'(\d+[,.]\d+)\s+'
+            r'(\d+[,.]\d+)\s*$',
+            re.IGNORECASE | re.MULTILINE,
+        )
+        _item_matches = _item_re.findall(full_text)
+        rows: list[dict] = []
+        for _m in _item_matches:
+            _art_desc = _m[1].strip()
+            _art_split = re.match(
+                r'^([A-Z0-9][A-Z0-9 ./-]*?\d[\w]*'
+                r'(?:\s+[A-Z]{1,4})?'
+                r')\s+(.+)$',
+                _art_desc,
+            )
+            if _art_split:
+                _art = _art_split.group(1).strip()
+                _desc = _art_split.group(2).strip()
+            else:
+                _art = _art_desc
+                _desc = ''
+            rows.append({
+                'Item': _m[0],
+                'Article No': _art,
+                'Designation': _desc,
+                'Qty': _m[2],
+                'Unit Price': _m[3],
+                'Item Value': _m[4],
+            })
+        return pd.DataFrame(rows).astype(str)
+
+    def test_variant_suffix_included_in_article(self):
+        """Variant suffixes (XS, S, M, L, XL) should be part of Article No."""
+        lines = [
+            '053 PSW 003 XS Shin-/instep guard ELASTIC, white, size 12prs 9,90 118,80',
+            '072 PSR 021 M Shin-/Instep Guard TOKAIDO KANJI, color: 10prs 22,90 229,00',
+            '062 ZPRSB01 S ZEBRA Pro Shin-Instep Guard, color: 6prs 29,00 174,00',
+        ]
+        df = self._parse_with_regex(lines)
+        articles = df['Article No'].tolist()
+        assert 'PSW 003 XS' in articles
+        assert 'PSR 021 M' in articles
+        assert 'ZPRSB01 S' in articles
+
+    def test_non_variant_articles_unchanged(self):
+        """Articles without variant suffixes keep their original form."""
+        lines = [
+            '001 ATBK 190 Karategi, TOKAIDO Bujin Kuro, 14 oz., black, 6pcs 41,90 251,40',
+            '090 RH 003 RHINOC Sport All Purpose Cleaner Spray, 500 24pcs 5,00 120,00',
+        ]
+        df = self._parse_with_regex(lines)
+        articles = df['Article No'].tolist()
+        assert 'ATBK 190' in articles
+        assert 'RH 003' in articles
+
+    def test_xxs_suffix_included(self):
+        """Multi-character size suffixes like XXS are included."""
+        lines = [
+            '083 FB 400 XXS Chest protector TOKAIDO, SET, white, CE, size 2pcs 27,00 54,00',
+        ]
+        df = self._parse_with_regex(lines)
+        assert 'FB 400 XXS' in df['Article No'].tolist()
+
+    def test_sr_suffix_included(self):
+        """Product code suffix SR is included in Article No."""
+        lines = [
+            '001 FMU 042 SR Mouth Guard BIT FIT, color: white/blue, size: 100pcs 2,90 290,00',
+        ]
+        df = self._parse_with_regex(lines)
+        assert 'FMU 042 SR' in df['Article No'].tolist()
+
+    def test_long_uppercase_word_not_captured(self):
+        """Long uppercase words (>4 chars) are not captured as suffixes."""
+        lines = [
+            '090 RH 003 RHINOC Sport All Purpose Cleaner Spray, 500 24pcs 5,00 120,00',
+        ]
+        df = self._parse_with_regex(lines)
+        assert df.iloc[0]['Article No'] == 'RH 003'
+        assert 'RHINOC' in df.iloc[0]['Designation']
 
 
 # ---------------------------------------------------------------------------
