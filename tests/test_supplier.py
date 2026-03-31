@@ -394,7 +394,7 @@ class TestMatchSupplierToProducts(unittest.TestCase):
             threshold=10, top_n=2,
         )
         data = result['A']
-        # Best + alternatives should not exceed top_n + 1
+        # Alternatives list should not exceed top_n
         self.assertLessEqual(len(data['alternatives']), 2)
 
 

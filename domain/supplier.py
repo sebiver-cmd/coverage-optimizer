@@ -361,7 +361,8 @@ def match_supplier_to_products(
         score_map: dict[str, int] = {}
 
         sku_suggestions = rfprocess.extract(
-            norm_sup, norm_list, scorer=fuzz.ratio, limit=top_n,
+            norm_sup, norm_list, scorer=fuzz.ratio,
+            score_cutoff=30, limit=top_n,
         )
         if sku_suggestions:
             for psku, sc in _rank_candidates(
