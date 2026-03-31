@@ -250,6 +250,61 @@ def _build_dataframes_from_response(
     return final_df, adjusted_count, adjusted_mask, import_df, raw_df
 
 
+def _run_dry_run_preview(
+    backend_url: str,
+    optimize_params: dict,
+    product_numbers: list[str] | None = None,
+) -> dict | None:
+    """Call ``POST /apply-prices/dry-run`` on the FastAPI backend.
+
+    Returns the parsed JSON response (with ``changes`` and ``summary``
+    keys), or *None* on error.  Errors are reported via :func:`st.error`.
+    """
+    base = _normalize_base_url(backend_url)
+    url = f"{base}/apply-prices/dry-run"
+
+    body: dict = {
+        "optimize_payload": {
+            "api_username": optimize_params["api_username"],
+            "api_password": optimize_params["api_password"],
+            "site_id": optimize_params.get("site_id", 1),
+            "price_pct": optimize_params.get("price_pct", 0.0),
+            "beautify_digit": optimize_params.get("beautify_digit", 9),
+            "include_offline": optimize_params.get("include_offline", False),
+            "include_variants": optimize_params.get("include_variants", True),
+        },
+    }
+    if optimize_params.get("brand_ids"):
+        body["optimize_payload"]["brand_ids"] = optimize_params["brand_ids"]
+    if product_numbers is not None:
+        body["product_numbers"] = product_numbers
+
+    try:
+        resp = requests.post(url, json=body, timeout=_BACKEND_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.response.json().get("detail", "")
+        except Exception:
+            detail = exc.response.text[:200] if exc.response is not None else ""
+        st.error(f"Dry-run request failed ({exc.response.status_code}): {detail}")
+        return None
+    except requests.ConnectionError:
+        st.error(
+            "Could not connect to the backend.  "
+            "Make sure the FastAPI server is running and the Backend URL is correct."
+        )
+        return None
+    except requests.RequestException:
+        st.error(
+            "Dry-run request failed.  "
+            "Please check the Backend URL and server logs for details."
+        )
+        return None
+
+
 def render(
     api_username: str,
     api_password: str,
@@ -363,6 +418,16 @@ def render(
                 st.session_state["_opt_adjusted_mask"] = adjusted_mask
                 st.session_state["_opt_import_df"] = import_df
                 st.session_state["_opt_raw_df"] = raw_df
+                st.session_state["_opt_params"] = {
+                    "api_username": api_username,
+                    "api_password": api_password,
+                    "site_id": site_id,
+                    "price_pct": price_pct,
+                    "beautify_digit": beautify_digit,
+                    "include_offline": include_offline,
+                    "include_variants": True,
+                    "brand_ids": selected_brands,
+                }
                 # Clear stale data-editor edits from previous runs
                 for k in ("_ed_all", "_ed_adj", "_ed_imp"):
                     st.session_state.pop(k, None)
@@ -379,6 +444,7 @@ def render(
             price_pct,
             include_buy_price,
             beautify_digit,
+            backend_url=backend_url,
         )
     elif "_opt_response" not in st.session_state:
         st.markdown(
@@ -446,6 +512,95 @@ def _render_filters(
         )
 
     return selected_brands or None, not only_online
+
+
+# ---------------------------------------------------------------------------
+# Dry-Run Preview
+# ---------------------------------------------------------------------------
+
+def _render_dry_run_preview(
+    display_all: pd.DataFrame,
+    backend_url: str,
+) -> None:
+    """Render the dry-run apply preview inside the All Products tab.
+
+    Reads the optimisation parameters from session state, calls the
+    ``POST /apply-prices/dry-run`` endpoint, and displays the change
+    set with a CSV download button.
+    """
+    opt_params = st.session_state.get("_opt_params")
+    if opt_params is None:
+        return
+
+    st.markdown("---")
+    st.markdown("#### Preview apply (dry-run)")
+
+    # Extract product numbers from the currently displayed table
+    if "NUMBER" not in display_all.columns:
+        return
+    product_numbers = display_all["NUMBER"].dropna().astype(str).tolist()
+    product_count = len(product_numbers)
+
+    # Guardrail for large product sets
+    large_set = product_count > 500
+    confirmed = True
+    if large_set:
+        st.warning(
+            f"The current view contains {product_count:,} products. "
+            "Generating a dry-run preview for this many products may "
+            "take a while."
+        )
+        confirmed = st.checkbox(
+            "I understand, proceed with dry-run preview",
+            value=False,
+            key="_dryrun_large_confirm",
+        )
+
+    if st.button(
+        "Preview apply (dry-run)",
+        disabled=large_set and not confirmed,
+        key="_btn_dryrun_preview",
+    ):
+        with st.spinner("Generating dry-run change set..."):
+            result = _run_dry_run_preview(
+                backend_url=backend_url,
+                optimize_params=opt_params,
+                product_numbers=product_numbers,
+            )
+            if result is not None:
+                st.session_state["_dryrun_result"] = result
+
+    # Display cached dry-run results
+    dryrun = st.session_state.get("_dryrun_result")
+    if dryrun is not None:
+        summary = dryrun["summary"]
+
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("Total", f"{summary['total']:,}")
+        s2.metric("Increases", f"{summary['increases']:,}")
+        s3.metric("Decreases", f"{summary['decreases']:,}")
+        s4.metric("Unchanged", f"{summary['unchanged']:,}")
+
+        changes = dryrun["changes"]
+        if changes:
+            changes_df = pd.DataFrame(changes)
+            st.dataframe(
+                changes_df,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            # CSV download
+            csv_data = changes_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Download CSV",
+                data=csv_data,
+                file_name="dry_run_changes.csv",
+                mime="text/csv",
+                key="_btn_dryrun_csv",
+            )
+        else:
+            st.info("No changes in the dry-run result.")
 
 
 # ---------------------------------------------------------------------------
@@ -565,6 +720,7 @@ def _render_analysis(
     price_pct: float,
     include_buy_price: bool,
     beautify_digit: int,
+    backend_url: str = "http://localhost:8000",
 ) -> None:
     """Render analysis results, data tabs, downloads, and push-to-shop.
 
@@ -706,6 +862,9 @@ def _render_analysis(
             hide_index=True,
             key="_ed_all",
         )
+
+        # --- Dry-run preview section ---
+        _render_dry_run_preview(_display_all, backend_url)
 
     with tab_adjusted:
         _adj_full = _display_all[adjusted_mask]
