@@ -155,7 +155,7 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
                 vprice = v.get('Price', price) if isinstance(v, dict) else getattr(v, 'Price', price)
                 vbuy = v.get('BuyingPrice', buy_price) if isinstance(v, dict) else getattr(v, 'BuyingPrice', buy_price)
                 vean_raw = v.get('Ean', '') if isinstance(v, dict) else getattr(v, 'Ean', '')
-                vean = str(vean_raw or '').strip() or ean
+                vean = str(vean_raw).strip() if vean_raw else ean
                 rows.append({
                     'PRODUCT_ID': format_int_col(pid),
                     'TITLE_DK': title,
