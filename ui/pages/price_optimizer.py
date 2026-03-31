@@ -765,34 +765,52 @@ def _render_apply_section(
         if not isinstance(c.get("new_price"), (int, float))
         or c.get("new_price", 0) <= 0
     )
+    below_cost = sum(
+        1 for c in changes
+        if isinstance(c.get("buy_price"), (int, float))
+        and c["buy_price"] > 0
+        and isinstance(c.get("new_price"), (int, float))
+        and c["new_price"] <= c["buy_price"]
+    )
+    over_pct = sum(
+        1 for c in changes
+        if abs(c.get("change_pct", 0)) > 30
+    )
 
-    g1, g2, g3 = st.columns(3)
+    # Per-row issues that will be skipped (not batch-level rejects)
+    skippable = non_positive + below_cost + over_pct
+
+    g1, g2, g3, g4 = st.columns(4)
     g1.metric("Rows", f"{total_rows:,}", help="Max 100 per batch")
     g2.metric(
         "Max change %",
         f"{max_abs_pct:.1f}%",
-        help="Max abs(change_pct) allowed: 30%",
+        help="Rows with abs(change_pct) > 30% will be skipped",
     )
-    g3.metric("Invalid prices", f"{non_positive}", help="Must be 0 for apply")
+    g3.metric(
+        "Below cost",
+        f"{below_cost}",
+        help="Rows where new_price <= buy_price (will be skipped)",
+    )
+    g4.metric(
+        "Will skip",
+        f"{skippable}",
+        help="Total rows that will be skipped by per-row guardrails",
+    )
 
-    # Guardrail warnings
-    violations = []
+    # Batch-level hard reject (>100 rows)
     if total_rows > 100:
-        violations.append(f"Batch has {total_rows} rows (max 100).")
-    if max_abs_pct > 30:
-        violations.append(
-            f"Max abs(change_pct) is {max_abs_pct:.1f}% (max 30%)."
-        )
-    if non_positive > 0:
-        violations.append(
-            f"{non_positive} row(s) have non-positive prices."
-        )
-
-    if violations:
-        for v in violations:
-            st.error(v)
-        st.warning("Guardrail violations detected. Apply will be rejected.")
+        st.error(f"Batch has {total_rows} rows (max 100). Apply will be rejected.")
         return
+
+    # Per-row soft guardrail warnings
+    if skippable > 0:
+        st.warning(
+            f"{skippable} row(s) will be skipped due to per-row guardrails "
+            f"({non_positive} invalid price, {over_pct} over change %, "
+            f"{below_cost} below cost). "
+            f"{total_rows - skippable} row(s) will be applied."
+        )
 
     # Confirmation input
     confirm_text = st.text_input(
@@ -825,16 +843,30 @@ def _render_apply_section(
     apply_result = st.session_state.get("_apply_result")
     if apply_result is not None:
         applied = apply_result.get("applied_count", 0)
+        skipped_list = apply_result.get("skipped", [])
         failed_list = apply_result.get("failed", [])
 
-        if not failed_list:
+        if not skipped_list and not failed_list:
             st.success(
                 f"Applied {applied} price(s) successfully."
             )
         else:
-            st.warning(
-                f"Applied {applied}, failed {len(failed_list)}."
+            st.info(
+                f"Applied {applied}, "
+                f"skipped {len(skipped_list)}, "
+                f"failed {len(failed_list)}."
             )
+
+        if skipped_list:
+            st.markdown("**Skipped rows** (per-row guardrails)")
+            st.dataframe(
+                pd.DataFrame(skipped_list),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        if failed_list:
+            st.markdown("**Failed rows** (write errors)")
             st.dataframe(
                 pd.DataFrame(failed_list),
                 use_container_width=True,

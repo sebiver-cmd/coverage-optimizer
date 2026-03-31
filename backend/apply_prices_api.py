@@ -57,6 +57,7 @@ class DryRunChangeRow(BaseModel):
 
     NUMBER: str
     TITLE_DK: str
+    buy_price: float = 0.0
     old_price: float
     new_price: float
     change_pct: float
@@ -128,6 +129,7 @@ def dry_run_apply(payload: DryRunRequest) -> DryRunResponse:
             DryRunChangeRow(
                 NUMBER=row.item_number,
                 TITLE_DK=row.title,
+                buy_price=row.buy_price,
                 old_price=old_price,
                 new_price=new_price,
                 change_pct=change_pct,
