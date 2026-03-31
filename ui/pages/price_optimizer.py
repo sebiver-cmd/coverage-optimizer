@@ -514,6 +514,39 @@ def _render_filters(
 # Dry-Run Preview
 # ---------------------------------------------------------------------------
 
+def _fetch_batch(backend_url: str, batch_id: str) -> dict | None:
+    """Call ``GET /apply-prices/batch/{batch_id}`` on the FastAPI backend.
+
+    Returns the manifest dict, or *None* on error.
+    """
+    base = _normalize_base_url(backend_url)
+    url = f"{base}/apply-prices/batch/{batch_id}"
+    try:
+        resp = requests.get(url, timeout=_BACKEND_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.response.json().get("detail", "")
+        except Exception:
+            detail = exc.response.text[:200] if exc.response is not None else ""
+        st.error(f"Load batch failed ({exc.response.status_code}): {detail}")
+        return None
+    except requests.ConnectionError:
+        st.error(
+            "Could not connect to the backend.  "
+            "Make sure the FastAPI server is running and the Backend URL is correct."
+        )
+        return None
+    except requests.RequestException:
+        st.error(
+            "Load batch failed.  "
+            "Please check the Backend URL and server logs for details."
+        )
+        return None
+
+
 def _render_dry_run_preview(
     display_all: pd.DataFrame,
     backend_url: str,
@@ -569,6 +602,11 @@ def _render_dry_run_preview(
     # Display cached dry-run results
     dryrun = st.session_state.get("_dryrun_result")
     if dryrun is not None:
+        # Show batch_id prominently
+        batch_id = dryrun.get("batch_id")
+        if batch_id:
+            st.success(f"Batch ID: {batch_id}")
+
         summary = dryrun["summary"]
 
         s1, s2, s3, s4 = st.columns(4)
@@ -597,6 +635,47 @@ def _render_dry_run_preview(
             )
         else:
             st.info("No changes in the dry-run result.")
+
+    # Load batch UI
+    st.markdown("---")
+    st.markdown("#### Load batch")
+    load_col1, load_col2 = st.columns([3, 1])
+    with load_col1:
+        batch_input = st.text_input(
+            "Batch ID",
+            placeholder="Enter a batch UUID to load",
+            key="_batch_id_input",
+        )
+    with load_col2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        load_clicked = st.button("Load batch", key="_btn_load_batch")
+
+    if load_clicked and batch_input and batch_input.strip():
+        with st.spinner("Loading batch..."):
+            loaded = _fetch_batch(backend_url, batch_input.strip())
+            if loaded is not None:
+                st.session_state["_loaded_batch"] = loaded
+
+    loaded_batch = st.session_state.get("_loaded_batch")
+    if loaded_batch is not None:
+        st.success(f"Loaded batch: {loaded_batch.get('batch_id', 'N/A')}")
+
+        lb_summary = loaded_batch.get("summary", {})
+        lb1, lb2, lb3, lb4 = st.columns(4)
+        lb1.metric("Total", f"{lb_summary.get('total', 0):,}")
+        lb2.metric("Increases", f"{lb_summary.get('increases', 0):,}")
+        lb3.metric("Decreases", f"{lb_summary.get('decreases', 0):,}")
+        lb4.metric("Unchanged", f"{lb_summary.get('unchanged', 0):,}")
+
+        lb_changes = loaded_batch.get("changes", [])
+        if lb_changes:
+            st.dataframe(
+                pd.DataFrame(lb_changes),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("No changes in this batch.")
 
 
 # ---------------------------------------------------------------------------

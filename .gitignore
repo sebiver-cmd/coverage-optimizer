@@ -13,3 +13,6 @@ venv/
 
 # Streamlit specific
 .streamlit/secrets.toml
+
+# Batch manifests (runtime data)
+data/apply_batches/

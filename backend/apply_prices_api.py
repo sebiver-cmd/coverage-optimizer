@@ -10,7 +10,12 @@ functions.
 
 from __future__ import annotations
 
+import json
 import logging
+import re
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -69,6 +74,7 @@ class DryRunSummary(BaseModel):
 class DryRunResponse(BaseModel):
     """Full response from ``POST /apply-prices/dry-run``."""
 
+    batch_id: str
     changes: list[DryRunChangeRow]
     summary: DryRunSummary
 
@@ -79,6 +85,14 @@ class DryRunResponse(BaseModel):
 
 router = APIRouter(tags=["apply-prices"])
 
+# Directory where batch manifests are persisted.
+_BATCH_DIR = Path("data/apply_batches")
+
+# Strict UUID-4 pattern (lowercase hex with hyphens).
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+
 
 @router.post("/apply-prices/dry-run", response_model=DryRunResponse)
 def dry_run_apply(payload: DryRunRequest) -> DryRunResponse:
@@ -86,7 +100,8 @@ def dry_run_apply(payload: DryRunRequest) -> DryRunResponse:
 
     Delegates to the existing ``run_optimization`` function for the
     pricing pipeline, then post-processes the result into an old/new
-    comparison with percentage changes.
+    comparison with percentage changes.  A manifest is persisted to disk
+    under ``data/apply_batches/{batch_id}.json``.
     """
 
     # Reuse the existing optimization endpoint logic (read-only).
@@ -124,12 +139,50 @@ def dry_run_apply(payload: DryRunRequest) -> DryRunResponse:
     decreases = sum(1 for c in changes if c.new_price < c.old_price)
     unchanged = sum(1 for c in changes if c.new_price == c.old_price)
 
-    return DryRunResponse(
-        changes=changes,
-        summary=DryRunSummary(
-            total=len(changes),
-            increases=increases,
-            decreases=decreases,
-            unchanged=unchanged,
-        ),
+    summary = DryRunSummary(
+        total=len(changes),
+        increases=increases,
+        decreases=decreases,
+        unchanged=unchanged,
     )
+
+    # Generate batch_id and persist the manifest.
+    batch_id = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    manifest = {
+        "batch_id": batch_id,
+        "created_at": created_at,
+        "optimize_payload": payload.optimize_payload.model_dump(),
+        "product_numbers": payload.product_numbers,
+        "changes": [c.model_dump() for c in changes],
+        "summary": summary.model_dump(),
+    }
+
+    _BATCH_DIR.mkdir(parents=True, exist_ok=True)
+    manifest_path = _BATCH_DIR / f"{batch_id}.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    logger.info("Persisted dry-run manifest: %s", manifest_path)
+
+    return DryRunResponse(
+        batch_id=batch_id,
+        changes=changes,
+        summary=summary,
+    )
+
+
+@router.get("/apply-prices/batch/{batch_id}")
+def get_batch(batch_id: str) -> dict:
+    """Return a previously persisted dry-run manifest.
+
+    ``batch_id`` is strictly validated as a UUID-4 string to prevent
+    path-traversal attacks.
+    """
+    if not _UUID_RE.match(batch_id):
+        raise HTTPException(status_code=422, detail="Invalid batch_id format.")
+
+    manifest_path = _BATCH_DIR / f"{batch_id}.json"
+    if not manifest_path.is_file():
+        raise HTTPException(status_code=404, detail="Batch not found.")
+
+    return json.loads(manifest_path.read_text(encoding="utf-8"))
