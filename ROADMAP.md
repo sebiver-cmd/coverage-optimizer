@@ -2,6 +2,9 @@
 
 This document is the **single checklist** for the project roadmap. It is designed so you can work with Claude in **one chat thread** and avoid back-and-forth across chats.
 
+## Related roadmap (SaaS)
+For the long-term multi-tenant paid web app roadmap, see: `SAAS_ROADMAP.md`.
+
 ---
 
 ## How to use this roadmap with Claude (critical rules)
