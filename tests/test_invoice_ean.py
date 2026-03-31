@@ -526,6 +526,60 @@ class TestVariantInContext:
     def test_case_insensitive(self):
         assert _variant_in_context('XL', 'PSW 003 XL')
 
+    # --- Size-alias matching ---
+
+    def test_alias_large_matches_l(self):
+        """Variant 'Large' should match context containing abbreviation 'L'."""
+        assert _variant_in_context('Large', 'pss 001 l')
+
+    def test_alias_l_matches_large(self):
+        """Variant 'L' should match context containing full name 'large'."""
+        assert _variant_in_context('L', 'guard large')
+
+    def test_alias_small_matches_s(self):
+        """Variant 'Small' should match context containing abbreviation 'S'."""
+        assert _variant_in_context('Small', 'pss 001 s')
+
+    def test_alias_s_matches_small(self):
+        """Variant 'S' should match context containing full name 'small'."""
+        assert _variant_in_context('S', 'guard small')
+
+    def test_alias_medium_matches_m(self):
+        """Variant 'Medium' should match context containing 'M'."""
+        assert _variant_in_context('Medium', 'pss 001 m')
+
+    def test_alias_m_matches_medium(self):
+        """Variant 'M' should match context containing 'medium'."""
+        assert _variant_in_context('M', 'guard medium')
+
+    def test_alias_xl_matches_x_large(self):
+        """Variant 'XL' should match context containing 'x-large'."""
+        assert _variant_in_context('XL', 'guard x-large')
+
+    def test_alias_x_large_matches_xl(self):
+        """Variant 'X-Large' should match context containing 'xl'."""
+        assert _variant_in_context('X-Large', 'pss 001 xl')
+
+    def test_alias_xs_matches_x_small(self):
+        """Variant 'XS' should match context containing 'x-small'."""
+        assert _variant_in_context('XS', 'guard x-small')
+
+    def test_alias_x_small_matches_xs(self):
+        """Variant 'X-Small' should match context containing 'xs'."""
+        assert _variant_in_context('X-Small', 'pss 001 xs')
+
+    def test_alias_xxl_matches_xx_large(self):
+        """Variant 'XXL' should match context containing 'xx-large'."""
+        assert _variant_in_context('XXL', 'guard xx-large')
+
+    def test_alias_no_false_positive_non_size(self):
+        """Non-size variants should NOT alias-match unrelated context."""
+        assert not _variant_in_context('Red', 'pss 001 l')
+
+    def test_alias_s_not_in_psw(self):
+        """Size alias for 'Small' should NOT match inside 'PSW'."""
+        assert not _variant_in_context('Small', 'psw 003')
+
 
 # ---------------------------------------------------------------------------
 # Stricter SKU matching with title + SKU
@@ -696,6 +750,144 @@ class TestStricterSKUMatching:
         xl_rows = result.loc[result['Variant Name'] == 'XL']
         assert len(xl_rows) == 1
         assert xl_rows.iloc[0]['Amount'] == 3.0
+
+    def test_size_abbrev_l_resolves_to_large_via_vtype(self):
+        """Abbreviation 'L' in composite vtype resolves to 'Large' variant
+        via size-alias matching — without needing a description hint."""
+        products = _make_products(
+            NUMBER=['PSS 001', 'PSS 001', 'PSS 001'],
+            VARIANT_ID=['10', '11', '12'],
+            VARIANT_TYPES=['Small', 'Medium', 'Large'],
+            EAN=['5700000000001', '5700000000002', '5700000000003'],
+            TITLE_DK=['Guard', 'Guard', 'Guard'],
+            BUY_PRICE=['10,00'] * 3,
+            PRICE=['20,00'] * 3,
+            BUY_PRICE_NUM=[10.0] * 3,
+            PRICE_NUM=[20.0] * 3,
+            PRODUCT_ID=['1'] * 3,
+            PRODUCER=['Brand'] * 3,
+            PRODUCER_ID=[1] * 3,
+            ONLINE=[True] * 3,
+        )
+        match_data = {
+            'matches': {
+                'PSS 001 L': {
+                    'sku': 'PSS 001 L', 'score': 100, 'alternatives': [],
+                },
+            },
+            'composite_lookup': {
+                'PSS 001': ('PSS 001', ''),
+                'PSS 001 L': ('PSS 001', 'L'),
+            },
+            'title_lookup': {'PSS 001': 'Guard'},
+            'qty_map': {'PSS 001 L': 5.0},
+            'desc_map': {},  # No description!
+        }
+        result = build_export_from_matches(products, match_data)
+        assert len(result) == 1
+        assert result.iloc[0]['Variant Name'] == 'Large'
+        assert result.iloc[0]['Amount'] == 5.0
+
+    def test_size_full_name_resolves_to_abbreviation_via_vtype(self):
+        """Full name 'Large' in composite vtype resolves to 'L' variant."""
+        products = self._size_variants()  # variants: S, M, L, XL
+        match_data = {
+            'matches': {
+                'PSW 003 Large': {
+                    'sku': 'PSW 003 Large', 'score': 100, 'alternatives': [],
+                },
+            },
+            'composite_lookup': {
+                'PSW 003': ('PSW 003', ''),
+                'PSW 003 Large': ('PSW 003', 'Large'),
+            },
+            'title_lookup': {'PSW 003': 'Shirt'},
+            'qty_map': {'PSW 003 Large': 3.0},
+            'desc_map': {},
+        }
+        result = build_export_from_matches(products, match_data)
+        assert len(result) == 1
+        assert result.iloc[0]['Variant Name'] == 'L'
+        assert result.iloc[0]['Amount'] == 3.0
+
+    def test_size_abbrev_xs_resolves_to_x_small(self):
+        """Abbreviation 'XS' resolves to 'X-Small' variant."""
+        products = _make_products(
+            NUMBER=['FB 400', 'FB 400', 'FB 400'],
+            VARIANT_ID=['10', '11', '12'],
+            VARIANT_TYPES=['X-Small', 'Small', 'Medium'],
+            EAN=['5700000000001', '5700000000002', '5700000000003'],
+            TITLE_DK=['Chest Guard', 'Chest Guard', 'Chest Guard'],
+            BUY_PRICE=['10,00'] * 3,
+            PRICE=['20,00'] * 3,
+            BUY_PRICE_NUM=[10.0] * 3,
+            PRICE_NUM=[20.0] * 3,
+            PRODUCT_ID=['1'] * 3,
+            PRODUCER=['Brand'] * 3,
+            PRODUCER_ID=[1] * 3,
+            ONLINE=[True] * 3,
+        )
+        match_data = {
+            'matches': {
+                'FB 400 XS': {
+                    'sku': 'FB 400 XS', 'score': 100, 'alternatives': [],
+                },
+            },
+            'composite_lookup': {
+                'FB 400': ('FB 400', ''),
+                'FB 400 XS': ('FB 400', 'XS'),
+            },
+            'title_lookup': {'FB 400': 'Chest Guard'},
+            'qty_map': {'FB 400 XS': 2.0},
+            'desc_map': {},
+        }
+        result = build_export_from_matches(products, match_data)
+        assert len(result) == 1
+        assert result.iloc[0]['Variant Name'] == 'X-Small'
+
+    def test_size_alias_narrowing_via_description(self):
+        """Size alias in _narrow_variants: 'Large' in desc matches 'L' variant."""
+        products = self._size_variants()  # variants: S, M, L, XL
+        invoice = pd.DataFrame({
+            'Article': ['PSW 003'],
+            'Quantity': ['5'],
+            'Description': ['Shirt Large'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=70,
+            invoice_desc_col='Description',
+        )
+        assert len(result) == 1
+        assert result.iloc[0]['Variant Name'] == 'L'
+
+    def test_size_alias_end_to_end_invoice(self):
+        """End-to-end: invoice 'PSS 001 L' matches product with 'Large' variant."""
+        products = _make_products(
+            NUMBER=['PSS 001', 'PSS 001', 'PSS 001'],
+            VARIANT_ID=['10', '11', '12'],
+            VARIANT_TYPES=['Small', 'Medium', 'Large'],
+            EAN=['5700000000001', '5700000000002', '5700000000003'],
+            TITLE_DK=['Guard', 'Guard', 'Guard'],
+            BUY_PRICE=['10,00'] * 3,
+            PRICE=['20,00'] * 3,
+            BUY_PRICE_NUM=[10.0] * 3,
+            PRICE_NUM=[20.0] * 3,
+            PRODUCT_ID=['1'] * 3,
+            PRODUCER=['Brand'] * 3,
+            PRODUCER_ID=[1] * 3,
+            ONLINE=[True] * 3,
+        )
+        invoice = pd.DataFrame({
+            'Article': ['PSS 001 L'],
+            'Quantity': ['8'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=50,
+        )
+        # Should resolve to "Large" variant via size-alias matching
+        large_rows = result.loc[result['Variant Name'] == 'Large']
+        assert len(large_rows) == 1
+        assert large_rows.iloc[0]['Amount'] == 8.0
 
 
 # ---------------------------------------------------------------------------
