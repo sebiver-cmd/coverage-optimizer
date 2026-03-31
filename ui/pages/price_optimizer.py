@@ -514,6 +514,52 @@ def _render_filters(
 # Dry-Run Preview
 # ---------------------------------------------------------------------------
 
+def _apply_batch(
+    backend_url: str,
+    batch_id: str,
+    api_username: str,
+    api_password: str,
+    site_id: int = 1,
+) -> dict | None:
+    """Call ``POST /apply-prices/apply`` on the FastAPI backend.
+
+    Returns the response dict on success, or *None* on error.
+    """
+    base = _normalize_base_url(backend_url)
+    url = f"{base}/apply-prices/apply"
+    body = {
+        "batch_id": batch_id,
+        "confirm": True,
+        "api_username": api_username,
+        "api_password": api_password,
+        "site_id": site_id,
+    }
+    try:
+        resp = requests.post(url, json=body, timeout=_BACKEND_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.response.json().get("detail", "")
+        except Exception:
+            detail = exc.response.text[:200] if exc.response is not None else ""
+        st.error(f"Apply failed ({exc.response.status_code}): {detail}")
+        return None
+    except requests.ConnectionError:
+        st.error(
+            "Could not connect to the backend.  "
+            "Make sure the FastAPI server is running and the Backend URL is correct."
+        )
+        return None
+    except requests.RequestException:
+        st.error(
+            "Apply failed.  "
+            "Please check the Backend URL and server logs for details."
+        )
+        return None
+
+
 def _fetch_batch(backend_url: str, batch_id: str) -> dict | None:
     """Call ``GET /apply-prices/batch/{batch_id}`` on the FastAPI backend.
 
@@ -676,6 +722,126 @@ def _render_dry_run_preview(
             )
         else:
             st.info("No changes in this batch.")
+
+    # --- Apply prices section ---
+    # Determine the active batch_id from dry-run or loaded batch.
+    active_batch_id = None
+    active_changes = None
+    if dryrun is not None and dryrun.get("batch_id"):
+        active_batch_id = dryrun["batch_id"]
+        active_changes = dryrun.get("changes", [])
+    elif loaded_batch is not None and loaded_batch.get("batch_id"):
+        active_batch_id = loaded_batch["batch_id"]
+        active_changes = loaded_batch.get("changes", [])
+
+    if active_batch_id and active_changes:
+        _render_apply_section(
+            backend_url=backend_url,
+            batch_id=active_batch_id,
+            changes=active_changes,
+        )
+
+
+def _render_apply_section(
+    backend_url: str,
+    batch_id: str,
+    changes: list[dict],
+) -> None:
+    """Render the apply-prices UI with confirmation and guardrail summary.
+
+    Shown only when a valid ``batch_id`` exists (from a dry-run or
+    loaded batch).  Requires the user to type ``APPLY`` to confirm.
+    """
+    st.markdown("---")
+    st.markdown("#### Apply prices")
+
+    # Guardrail summary
+    total_rows = len(changes)
+    max_abs_pct = max((abs(c.get("change_pct", 0)) for c in changes), default=0)
+    non_positive = sum(
+        1 for c in changes
+        if not isinstance(c.get("new_price"), (int, float))
+        or c.get("new_price", 0) <= 0
+    )
+
+    g1, g2, g3 = st.columns(3)
+    g1.metric("Rows", f"{total_rows:,}", help="Max 100 per batch")
+    g2.metric(
+        "Max change %",
+        f"{max_abs_pct:.1f}%",
+        help="Max abs(change_pct) allowed: 30%",
+    )
+    g3.metric("Invalid prices", f"{non_positive}", help="Must be 0 for apply")
+
+    # Guardrail warnings
+    violations = []
+    if total_rows > 100:
+        violations.append(f"Batch has {total_rows} rows (max 100).")
+    if max_abs_pct > 30:
+        violations.append(
+            f"Max abs(change_pct) is {max_abs_pct:.1f}% (max 30%)."
+        )
+    if non_positive > 0:
+        violations.append(
+            f"{non_positive} row(s) have non-positive prices."
+        )
+
+    if violations:
+        for v in violations:
+            st.error(v)
+        st.warning("Guardrail violations detected. Apply will be rejected.")
+        return
+
+    # Confirmation input
+    confirm_text = st.text_input(
+        'Type "APPLY" to confirm',
+        placeholder="APPLY",
+        key="_apply_confirm_text",
+    )
+    confirmed = confirm_text.strip() == "APPLY"
+
+    opt_params = st.session_state.get("_opt_params", {})
+
+    if st.button(
+        "Apply prices",
+        disabled=not confirmed,
+        type="primary",
+        key="_btn_apply_prices",
+    ):
+        with st.spinner("Applying prices to webshop..."):
+            result = _apply_batch(
+                backend_url=backend_url,
+                batch_id=batch_id,
+                api_username=opt_params.get("api_username", ""),
+                api_password=opt_params.get("api_password", ""),
+                site_id=opt_params.get("site_id", 1),
+            )
+            if result is not None:
+                st.session_state["_apply_result"] = result
+
+    # Display apply result
+    apply_result = st.session_state.get("_apply_result")
+    if apply_result is not None:
+        applied = apply_result.get("applied_count", 0)
+        failed_list = apply_result.get("failed", [])
+
+        if not failed_list:
+            st.success(
+                f"Applied {applied} price(s) successfully."
+            )
+        else:
+            st.warning(
+                f"Applied {applied}, failed {len(failed_list)}."
+            )
+            st.dataframe(
+                pd.DataFrame(failed_list),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        r1, r2 = st.columns(2)
+        r1.caption(f"Started: {apply_result.get('started_at', 'N/A')}")
+        r2.caption(f"Finished: {apply_result.get('finished_at', 'N/A')}")
 
 
 # ---------------------------------------------------------------------------
