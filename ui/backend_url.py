@@ -1,4 +1,4 @@
-"""Centralised backend-URL helpers for the SB-Optima Streamlit app.
+"""Centralized backend-URL helpers for the SB-Optima Streamlit app.
 
 Every module that needs to talk to the FastAPI backend should import
 from here instead of duplicating URL normalisation or connectivity
