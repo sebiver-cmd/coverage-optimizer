@@ -757,7 +757,9 @@ def _render_apply_section(
 
     # Guardrail summary
     total_rows = len(changes)
-    max_abs_pct = max((abs(c.get("change_pct", 0)) for c in changes), default=0)
+    max_abs_pct = max(
+        (abs(c.get("change_pct", 0)) for c in changes), default=0
+    )
     non_positive = sum(
         1 for c in changes
         if not isinstance(c.get("new_price"), (int, float))

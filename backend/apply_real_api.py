@@ -120,7 +120,7 @@ def apply_prices(payload: ApplyRequest) -> ApplyResponse:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     changes: list[dict] = manifest.get("changes", [])
 
-    # 6. Double-apply prevention ----------------------------------------
+    # 3. Double-apply prevention ----------------------------------------
     applied_marker = _BATCH_DIR / f"{payload.batch_id}.applied"
     if applied_marker.exists():
         raise HTTPException(
@@ -128,7 +128,7 @@ def apply_prices(payload: ApplyRequest) -> ApplyResponse:
             detail="Batch has already been applied.",
         )
 
-    # 3. Hard guardrails ------------------------------------------------
+    # 4. Hard guardrails ------------------------------------------------
     if len(changes) > MAX_APPLY_ROWS:
         raise HTTPException(
             status_code=400,
@@ -163,7 +163,7 @@ def apply_prices(payload: ApplyRequest) -> ApplyResponse:
                 ),
             )
 
-    # 4. Apply writes via existing single-write path ---------------------
+    # 5. Apply writes via existing single-write path ---------------------
     updates = [
         {
             "product_number": row["NUMBER"],
@@ -192,7 +192,7 @@ def apply_prices(payload: ApplyRequest) -> ApplyResponse:
 
     finished_at = datetime.now(timezone.utc).isoformat()
 
-    # 5. Write audit log line (JSONL) -----------------------------------
+    # 6. Write audit log line (JSONL) -----------------------------------
     audit_entry = {
         "timestamp": finished_at,
         "batch_id": payload.batch_id,
@@ -205,7 +205,7 @@ def apply_prices(payload: ApplyRequest) -> ApplyResponse:
     with open(_AUDIT_LOG, "a", encoding="utf-8") as f:
         f.write(json.dumps(audit_entry) + "\n")
 
-    # 6b. Place .applied marker -----------------------------------------
+    # 7. Place .applied marker -----------------------------------------
     _BATCH_DIR.mkdir(parents=True, exist_ok=True)
     applied_marker.write_text(finished_at, encoding="utf-8")
 
