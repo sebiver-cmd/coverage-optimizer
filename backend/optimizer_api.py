@@ -296,7 +296,7 @@ def run_optimization(payload: OptimizeRequest) -> OptimizeResponse:
                     needs_adjustment=bool(adjusted_mask[i]),
                     variant_id=str(row.get("VARIANT_ID", "")),
                     variant_types=str(row.get("VARIANT_TYPES", "")),
-                    ean=str(row.get("EAN", "")),
+                    ean=str(df.iloc[i].get("EAN", "")),
                 )
             )
 
