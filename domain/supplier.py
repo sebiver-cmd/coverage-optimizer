@@ -240,7 +240,9 @@ def parse_supplier_file(raw_bytes: bytes, filename: str, encoding: str = 'auto')
                 for _m in _item_matches:
                     _art_desc = _m[1].strip()
                     _art_split = re.match(
-                        r'^([A-Z0-9][A-Z0-9 ./-]*?\d[\w]*)\s+(.+)$',
+                        r'^([A-Z0-9][A-Z0-9 ./-]*?\d[\w]*'
+                        r'(?:\s+[A-Z]{1,4})?'
+                        r')\s+(.+)$',
                         _art_desc,
                     )
                     if _art_split:

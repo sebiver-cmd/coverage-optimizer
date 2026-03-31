@@ -45,6 +45,8 @@ from domain.supplier import (
 from domain.invoice_ean import (
     detect_invoice_columns,
     build_ean_export,
+    match_invoice_to_products,
+    build_export_from_matches,
     generate_barcode_pdf,
 )
 
@@ -1547,9 +1549,14 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                 if unmatched:
                     with st.expander(
                         f"\u26a0\ufe0f {len(unmatched)} unmatched SKU(s) "
-                        "\u2014 select matches manually",
+                        "\u2014 select matches",
                         expanded=True,
                     ):
+                        st.caption(
+                            "These supplier SKUs could not be "
+                            "automatically matched. Pick the correct "
+                            "product from the suggestions, or skip."
+                        )
                         for sup_sku, mdata in unmatched.items():
                             alts = mdata['alternatives']
                             options = ['(skip \u2014 no match)']
@@ -1564,12 +1571,12 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                                 lbl += f" ({alt_score}%)"
                                 options.append(lbl)
 
-                            sup_label = sup_sku
+                            sup_label = f"\U0001f50d {sup_sku}"
                             if (supplier_names
                                     and sup_sku in supplier_names):
                                 sup_label += (
                                     f" \u2014 "
-                                    f"{supplier_names[sup_sku]}"
+                                    f"{supplier_names[sup_sku][:60]}"
                                 )
 
                             sel = st.selectbox(
@@ -1837,7 +1844,7 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
             detected = detect_invoice_columns(inv_df)
 
             col_names = ['(none)'] + list(inv_df.columns)
-            ecol1, ecol2, ecol3 = st.columns(3)
+            ecol1, ecol2, ecol3, ecol4 = st.columns(4)
             with ecol1:
                 sku_idx = (
                     col_names.index(detected['sku'])
@@ -1866,6 +1873,21 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
                     key="_ean_qty_col",
                 )
             with ecol3:
+                desc_idx = (
+                    col_names.index(detected['description'])
+                    if detected.get('description') in col_names else 0
+                )
+                inv_desc_col = st.selectbox(
+                    "Name / Designation column",
+                    col_names,
+                    index=desc_idx,
+                    help=(
+                        "Column with the product name or description. "
+                        "Used for variant narrowing and matching quality."
+                    ),
+                    key="_ean_desc_col",
+                )
+            with ecol4:
                 ean_threshold = st.slider(
                     "Match threshold",
                     min_value=50,
@@ -1882,14 +1904,98 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
                 qty_col = (
                     inv_qty_col if inv_qty_col != '(none)' else None
                 )
-                export_df = build_ean_export(
+                desc_col = (
+                    inv_desc_col if inv_desc_col != '(none)' else None
+                )
+
+                # Step 1: run matching
+                mdata = match_invoice_to_products(
                     products_df=work_df,
                     invoice_df=inv_df,
                     invoice_sku_col=inv_sku_col,
                     invoice_qty_col=qty_col,
                     threshold=ean_threshold,
-                    invoice_desc_col=detected.get('description'),
+                    invoice_desc_col=desc_col,
                 )
+
+                raw_matches = mdata['matches']
+                title_lookup = mdata['title_lookup']
+
+                # Build invoice-side name map for display
+                inv_names: dict[str, str] = {}
+                if desc_col and desc_col in inv_df.columns:
+                    for idx in inv_df.index:
+                        raw_sku = inv_df.at[idx, inv_sku_col]
+                        if pd.isna(raw_sku):
+                            continue
+                        k = str(raw_sku).strip()
+                        if k and k not in inv_names:
+                            inv_names[k] = str(
+                                inv_df.at[idx, desc_col] or ''
+                            ).strip()
+
+                # Split into auto-matched and unmatched
+                auto_matched = {
+                    k: v for k, v in raw_matches.items()
+                    if v['sku'] is not None
+                }
+                unmatched = {
+                    k: v for k, v in raw_matches.items()
+                    if v['sku'] is None and v['alternatives']
+                }
+
+                # Step 2: manual matching for unmatched items
+                manual_overrides: dict[str, str] = {}
+                if unmatched:
+                    with st.expander(
+                        f"\u26a0\ufe0f {len(unmatched)} unmatched "
+                        f"invoice line(s) \u2014 select matches",
+                        expanded=True,
+                    ):
+                        st.caption(
+                            "These invoice SKUs could not be "
+                            "automatically matched. Pick the correct "
+                            "product from the suggestions, or skip."
+                        )
+                        for inv_sku, md in unmatched.items():
+                            alts = md['alternatives']
+                            options = ['(skip \u2014 no match)']
+                            for alt_sku, alt_score in alts:
+                                lbl = alt_sku
+                                if alt_sku in title_lookup:
+                                    lbl += (
+                                        f" \u2014 "
+                                        f"{title_lookup[alt_sku]}"
+                                    )
+                                lbl += f" ({alt_score}%)"
+                                options.append(lbl)
+
+                            inv_label = f"\U0001f50d {inv_sku}"
+                            if inv_sku in inv_names and inv_names[inv_sku]:
+                                inv_label += (
+                                    f" \u2014 "
+                                    f"{inv_names[inv_sku][:60]}"
+                                )
+
+                            sel = st.selectbox(
+                                inv_label, options,
+                                key=f"_ean_manual_{inv_sku}",
+                            )
+                            if sel != '(skip \u2014 no match)':
+                                idx = options.index(sel) - 1
+                                alt_sku, _ = alts[idx]
+                                manual_overrides[inv_sku] = alt_sku
+
+                # Step 3: build the export with manual overrides
+                export_df = build_export_from_matches(
+                    work_df, mdata,
+                    manual_overrides=(
+                        manual_overrides if manual_overrides else None
+                    ),
+                )
+
+                matched_count = len(auto_matched) + len(manual_overrides)
+                skipped = len(unmatched) - len(manual_overrides)
 
                 if export_df.empty:
                     st.warning(
@@ -1897,11 +2003,19 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
                         "threshold or checking the SKU column."
                     )
                 else:
-                    st.markdown(
+                    status_parts = [
                         f"**{len(export_df)}** matched line"
-                        f"{'s' if len(export_df) != 1 else ''} "
-                        f"ready for export"
-                    )
+                        f"{'s' if len(export_df) != 1 else ''}"
+                    ]
+                    if manual_overrides:
+                        status_parts.append(
+                            f"({len(manual_overrides)} manual)"
+                        )
+                    if skipped > 0:
+                        status_parts.append(
+                            f"\u2014 {skipped} skipped"
+                        )
+                    st.markdown(" ".join(status_parts))
                     st.dataframe(
                         export_df,
                         use_container_width=True,

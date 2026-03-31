@@ -67,6 +67,7 @@ def build_ean_export(
     invoice_qty_col: str | None,
     threshold: int = 70,
     invoice_desc_col: str | None = None,
+    manual_overrides: dict[str, str] | None = None,
 ) -> pd.DataFrame:
     """Match invoice lines to products and build a scannable EAN export.
 
@@ -88,6 +89,9 @@ def build_ean_export(
         Optional column in *invoice_df* holding a description or product
         name.  Used together with the SKU text to narrow variant matches
         (e.g. ``"190 cm"`` or ``"Red / Large"``).
+    manual_overrides:
+        Optional dict mapping invoice SKUs to product SKUs for manual
+        corrections.  Entries here override automatic matches.
 
     Returns
     -------
@@ -95,6 +99,32 @@ def build_ean_export(
         Export document with columns:
         ``SKU``, ``Product Number``, ``Title``, ``Variant Name``,
         ``Amount``, ``EAN``, ``Match %``.
+    """
+    mdata = match_invoice_to_products(
+        products_df, invoice_df, invoice_sku_col,
+        invoice_qty_col, threshold, invoice_desc_col,
+    )
+    return build_export_from_matches(
+        products_df, mdata, manual_overrides=manual_overrides,
+    )
+
+
+def match_invoice_to_products(
+    products_df: pd.DataFrame,
+    invoice_df: pd.DataFrame,
+    invoice_sku_col: str,
+    invoice_qty_col: str | None,
+    threshold: int = 70,
+    invoice_desc_col: str | None = None,
+) -> dict:
+    """Run invoice-to-product matching and return raw results.
+
+    Returns a dict with keys:
+    ``matches`` – the dict from :func:`match_supplier_to_products`,
+    ``composite_lookup`` – maps augmented SKU → (number, variant_type),
+    ``title_lookup`` – maps product NUMBER → title,
+    ``qty_map`` – maps invoice SKU → parsed quantity,
+    ``desc_map`` – maps invoice SKU → description text.
     """
     invoice_skus = (
         invoice_df[invoice_sku_col]
@@ -158,16 +188,72 @@ def build_ean_export(
                 composite_lookup[composite] = (num, vtype)
                 augmented_skus.append(composite)
 
+    # Build name lookups so match_supplier_to_products can use product
+    # name / designation similarity as a secondary reranking signal.
+    inv_names: dict[str, str] | None = desc_map if desc_map else None
+    prod_names: dict[str, str] | None = title_lookup if title_lookup else None
+
     matches = match_supplier_to_products(
         invoice_skus.tolist(),
         augmented_skus,
         threshold=threshold,
+        supplier_names=inv_names,
+        product_names=prod_names,
     )
 
+    return {
+        'matches': matches,
+        'composite_lookup': composite_lookup,
+        'title_lookup': title_lookup,
+        'qty_map': qty_map,
+        'desc_map': desc_map,
+    }
+
+
+def build_export_from_matches(
+    products_df: pd.DataFrame,
+    match_data: dict,
+    *,
+    manual_overrides: dict[str, str] | None = None,
+) -> pd.DataFrame:
+    """Build the EAN export DataFrame from pre-computed match results.
+
+    Parameters
+    ----------
+    products_df:
+        Product catalogue DataFrame.
+    match_data:
+        Dict returned by :func:`match_invoice_to_products`.
+    manual_overrides:
+        Optional dict mapping invoice SKUs to augmented product SKUs
+        for manual corrections.  Entries here add or override automatic
+        matches.
+
+    Returns
+    -------
+    pd.DataFrame
+        Export document with columns:
+        ``SKU``, ``Product Number``, ``Title``, ``Variant Name``,
+        ``Amount``, ``EAN``, ``Match %``.
+    """
+    matches = match_data['matches']
+    composite_lookup = match_data['composite_lookup']
+    qty_map = match_data['qty_map']
+    desc_map = match_data['desc_map']
+
+    # Apply manual overrides — they add or replace automatic matches.
+    if manual_overrides:
+        for inv_sku, prod_key in manual_overrides.items():
+            matches[inv_sku] = {
+                'sku': prod_key,
+                'score': 100,
+                'alternatives': [],
+            }
+
     rows: list[dict] = []
-    for inv_sku, match_data in matches.items():
-        matched_key = match_data['sku']
-        score = match_data['score']
+    for inv_sku, mentry in matches.items():
+        matched_key = mentry['sku']
+        score = mentry['score']
         if matched_key is None:
             continue
         qty_val = qty_map.get(inv_sku, 1.0)
