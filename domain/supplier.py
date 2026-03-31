@@ -3,6 +3,11 @@
 Handles CSV / PDF supplier files, auto-detects column mappings, performs
 fuzzy SKU matching against the product catalogue, and detects discount
 lines in multi-language formats.
+
+The core matching functions (``match_supplier_to_products``,
+``normalize_sku``, etc.) live in :mod:`domain.invoice_ean` which is the
+single source of truth for all SKU matching logic.  They are re-exported
+here for backward compatibility.
 """
 
 from __future__ import annotations
@@ -11,13 +16,26 @@ import io
 import re
 
 import pandas as pd
-from rapidfuzz import fuzz, process as rfprocess
 
 try:
     import pdfplumber
     _PDF_SUPPORT = True
 except ImportError:
     _PDF_SUPPORT = False
+
+# Lazy re-export of matching functions from the canonical location
+# (domain.invoice_ean) so that existing callers keep working without
+# introducing a circular import.
+_REEXPORTED = frozenset({
+    'normalize_sku', 'match_supplier_to_products', 'search_products',
+})
+
+
+def __getattr__(name: str):
+    if name in _REEXPORTED:
+        import domain.invoice_ean as _ean
+        return getattr(_ean, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # --- Encoding helpers ---
@@ -99,20 +117,6 @@ def _detect_column(df_columns, patterns):
             if pat in lc:
                 return orig
     return None
-
-
-def normalize_sku(sku: str) -> str:
-    """Normalise a SKU for fuzzy comparison.
-
-    Strips common prefixes (e.g. ``TO-``, ``DK-``), removes all
-    separators (``-``, ``_``, space, ``.``, ``/``) and uppercases
-    the result so that ``"AFK 110"`` and ``"TO-AFK-110"`` both become
-    ``"AFK110"``.
-    """
-    s = str(sku).upper().strip()
-    s = re.sub(r'^[A-Z]{1,3}[-_]', '', s)
-    s = re.sub(r'[-_\s./,]', '', s)
-    return s
 
 
 def _dedupe_columns(headers: list[str]) -> list[str]:
@@ -291,152 +295,6 @@ def detect_supplier_columns(df):
         'currency': _detect_column(df.columns, _CURRENCY_NAMES),
         'description': _detect_column(df.columns, _DESCRIPTION_NAMES),
     }
-
-
-def match_supplier_to_products(
-    supplier_skus, product_skus, threshold=65, *,
-    supplier_names=None, product_names=None, top_n=5,
-):
-    """Fuzzy-match supplier SKUs to product SKUs.
-
-    When *supplier_names* (supplier SKU → designation / description)
-    and *product_names* (product SKU → product title) are provided,
-    description similarity is used as a secondary signal to choose the
-    absolute closest match from all candidates.
-
-    Returns ``{supplier_sku: {'sku': best_product_sku | None,
-    'score': int, 'alternatives': [(product_sku, score), …]}}``.
-    ``sku`` is ``None`` when no match exceeds *threshold*.
-    """
-    norm_to_orig: dict[str, str] = {}
-    for sku in product_skus:
-        norm = normalize_sku(sku)
-        if norm and norm not in norm_to_orig:
-            norm_to_orig[norm] = sku
-
-    norm_list = list(norm_to_orig.keys())
-
-    _prod_names: dict[str, str] = {}
-    if product_names:
-        for psku, pname in product_names.items():
-            _prod_names[psku] = str(pname).strip()
-
-    matches: dict[str, dict] = {}
-
-    for sup_sku in supplier_skus:
-        norm_sup = normalize_sku(sup_sku)
-        if not norm_sup:
-            continue
-
-        sup_name = ''
-        if supplier_names and sup_sku in supplier_names:
-            sup_name = str(supplier_names[sup_sku]).strip()
-
-        # Exact normalised-SKU match
-        if norm_sup in norm_to_orig:
-            matches[sup_sku] = {
-                'sku': norm_to_orig[norm_sup],
-                'score': 100,
-                'alternatives': [],
-            }
-            continue
-
-        # Fuzzy SKU match — read through ALL candidates above cutoff
-        results = rfprocess.extract(
-            norm_sup, norm_list, scorer=fuzz.ratio,
-            score_cutoff=threshold, limit=None,
-        )
-
-        if results:
-            ranked = _rank_candidates(
-                results, norm_to_orig, sup_name, _prod_names,
-            )
-            best_sku, best_score = ranked[0]
-            matches[sup_sku] = {
-                'sku': best_sku,
-                'score': best_score,
-                'alternatives': ranked[1:top_n + 1],
-            }
-            continue
-
-        # No match above threshold — provide suggestions
-        score_map: dict[str, int] = {}
-
-        sku_suggestions = rfprocess.extract(
-            norm_sup, norm_list, scorer=fuzz.ratio,
-            score_cutoff=30, limit=top_n,
-        )
-        if sku_suggestions:
-            for psku, sc in _rank_candidates(
-                sku_suggestions, norm_to_orig, sup_name, _prod_names,
-            ):
-                if psku not in score_map or sc > score_map[psku]:
-                    score_map[psku] = sc
-
-        if sup_name and _prod_names:
-            for psku, nscore in _name_based_candidates(
-                sup_name, _prod_names, top_n,
-            ):
-                if psku not in score_map or nscore > score_map[psku]:
-                    score_map[psku] = nscore
-
-        ranked = sorted(
-            score_map.items(), key=lambda x: x[1], reverse=True,
-        )[:top_n]
-
-        matches[sup_sku] = {
-            'sku': None,
-            'score': 0,
-            'alternatives': ranked,
-        }
-
-    return matches
-
-
-def _rank_candidates(results, norm_to_orig, sup_name, prod_names):
-    """Re-rank fuzzy-match candidates using SKU + name similarity."""
-    candidates: list[tuple[str, int]] = []
-    for match_norm, sku_score, _ in results:
-        orig_sku = norm_to_orig[match_norm]
-        combined = int(sku_score)
-        if sup_name and orig_sku in prod_names:
-            name_score = fuzz.token_set_ratio(
-                sup_name.upper(), prod_names[orig_sku].upper(),
-            )
-            combined = int(0.7 * sku_score + 0.3 * name_score)
-        candidates.append((orig_sku, combined))
-
-    candidates.sort(key=lambda x: x[1], reverse=True)
-    return candidates
-
-
-def _name_based_candidates(sup_name, prod_names, top_n=5):
-    """Find product candidates based on name / designation similarity."""
-    if not sup_name or not prod_names:
-        return []
-
-    name_to_skus: dict[str, list[str]] = {}
-    for psku, pname in prod_names.items():
-        upper = pname.upper().strip()
-        if upper:
-            name_to_skus.setdefault(upper, []).append(psku)
-
-    if not name_to_skus:
-        return []
-
-    name_list = list(name_to_skus.keys())
-    results = rfprocess.extract(
-        sup_name.upper().strip(), name_list,
-        scorer=fuzz.token_set_ratio, limit=top_n,
-    )
-
-    candidates: list[tuple[str, int]] = []
-    for matched_name, score, _ in results:
-        for psku in name_to_skus[matched_name]:
-            candidates.append((psku, int(score)))
-
-    candidates.sort(key=lambda x: x[1], reverse=True)
-    return candidates[:top_n]
 
 
 def detect_discount_lines(df, discount_col=None):

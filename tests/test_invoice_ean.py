@@ -1322,3 +1322,144 @@ class TestGenerateBarcodePdf:
             pdf_bytes = generate_barcode_pdf(df)
         assert isinstance(pdf_bytes, bytes)
         assert pdf_bytes[:5] == b'%PDF-'
+
+
+# ---------------------------------------------------------------------------
+# Translation aliases (Danish ↔ English)
+# ---------------------------------------------------------------------------
+
+class TestTranslationAliases:
+    """Tests for colour/material translation matching in _variant_in_context."""
+
+    def test_danish_roed_matches_red(self):
+        assert _variant_in_context('rød', 'shirt red large')
+
+    def test_english_red_matches_danish_roed(self):
+        assert _variant_in_context('red', 'shirt rød large')
+
+    def test_danish_blaa_matches_blue(self):
+        assert _variant_in_context('blå', 'hat blue')
+
+    def test_english_blue_matches_danish_blaa(self):
+        assert _variant_in_context('blue', 'hat blå')
+
+    def test_danish_hvid_matches_white(self):
+        assert _variant_in_context('hvid', 'jacket white')
+
+    def test_english_white_matches_danish_hvid(self):
+        assert _variant_in_context('white', 'jacket hvid')
+
+    def test_danish_sort_matches_black(self):
+        assert _variant_in_context('sort', 'belt black')
+
+    def test_english_black_matches_danish_sort(self):
+        assert _variant_in_context('black', 'belt sort')
+
+    def test_danish_groen_matches_green(self):
+        assert _variant_in_context('grøn', 'pants green')
+
+    def test_danish_gul_matches_yellow(self):
+        assert _variant_in_context('gul', 'towel yellow')
+
+    def test_grey_matches_gray(self):
+        """'grey' and 'gray' are both valid English spellings."""
+        assert _variant_in_context('grey', 'scarf gray')
+
+    def test_danish_graa_matches_grey(self):
+        assert _variant_in_context('grå', 'scarf grey')
+
+    def test_danish_brun_matches_brown(self):
+        assert _variant_in_context('brun', 'bag brown')
+
+    def test_danish_laeder_matches_leather(self):
+        assert _variant_in_context('læder', 'bag leather')
+
+    def test_no_false_positive_translation(self):
+        """Translation should not match unrelated context."""
+        assert not _variant_in_context('rød', 'shirt blue size m')
+
+    def test_composite_variant_with_translation(self):
+        """Composite 'rød//Large' should match 'red' in context."""
+        assert _variant_in_context('rød//Large', 'shirt red')
+
+    def test_composite_variant_translation_plus_size_alias(self):
+        """'rød//L' should match 'red' or 'large' in context."""
+        assert _variant_in_context('rød//L', 'shirt large')
+        assert _variant_in_context('rød//L', 'shirt red')
+
+    def test_translation_case_insensitive(self):
+        assert _variant_in_context('RØD', 'shirt red')
+        assert _variant_in_context('Red', 'shirt rød')
+
+    def test_translation_narrows_variant_in_export(self):
+        """Danish colour in description should narrow English variant."""
+        products = _make_products(
+            NUMBER=['SH-01', 'SH-01'],
+            VARIANT_ID=['10', '11'],
+            VARIANT_TYPES=['red', 'blue'],
+            EAN=['5700000000010', '5700000000020'],
+            TITLE_DK=['Shirt', 'Shirt'],
+            BUY_PRICE=['50,00', '50,00'],
+            PRICE=['100,00', '100,00'],
+            BUY_PRICE_NUM=[50.0, 50.0],
+            PRICE_NUM=[100.0, 100.0],
+            PRODUCT_ID=['6', '6'],
+            PRODUCER=['Brand D', 'Brand D'],
+            PRODUCER_ID=[4, 4],
+            ONLINE=[True, True],
+        )
+        invoice = pd.DataFrame({
+            'Article': ['SH-01'],
+            'Quantity': ['1'],
+            'Description': ['Shirt rød'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=70,
+            invoice_desc_col='Description',
+        )
+        assert len(result) == 1
+        assert result.iloc[0]['Variant Name'] == 'red'
+
+
+# ---------------------------------------------------------------------------
+# search_products
+# ---------------------------------------------------------------------------
+
+class TestSearchProducts:
+    """Tests for the search_products function."""
+
+    def test_search_by_sku(self):
+        from domain.invoice_ean import search_products
+        results = search_products('AFK110', ['AFK110', 'BCD220', 'XYZ999'])
+        assert len(results) > 0
+        assert results[0][0] == 'AFK110'
+
+    def test_search_by_name(self):
+        from domain.invoice_ean import search_products
+        results = search_products(
+            'Judogi white',
+            ['AFK110', 'BCD220'],
+            product_names={'AFK110': 'Judogi white', 'BCD220': 'Belt black'},
+        )
+        assert len(results) > 0
+        skus = [r[0] for r in results]
+        assert 'AFK110' in skus
+
+    def test_search_empty_query(self):
+        from domain.invoice_ean import search_products
+        results = search_products('', ['AFK110'])
+        assert results == []
+
+    def test_search_empty_catalogue(self):
+        from domain.invoice_ean import search_products
+        results = search_products('AFK110', [])
+        assert results == []
+
+    def test_search_respects_top_n(self):
+        from domain.invoice_ean import search_products
+        results = search_products(
+            'A',
+            [f'A{i}' for i in range(20)],
+            top_n=3,
+        )
+        assert len(results) <= 3
