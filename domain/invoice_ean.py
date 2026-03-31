@@ -9,6 +9,7 @@ The export document is **read-only** — it is never used for API imports.
 
 from __future__ import annotations
 
+import math
 import re
 
 import pandas as pd
@@ -216,6 +217,9 @@ def build_ean_export(
     return pd.DataFrame(rows)
 
 
+_BOUNDARY_CACHE: dict[str, re.Pattern[str]] = {}
+
+
 def _variant_in_context(vt: str, context: str) -> bool:
     """Check whether a variant name appears in the context string.
 
@@ -225,8 +229,14 @@ def _variant_in_context(vt: str, context: str) -> bool:
     vt = vt.strip()
     if not vt:
         return False
-    pattern = r'(?<![A-Za-z0-9])' + re.escape(vt.lower()) + r'(?![A-Za-z0-9])'
-    return bool(re.search(pattern, context.lower()))
+    key = vt.lower()
+    pat = _BOUNDARY_CACHE.get(key)
+    if pat is None:
+        pat = re.compile(
+            r'(?<![A-Za-z0-9])' + re.escape(key) + r'(?![A-Za-z0-9])'
+        )
+        _BOUNDARY_CACHE[key] = pat
+    return bool(pat.search(context.lower()))
 
 
 def _parse_qty(raw: object) -> float:
@@ -244,7 +254,7 @@ def _parse_qty(raw: object) -> float:
     try:
         val = float(text)
         # Guard against NaN / Inf that float() silently accepts
-        if val != val or val == float('inf') or val == float('-inf'):
+        if math.isnan(val) or math.isinf(val):
             return 1.0
         return val
     except (ValueError, TypeError):
