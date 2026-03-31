@@ -620,14 +620,13 @@ _TRANSLATION_GROUPS: list[tuple[str, ...]] = [
     ('grå', 'grey', 'gray'),
     ('lilla', 'purple'),
     ('orange', 'orange'),
-    ('rosa', 'pink'),
+    ('rosa', 'lyserød', 'pink'),
     ('brun', 'brown'),
-    ('lyserød', 'pink', 'rosa'),
     ('turkis', 'turquoise'),
     ('guld', 'gold'),
     ('sølv', 'silver'),
     ('beige', 'beige'),
-    ('navy', 'navy', 'marineblå'),
+    ('marineblå', 'navy'),
     ('bordeaux', 'burgundy', 'vinrød'),
     # Materials – Danish ↔ English (common in product variants)
     ('bomuld', 'cotton'),
@@ -660,6 +659,9 @@ def _boundary_pattern(key: str) -> re.Pattern[str]:
     """Get or compile a word-boundary regex for *key*.
 
     The key is lower-cased internally — callers need not pre-normalise.
+    The Unicode range ``\\u00c0–\\u024f`` extends word boundaries to
+    cover Latin Extended characters (Danish ø, å, æ, etc.) so that
+    translated colour names are not split mid-word.
     """
     key = key.lower()
     pat = _BOUNDARY_CACHE.get(key)
