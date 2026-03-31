@@ -111,7 +111,7 @@ def normalize_sku(sku: str) -> str:
     """
     s = str(sku).upper().strip()
     s = re.sub(r'^[A-Z]{1,3}[-_]', '', s)
-    s = re.sub(r'[-_\s./]', '', s)
+    s = re.sub(r'[-_\s./,]', '', s)
     return s
 
 
@@ -240,7 +240,7 @@ def parse_supplier_file(raw_bytes: bytes, filename: str, encoding: str = 'auto')
                 for _m in _item_matches:
                     _art_desc = _m[1].strip()
                     _art_split = re.match(
-                        r'^([A-Z0-9][A-Z0-9 ./-]*?\d[\w]*'
+                        r'^([A-Z0-9][A-Z0-9 ./,-]*?\d[\w]*'
                         r'(?:\s+[A-Z]{1,4})?'
                         r')\s+(.+)$',
                         _art_desc,

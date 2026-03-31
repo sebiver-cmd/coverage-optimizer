@@ -640,6 +640,60 @@ class TestStricterSKUMatching:
         )
         assert len(result) == 4
 
+    def test_vtype_mismatch_falls_back_to_narrowing(self):
+        """When composite vtype doesn't match VARIANT_TYPES exactly,
+        fall back to _narrow_variants instead of returning all variants."""
+        products = _make_products(
+            NUMBER=['PSS 001', 'PSS 001', 'PSS 001', 'PSS 001',
+                    'PSS 001', 'PSS 001'],
+            VARIANT_ID=['10', '11', '12', '13', '14', '15'],
+            VARIANT_TYPES=['Small', 'Medium', 'Large', 'X-Large',
+                           'XX-Large', 'Senior'],
+            EAN=['5700000000001', '5700000000002', '5700000000003',
+                 '5700000000004', '5700000000005', '5700000000006'],
+            TITLE_DK=['Guard', 'Guard', 'Guard', 'Guard', 'Guard', 'Guard'],
+            BUY_PRICE=['10,00'] * 6,
+            PRICE=['20,00'] * 6,
+            BUY_PRICE_NUM=[10.0] * 6,
+            PRICE_NUM=[20.0] * 6,
+            PRODUCT_ID=['1'] * 6,
+            PRODUCER=['Brand'] * 6,
+            PRODUCER_ID=[1] * 6,
+            ONLINE=[True] * 6,
+        )
+        # Invoice has "PSS 001 L" — the composite vtype "L" doesn't match
+        # any VARIANT_TYPES exactly (they are "Large", not "L").
+        # The fallback should use _narrow_variants to check if "large"
+        # appears in the context "pss 001 l" — it won't, so all 6 come back.
+        # But importantly, it should NOT crash or silently return all 6
+        # when a better narrowing is possible.
+        invoice = pd.DataFrame({
+            'Article': ['PSS 001 Large'],
+            'Quantity': ['5'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=50,
+        )
+        # "Large" should narrow via _variant_in_context
+        assert len(result) == 1
+        assert result.iloc[0]['Variant Name'] == 'Large'
+        assert result.iloc[0]['Amount'] == 5.0
+
+    def test_duplicate_invoice_skus_not_duplicated(self):
+        """Duplicate invoice SKUs should not produce duplicate rows."""
+        products = self._size_variants()
+        invoice = pd.DataFrame({
+            'Article': ['PSW 003 XL', 'PSW 003 XL', 'PSW 003 XL'],
+            'Quantity': ['3', '5', '7'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=50,
+        )
+        # Only one row for PSW 003 XL, with the first-seen quantity
+        xl_rows = result.loc[result['Variant Name'] == 'XL']
+        assert len(xl_rows) == 1
+        assert xl_rows.iloc[0]['Amount'] == 3.0
+
 
 # ---------------------------------------------------------------------------
 # Manual overrides and match_invoice_to_products
@@ -796,7 +850,7 @@ class TestPDFVariantSuffixParsing:
         for _m in _item_matches:
             _art_desc = _m[1].strip()
             _art_split = re.match(
-                r'^([A-Z0-9][A-Z0-9 ./-]*?\d[\w]*'
+                r'^([A-Z0-9][A-Z0-9 ./,-]*?\d[\w]*'
                 r'(?:\s+[A-Z]{1,4})?'
                 r')\s+(.+)$',
                 _art_desc,
@@ -865,6 +919,22 @@ class TestPDFVariantSuffixParsing:
         df = self._parse_with_regex(lines)
         assert df.iloc[0]['Article No'] == 'RH 003'
         assert 'RHINOC' in df.iloc[0]['Designation']
+
+    def test_comma_in_article_number(self):
+        """Commas in article numbers (e.g. 'GTR 4,5') are preserved."""
+        lines = [
+            '010 GTR 4,5 Gummi-Trainingsring, Gr. 4,5 8pcs 12,50 100,00',
+        ]
+        df = self._parse_with_regex(lines)
+        assert df.iloc[0]['Article No'] == 'GTR 4,5'
+
+    def test_comma_article_with_variant_suffix(self):
+        """Comma article numbers can also carry a variant suffix."""
+        lines = [
+            '011 GTR 3,5 M Gummi-Trainingsring medium, Gr. 3,5 4pcs 14,00 56,00',
+        ]
+        df = self._parse_with_regex(lines)
+        assert df.iloc[0]['Article No'] == 'GTR 3,5 M'
 
 
 # ---------------------------------------------------------------------------

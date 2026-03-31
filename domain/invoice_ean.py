@@ -132,6 +132,7 @@ def match_invoice_to_products(
         .astype(str)
         .str.strip()
         .loc[lambda s: s != '']
+        .drop_duplicates()
     )
 
     # Pre-compute a per-row SKU → quantity mapping so that we look up
@@ -278,6 +279,12 @@ def build_export_from_matches(
             specific = matched_products.loc[vt_mask]
             if not specific.empty:
                 matched_products = specific
+            elif len(matched_products) > 1:
+                # vtype didn't match exactly; fall back to narrowing
+                inv_desc = desc_map.get(inv_sku, '')
+                matched_products = _narrow_variants(
+                    matched_products, inv_sku, inv_desc,
+                )
         elif len(matched_products) > 1:
             # Fall back to description-based narrowing using SKU text,
             # the optional description column, and product titles.
