@@ -173,12 +173,33 @@ class TestParseSupplierFilePDFTextFallback(unittest.TestCase):
         self.assertGreaterEqual(len(df), 2)
         self.assertGreaterEqual(len(df.columns), 2)
 
+    def test_whitespace_text_in_pdf_parsed(self):
+        """A PDF with whitespace-separated text should be parseable."""
+        lines = ['SKU    Price    Description', 'A001    100    Widget', 'A002    200    Gadget']
+        pdf_bytes = _make_text_pdf(lines)
+        df = parse_supplier_file(pdf_bytes, 'ws.pdf')
+        self.assertGreaterEqual(len(df), 2)
+        self.assertGreaterEqual(len(df.columns), 2)
+
     def test_empty_pdf_raises(self):
         """A completely blank PDF should raise ValueError."""
         pdf_bytes = _make_empty_pdf()
         with self.assertRaises(ValueError) as ctx:
             parse_supplier_file(pdf_bytes, 'empty.pdf')
         self.assertIn('No tables found', str(ctx.exception))
+
+
+class TestParseSupplierFilePDFRelaxedTableExtraction(unittest.TestCase):
+    """PDF table extraction with text-based strategies (relaxed settings)."""
+
+    def test_text_aligned_table_pdf(self):
+        """A PDF with text-aligned columns (no borders) should be parseable
+        via relaxed table-detection settings."""
+        lines = ['SKU     Price', 'B001     150', 'B002     250']
+        pdf_bytes = _make_text_pdf(lines)
+        df = parse_supplier_file(pdf_bytes, 'aligned.pdf')
+        self.assertGreaterEqual(len(df), 2)
+        self.assertGreaterEqual(len(df.columns), 2)
 
 
 class TestParseSupplierFilePDFNoPdfplumber(unittest.TestCase):

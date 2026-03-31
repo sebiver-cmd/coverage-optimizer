@@ -142,6 +142,24 @@ def parse_supplier_file(raw_bytes: bytes, filename: str, encoding: str = 'auto')
         if tables:
             return pd.concat(tables, ignore_index=True)
 
+        # Retry with relaxed table-detection (text-based strategies)
+        _text_settings = {
+            "vertical_strategy": "text",
+            "horizontal_strategy": "text",
+        }
+        with pdfplumber.open(io.BytesIO(raw_bytes)) as pdf:
+            for page in pdf.pages:
+                for table in (page.extract_tables(table_settings=_text_settings) or []):
+                    if table and len(table) > 1 and len(table[0]) > 1:
+                        headers = [str(h or '').strip() for h in table[0]]
+                        rows = [
+                            [str(c or '').strip() for c in row]
+                            for row in table[1:]
+                        ]
+                        tables.append(pd.DataFrame(rows, columns=headers))
+        if tables:
+            return pd.concat(tables, ignore_index=True)
+
         # Fallback: extract raw text and parse as CSV-like data
         text_parts: list[str] = []
         with pdfplumber.open(io.BytesIO(raw_bytes)) as pdf:
@@ -161,6 +179,17 @@ def parse_supplier_file(raw_bytes: bytes, filename: str, encoding: str = 'auto')
                 except (pd.errors.ParserError, pd.errors.EmptyDataError,
                         ValueError, TypeError):
                     continue
+            # Try whitespace separator (common in pdfplumber text output)
+            try:
+                df = pd.read_csv(
+                    io.StringIO(full_text), sep=r'\s{2,}',
+                    engine='python', dtype=str,
+                )
+                if len(df.columns) > 1:
+                    return df
+            except (pd.errors.ParserError, pd.errors.EmptyDataError,
+                    ValueError, TypeError):
+                pass
 
         raise ValueError(
             "No tables found in the PDF. "
