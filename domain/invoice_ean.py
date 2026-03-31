@@ -9,6 +9,7 @@ The export document is **read-only** — it is never used for API imports.
 
 from __future__ import annotations
 
+import io
 import math
 import re
 
@@ -298,3 +299,163 @@ def _narrow_variants(
     if hit_mask.any() and hit_mask.sum() < len(matched_products):
         return matched_products.loc[hit_mask]
     return matched_products
+
+
+# ---------------------------------------------------------------------------
+# Barcode PDF generation
+# ---------------------------------------------------------------------------
+
+def _render_barcode_image(ean_value: str) -> io.BytesIO | None:
+    """Render an EAN barcode as a PNG image in a BytesIO buffer.
+
+    Supports EAN-13 (12–13 digits) and EAN-8 (7–8 digits).
+    Returns ``None`` when the value is empty or not a valid EAN.
+    """
+    try:
+        import barcode as barcode_lib
+        from barcode.writer import ImageWriter
+    except ImportError:
+        return None
+
+    digits = re.sub(r'\D', '', str(ean_value).strip())
+    if not digits:
+        return None
+
+    try:
+        if len(digits) <= 8:
+            code = barcode_lib.get('ean8', digits, writer=ImageWriter())
+        else:
+            code = barcode_lib.get('ean13', digits, writer=ImageWriter())
+    except Exception:
+        return None
+
+    buf = io.BytesIO()
+    try:
+        code.write(buf, options={
+            'write_text': True,
+            'module_height': 15.0,
+            'module_width': 0.33,
+            'font_size': 10,
+            'text_distance': 3.0,
+            'quiet_zone': 2.0,
+        })
+    except Exception:
+        return None
+    buf.seek(0)
+    buf.name = 'barcode.png'
+    return buf
+
+
+def generate_barcode_pdf(export_df: pd.DataFrame) -> bytes:
+    """Generate a PDF document with scannable EAN barcodes.
+
+    Each row from *export_df* is rendered as a label containing
+    the product information and a scannable barcode image.
+
+    Parameters
+    ----------
+    export_df:
+        DataFrame produced by :func:`build_ean_export`.  Expected
+        columns: ``SKU``, ``Product Number``, ``Title``,
+        ``Variant Name``, ``Amount``, ``EAN``.
+
+    Returns
+    -------
+    bytes
+        Raw PDF file content.
+    """
+    from fpdf import FPDF
+
+    pdf = FPDF(orientation='P', unit='mm', format='A4')
+    pdf.set_auto_page_break(auto=True, margin=15)
+
+    # Layout constants
+    label_w = 90          # mm – label width (2 columns)
+    label_h = 55          # mm – label height
+    margin_x = 10         # mm – left page margin
+    margin_y = 10         # mm – top page margin
+    gap_x = 10            # mm – horizontal gap between columns
+    gap_y = 5             # mm – vertical gap between rows
+    cols = 2
+    barcode_w = 50        # mm – rendered barcode image width
+    barcode_h = 22        # mm – rendered barcode image height
+
+    rows_per_page = int((297 - 2 * margin_y + gap_y) / (label_h + gap_y))
+
+    def _latin1(text: str) -> str:
+        """Sanitise text to Latin-1 for the built-in Helvetica font."""
+        return text.encode('latin-1', 'replace').decode('latin-1')
+
+    label_idx = 0
+    for _, row in export_df.iterrows():
+        # Page management
+        if label_idx % (cols * rows_per_page) == 0:
+            pdf.add_page()
+
+        pos_on_page = label_idx % (cols * rows_per_page)
+        col = pos_on_page % cols
+        grid_row = pos_on_page // cols
+
+        x = margin_x + col * (label_w + gap_x)
+        y = margin_y + grid_row * (label_h + gap_y)
+
+        # Draw label border
+        pdf.set_draw_color(200, 200, 200)
+        pdf.rect(x, y, label_w, label_h)
+
+        # Product info text
+        text_x = x + 3
+        text_y = y + 3
+
+        pdf.set_font('Helvetica', 'B', 8)
+        pdf.set_xy(text_x, text_y)
+        sku = str(row.get('SKU', ''))
+        prod_num = str(row.get('Product Number', ''))
+        pdf.cell(label_w - 6, 4, _latin1(f"SKU: {sku}  |  #{prod_num}"), new_x='LMARGIN', new_y='NEXT')
+
+        pdf.set_font('Helvetica', '', 7)
+        pdf.set_xy(text_x, text_y + 5)
+        title = str(row.get('Title', ''))[:50]
+        variant = str(row.get('Variant Name', '') or '')
+        if variant:
+            title = f"{title} - {variant}"
+        # Sanitise to Latin-1 for built-in Helvetica font
+        title = title.encode('latin-1', 'replace').decode('latin-1')
+        pdf.cell(label_w - 6, 3.5, title, new_x='LMARGIN', new_y='NEXT')
+
+        amount = row.get('Amount', 1)
+        try:
+            amount = int(float(amount))
+        except (ValueError, TypeError):
+            amount = 1
+        pdf.set_xy(text_x, text_y + 9.5)
+        pdf.set_font('Helvetica', 'B', 7)
+        pdf.cell(label_w - 6, 3.5, f"Qty: {amount}", new_x='LMARGIN', new_y='NEXT')
+
+        # Barcode image
+        ean_val = str(row.get('EAN', '') or '')
+        barcode_buf = _render_barcode_image(ean_val)
+        if barcode_buf is not None:
+            bc_x = x + (label_w - barcode_w) / 2
+            bc_y = text_y + 14
+            pdf.image(barcode_buf, x=bc_x, y=bc_y, w=barcode_w, h=barcode_h)
+        else:
+            # No valid EAN — print the raw value as text
+            pdf.set_font('Helvetica', '', 9)
+            pdf.set_xy(text_x, text_y + 20)
+            display = ean_val if ean_val else '(no EAN)'
+            pdf.cell(label_w - 6, 5, display, align='C')
+
+        # EAN number text below barcode
+        pdf.set_font('Helvetica', '', 6)
+        pdf.set_xy(x, y + label_h - 5)
+        pdf.cell(label_w, 4, f"EAN: {ean_val}" if ean_val else '', align='C')
+
+        label_idx += 1
+
+    if label_idx == 0:
+        pdf.add_page()
+        pdf.set_font('Helvetica', '', 12)
+        pdf.cell(0, 10, 'No products with EAN barcodes to display.', align='C')
+
+    return bytes(pdf.output())
