@@ -580,6 +580,69 @@ class TestVariantInContext:
         """Size alias for 'Small' should NOT match inside 'PSW'."""
         assert not _variant_in_context('Small', 'psw 003')
 
+    # --- Composite variant splitting on "/" and "//" ---
+
+    def test_double_slash_composite_matches_color(self):
+        """'rød//Large' should match when context contains 'rød'."""
+        assert _variant_in_context('rød//Large', 'shirt rød')
+
+    def test_double_slash_composite_matches_size(self):
+        """'rød//Large' should match when context contains 'Large'."""
+        assert _variant_in_context('rød//Large', 'shirt large')
+
+    def test_double_slash_composite_matches_size_alias(self):
+        """'rød//Large' should match 'L' via size alias."""
+        assert _variant_in_context('rød//Large', 'shirt l')
+
+    def test_double_slash_no_match(self):
+        """'rød//Large' should NOT match unrelated context."""
+        assert not _variant_in_context('rød//Large', 'shirt blå')
+
+    def test_single_slash_composite_matches_part(self):
+        """'Red / Large' should match when context contains 'red'."""
+        assert _variant_in_context('Red / Large', 'guard red')
+
+    def test_single_slash_composite_matches_size(self):
+        """'Red / Large' should match context with 'large'."""
+        assert _variant_in_context('Red / Large', 'guard large')
+
+    def test_composite_no_false_positive(self):
+        """'Red / Large' should NOT match unrelated context."""
+        assert not _variant_in_context('Red / Large', 'guard blue')
+
+    def test_double_slash_narrows_correct_variant(self):
+        """Narrowing with double-slash variants picks the right one."""
+        products = _make_products(
+            NUMBER=['SH-01', 'SH-01', 'SH-01', 'SH-01'],
+            VARIANT_ID=['30', '31', '32', '33'],
+            VARIANT_TYPES=[
+                'rød//Large', 'rød//Small', 'blå//Large', 'blå//Small',
+            ],
+            EAN=['5700000000010', '5700000000020',
+                 '5700000000030', '5700000000040'],
+            TITLE_DK=['Shirt', 'Shirt', 'Shirt', 'Shirt'],
+            BUY_PRICE=['50,00', '50,00', '50,00', '50,00'],
+            PRICE=['100,00', '100,00', '100,00', '100,00'],
+            BUY_PRICE_NUM=[50.0, 50.0, 50.0, 50.0],
+            PRICE_NUM=[100.0, 100.0, 100.0, 100.0],
+            PRODUCT_ID=['6', '6', '6', '6'],
+            PRODUCER=['Brand D', 'Brand D', 'Brand D', 'Brand D'],
+            PRODUCER_ID=[4, 4, 4, 4],
+            ONLINE=[True, True, True, True],
+        )
+        # Invoice says "Large" — should narrow to both "Large" variants
+        invoice = pd.DataFrame({
+            'Article': ['SH-01'],
+            'Quantity': ['2'],
+            'Description': ['Shirt Large'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=70,
+            invoice_desc_col='Description',
+        )
+        assert len(result) == 2
+        assert set(result['Variant Name']) == {'rød//Large', 'blå//Large'}
+
 
 # ---------------------------------------------------------------------------
 # Stricter SKU matching with title + SKU
