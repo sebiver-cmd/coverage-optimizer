@@ -28,15 +28,14 @@ import json
 import logging
 import math
 import os
-import re
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from dandomain_api import DanDomainClient
+from backend.apply_constants import BATCH_DIR, UUID_RE, AUDIT_LOG
 
 logger = logging.getLogger(__name__)
 
@@ -46,17 +45,6 @@ logger = logging.getLogger(__name__)
 
 MAX_APPLY_ROWS = 100
 MAX_CHANGE_PCT = 30
-
-# Directory where batch manifests live (shared with apply_prices_api).
-_BATCH_DIR = Path("data/apply_batches")
-
-# Audit log file path.
-_AUDIT_LOG = Path("data/apply_audit.log")
-
-# Strict UUID-4 pattern (lowercase hex with hyphens).
-_UUID_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-)
 
 
 # ---------------------------------------------------------------------------
@@ -199,11 +187,11 @@ def apply_prices(payload: ApplyRequest) -> ApplyResponse:
         )
 
     # 1. Validate batch_id as UUID-4 ------------------------------------
-    if not _UUID_RE.match(payload.batch_id):
+    if not UUID_RE.match(payload.batch_id):
         raise HTTPException(status_code=422, detail="Invalid batch_id format.")
 
     # 2. Load manifest ---------------------------------------------------
-    manifest_path = _BATCH_DIR / f"{payload.batch_id}.json"
+    manifest_path = BATCH_DIR / f"{payload.batch_id}.json"
     if not manifest_path.is_file():
         raise HTTPException(status_code=404, detail="Batch not found.")
 
@@ -211,7 +199,7 @@ def apply_prices(payload: ApplyRequest) -> ApplyResponse:
     changes: list[dict] = manifest.get("changes", [])
 
     # 3. Double-apply prevention ----------------------------------------
-    applied_marker = _BATCH_DIR / f"{payload.batch_id}.applied"
+    applied_marker = BATCH_DIR / f"{payload.batch_id}.applied"
     if applied_marker.exists():
         raise HTTPException(
             status_code=409,
@@ -281,12 +269,12 @@ def apply_prices(payload: ApplyRequest) -> ApplyResponse:
         "applied_count": applied_count,
         "failed_count": len(failed),
     }
-    _AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
-    with open(_AUDIT_LOG, "a", encoding="utf-8") as f:
+    AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(AUDIT_LOG, "a", encoding="utf-8") as f:
         f.write(json.dumps(audit_entry) + "\n")
 
     # 8. Place .applied marker -----------------------------------------
-    _BATCH_DIR.mkdir(parents=True, exist_ok=True)
+    BATCH_DIR.mkdir(parents=True, exist_ok=True)
     applied_marker.write_text(finished_at, encoding="utf-8")
 
     return ApplyResponse(

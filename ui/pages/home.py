@@ -1,4 +1,4 @@
-"""Dashboard home page — summary cards, API fetch, and quick actions."""
+"""Dashboard home page — summary cards and quick actions."""
 
 from __future__ import annotations
 
@@ -38,41 +38,15 @@ def render(
         brand_count = len(st.session_state.get("_api_brand_id_map", {}))
         st.metric("Brands", f"{brand_count:,}" if brand_count else "—")
 
-    # --- API Fetch ---
+    # --- Module card ---
     st.markdown("")
     st.divider()
-    st.markdown(
-        '<div class="section-header">Fetch Products</div>',
-        unsafe_allow_html=True,
-    )
-
-    if not api_ready:
-        st.markdown(
-            '<div class="info-card">'
-            "<h4>API Not Connected</h4>"
-            "<p>Configure your DanDomain API credentials in the sidebar "
-            "to fetch products from your webshop.</p>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-    else:
-        st.button("Fetch Products from API", type="primary", disabled=True)
-        st.info(
-            "This step is no longer required. "
-            "The Price Optimizer fetches product data automatically "
-            "when you run optimisation."
-        )
-
-    st.markdown("")
-    st.divider()
-
-    # --- Module cards ---
     st.markdown(
         '<div class="section-header">Modules</div>',
         unsafe_allow_html=True,
     )
 
-    mc1, mc2, mc3 = st.columns(3)
+    mc1, _mc2, _mc3 = st.columns(3)
     with mc1:
         st.markdown(
             '<div class="dash-card">'
@@ -90,36 +64,6 @@ def render(
         ):
             st.session_state["_nav_page"] = "Price Optimizer"
             st.rerun()
-    with mc2:
-        st.markdown(
-            '<div class="dash-card disabled">'
-            "<h3>Push to Shop</h3>"
-            "<p>Bulk push price and product updates directly "
-            "to your DanDomain webshop.</p>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-        st.button(
-            "Coming Soon",
-            use_container_width=True,
-            disabled=True,
-            key="_nav_push",
-        )
-    with mc3:
-        st.markdown(
-            '<div class="dash-card disabled">'
-            "<h3>Reports</h3>"
-            "<p>Coverage reports, price change history, and "
-            "audit logs.</p>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-        st.button(
-            "Coming Soon",
-            use_container_width=True,
-            disabled=True,
-            key="_nav_reports",
-        )
 
     st.markdown("")
     st.divider()
