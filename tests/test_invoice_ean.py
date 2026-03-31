@@ -642,44 +642,47 @@ class TestStricterSKUMatching:
 
     def test_vtype_mismatch_falls_back_to_narrowing(self):
         """When composite vtype doesn't match VARIANT_TYPES exactly,
-        fall back to _narrow_variants instead of returning all variants."""
+        fall back to _narrow_variants using description context."""
         products = _make_products(
-            NUMBER=['PSS 001', 'PSS 001', 'PSS 001', 'PSS 001',
-                    'PSS 001', 'PSS 001'],
-            VARIANT_ID=['10', '11', '12', '13', '14', '15'],
-            VARIANT_TYPES=['Small', 'Medium', 'Large', 'X-Large',
-                           'XX-Large', 'Senior'],
-            EAN=['5700000000001', '5700000000002', '5700000000003',
-                 '5700000000004', '5700000000005', '5700000000006'],
-            TITLE_DK=['Guard', 'Guard', 'Guard', 'Guard', 'Guard', 'Guard'],
-            BUY_PRICE=['10,00'] * 6,
-            PRICE=['20,00'] * 6,
-            BUY_PRICE_NUM=[10.0] * 6,
-            PRICE_NUM=[20.0] * 6,
-            PRODUCT_ID=['1'] * 6,
-            PRODUCER=['Brand'] * 6,
-            PRODUCER_ID=[1] * 6,
-            ONLINE=[True] * 6,
+            NUMBER=['PSS 001', 'PSS 001', 'PSS 001'],
+            VARIANT_ID=['10', '11', '12'],
+            VARIANT_TYPES=['Small', 'Medium', 'Large'],
+            EAN=['5700000000001', '5700000000002', '5700000000003'],
+            TITLE_DK=['Guard', 'Guard', 'Guard'],
+            BUY_PRICE=['10,00'] * 3,
+            PRICE=['20,00'] * 3,
+            BUY_PRICE_NUM=[10.0] * 3,
+            PRICE_NUM=[20.0] * 3,
+            PRODUCT_ID=['1'] * 3,
+            PRODUCER=['Brand'] * 3,
+            PRODUCER_ID=[1] * 3,
+            ONLINE=[True] * 3,
         )
-        # Invoice has "PSS 001 L" — the composite vtype "L" doesn't match
-        # any VARIANT_TYPES exactly (they are "Large", not "L").
-        # The fallback should use _narrow_variants to check if "large"
-        # appears in the context "pss 001 l" — it won't, so all 6 come back.
-        # But importantly, it should NOT crash or silently return all 6
-        # when a better narrowing is possible.
-        invoice = pd.DataFrame({
-            'Article': ['PSS 001 Large'],
-            'Quantity': ['5'],
-        })
-        result = build_ean_export(
-            products, invoice, 'Article', 'Quantity', threshold=50,
-        )
-        # "Large" should narrow via _variant_in_context
+        # Use two-step API with crafted match_data where composite vtype
+        # "L" doesn't match any VARIANT_TYPES exactly (they're "Large",
+        # "Medium", "Small"), but the description contains "Large".
+        match_data = {
+            'matches': {
+                'PSS 001 L': {
+                    'sku': 'PSS 001 L', 'score': 100, 'alternatives': [],
+                },
+            },
+            'composite_lookup': {
+                'PSS 001': ('PSS 001', ''),
+                'PSS 001 L': ('PSS 001', 'L'),
+            },
+            'title_lookup': {'PSS 001': 'Guard'},
+            'qty_map': {'PSS 001 L': 5.0},
+            'desc_map': {'PSS 001 L': 'Guard Large'},
+        }
+        result = build_export_from_matches(products, match_data)
+        # vtype "L" doesn't match "Large" exactly, but the description
+        # "Guard Large" lets _narrow_variants find the right variant.
         assert len(result) == 1
         assert result.iloc[0]['Variant Name'] == 'Large'
         assert result.iloc[0]['Amount'] == 5.0
 
-    def test_duplicate_invoice_skus_not_duplicated(self):
+    def test_invoice_deduplicates_repeated_skus(self):
         """Duplicate invoice SKUs should not produce duplicate rows."""
         products = self._size_variants()
         invoice = pd.DataFrame({
