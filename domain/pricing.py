@@ -156,6 +156,10 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
                 vbuy = v.get('BuyingPrice', buy_price) if isinstance(v, dict) else getattr(v, 'BuyingPrice', buy_price)
                 vean_raw = v.get('Ean', '') if isinstance(v, dict) else getattr(v, 'Ean', '')
                 vean = str(vean_raw).strip() if vean_raw else ean
+                # Prefer the variant's own Title (e.g. "190 cm", "Red / L")
+                # over the product-level VariantTypes (e.g. "Size, Color").
+                vtitle_raw = v.get('Title', '') if isinstance(v, dict) else getattr(v, 'Title', '')
+                vtitle = str(vtitle_raw or '').strip()
                 rows.append({
                     'PRODUCT_ID': format_int_col(pid),
                     'TITLE_DK': title,
@@ -163,7 +167,7 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
                     'BUY_PRICE': format_dk(float(vbuy or 0)),
                     'PRICE': format_dk(float(vprice or 0)),
                     'VARIANT_ID': format_int_col(vid),
-                    'VARIANT_TYPES': variant_types,
+                    'VARIANT_TYPES': vtitle if vtitle else variant_types,
                     'PRODUCER': producer,
                     'PRODUCER_ID': producer_id,
                     'ONLINE': _is_online,

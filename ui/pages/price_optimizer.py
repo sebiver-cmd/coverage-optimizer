@@ -1775,6 +1775,7 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
                     invoice_sku_col=inv_sku_col,
                     invoice_qty_col=qty_col,
                     threshold=ean_threshold,
+                    invoice_desc_col=detected.get('description'),
                 )
 
                 if export_df.empty:

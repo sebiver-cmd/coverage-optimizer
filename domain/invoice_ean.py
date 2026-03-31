@@ -62,6 +62,7 @@ def build_ean_export(
     invoice_sku_col: str,
     invoice_qty_col: str | None,
     threshold: int = 70,
+    invoice_desc_col: str | None = None,
 ) -> pd.DataFrame:
     """Match invoice lines to products and build a scannable EAN export.
 
@@ -79,6 +80,10 @@ def build_ean_export(
         if not available (defaults to 1).
     threshold:
         Minimum fuzzy-match score (0–100).
+    invoice_desc_col:
+        Optional column in *invoice_df* holding a description or product
+        name.  Used together with the SKU text to narrow variant matches
+        (e.g. ``"190 cm"`` or ``"Red / Large"``).
 
     Returns
     -------
@@ -94,21 +99,35 @@ def build_ean_export(
         .str.strip()
         .loc[lambda s: s != '']
     )
-    product_skus = (
-        products_df['NUMBER']
-        .dropna()
-        .astype(str)
-        .str.strip()
-    )
+
+    # Build an augmented product-SKU pool that includes composite keys
+    # (NUMBER + VARIANT_TYPES) so that invoice SKUs like "TBL-01 190 cm"
+    # can match the specific "190 cm" variant directly.
+    composite_lookup: dict[str, tuple[str, str]] = {}
+    augmented_skus: list[str] = []
+
+    for _, row in products_df.iterrows():
+        num = str(row.get('NUMBER', '') or '').strip()
+        vtype = str(row.get('VARIANT_TYPES', '') or '').strip()
+        if not num:
+            continue
+        if num not in composite_lookup:
+            composite_lookup[num] = (num, '')
+            augmented_skus.append(num)
+        if vtype:
+            composite = f"{num} {vtype}"
+            if composite not in composite_lookup:
+                composite_lookup[composite] = (num, vtype)
+                augmented_skus.append(composite)
 
     matches = match_supplier_to_products(
         invoice_skus.tolist(),
-        product_skus.tolist(),
+        augmented_skus,
         threshold=threshold,
     )
 
     rows: list[dict] = []
-    for inv_sku, (prod_sku, score) in matches.items():
+    for inv_sku, (matched_key, score) in matches.items():
         # Find invoice row for quantity
         inv_mask = (
             invoice_df[invoice_sku_col].astype(str).str.strip() == inv_sku
@@ -130,14 +149,32 @@ def build_ean_export(
         else:
             qty_val = 1.0
 
-        # Find matching product row(s)
+        # Resolve the matched key to a product NUMBER and optional variant
+        number, vtype = composite_lookup.get(matched_key, (matched_key, ''))
+
         prod_mask = (
-            products_df['NUMBER'].astype(str).str.strip() == prod_sku
+            products_df['NUMBER'].astype(str).str.strip() == number
         )
         matched_products = products_df.loc[prod_mask]
 
         if matched_products.empty:
             continue
+
+        # If the match resolved to a specific variant, narrow to that
+        if vtype:
+            vt_mask = (
+                matched_products['VARIANT_TYPES']
+                .fillna('').astype(str).str.strip() == vtype
+            )
+            specific = matched_products.loc[vt_mask]
+            if not specific.empty:
+                matched_products = specific
+        elif len(matched_products) > 1:
+            # Fall back to description-based narrowing
+            matched_products = _narrow_variants(
+                matched_products, inv_sku, inv_mask,
+                invoice_df, invoice_desc_col,
+            )
 
         for _, prod_row in matched_products.iterrows():
             rows.append({
@@ -159,3 +196,40 @@ def build_ean_export(
         )
 
     return pd.DataFrame(rows)
+
+
+def _narrow_variants(
+    matched_products: pd.DataFrame,
+    inv_sku: str,
+    inv_mask: pd.Series,
+    invoice_df: pd.DataFrame,
+    invoice_desc_col: str | None,
+) -> pd.DataFrame:
+    """Try to narrow multiple variant rows to the specific variant.
+
+    Builds a context string from the invoice SKU text and the optional
+    description column, then checks which variant names appear in it.
+    If exactly one (or a smaller subset) matches, returns only those rows.
+    Otherwise returns all rows unchanged (safe fallback).
+    """
+    # Build a combined context string from the invoice line
+    context = inv_sku.lower()
+    if invoice_desc_col and invoice_desc_col in invoice_df.columns:
+        desc_vals = invoice_df.loc[inv_mask, invoice_desc_col]
+        if not desc_vals.empty:
+            desc_text = str(desc_vals.iloc[0] or '').strip()
+            if desc_text:
+                context = f"{context} {desc_text.lower()}"
+
+    # Check each variant name against the context
+    variant_types = matched_products['VARIANT_TYPES'].fillna('').astype(str)
+    has_variant = variant_types.str.strip().ne('')
+    if not has_variant.any():
+        return matched_products
+
+    hit_mask = variant_types.apply(
+        lambda vt: bool(vt.strip()) and vt.strip().lower() in context
+    )
+    if hit_mask.any() and hit_mask.sum() < len(matched_products):
+        return matched_products.loc[hit_mask]
+    return matched_products
