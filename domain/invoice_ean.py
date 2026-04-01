@@ -72,14 +72,42 @@ def normalize_sku(sku: str) -> str:
     """Normalise a SKU for fuzzy comparison.
 
     Strips common prefixes (e.g. ``TO-``, ``DK-``), removes all
-    separators (``-``, ``_``, space, ``.``, ``/``) and uppercases
+    separators (``-``, ``_``, space, ``.``, ``/``, ``,``) and uppercases
     the result so that ``"AFK 110"`` and ``"TO-AFK-110"`` both become
-    ``"AFK110"``.
+    ``"AFK110"``.  Handles tricky strings like ``" GTBL 4,5"``
+    (leading spaces and European decimal commas).
     """
     s = str(sku).upper().strip()
     s = re.sub(r'^[A-Z]{1,3}[-_]', '', s)
     s = re.sub(r'[-_\s./,]', '', s)
     return s
+
+
+# Regex to extract an embedded SKU/model number from a description string.
+# Targets patterns like "adidas Box-Top schwarz/weiß, ADIBTT02" where
+# the SKU appears after the last comma.  The SKU must start with one or
+# more letters, contain at least one digit, and end with alphanumerics
+# — this distinguishes model codes from ordinary trailing words.
+_EMBEDDED_SKU_RE = re.compile(
+    r',\s*([A-Za-z]+[A-Za-z0-9]*\d[A-Za-z0-9]*)\s*$'
+)
+
+
+def extract_sku_from_description(description: str) -> str | None:
+    """Extract an embedded SKU/model number from a description string.
+
+    Targets German-style invoice descriptions where the manufacturer's
+    model code appears after the last comma, e.g.::
+
+        "adidas Box-Top schwarz/weiß, ADIBTT02" → "ADIBTT02"
+        "adidas World Boxing Boxhandschuhe Leder, adiWOBG1" → "adiWOBG1"
+
+    Returns ``None`` when no embedded SKU is found.
+    """
+    if not description:
+        return None
+    m = _EMBEDDED_SKU_RE.search(description)
+    return m.group(1) if m else None
 
 
 def match_supplier_to_products(
@@ -458,6 +486,30 @@ def match_invoice_to_products(
         product_names=prod_names,
     )
 
+    # --- Fallback: extract embedded SKUs from descriptions for unmatched ---
+    # German-style invoices often have an internal Prod.-Nr. as the SKU
+    # column value (e.g. "702074002") while the *actual* product code
+    # (e.g. "ADIBTT02") is embedded in the description text.  When the
+    # initial match fails, try the extracted description-SKU instead.
+    if desc_map:
+        fallback_map: dict[str, str] = {}  # inv_sku → extracted_sku
+        for inv_sku, mentry in matches.items():
+            if mentry['sku'] is not None:
+                continue
+            emb = extract_sku_from_description(desc_map.get(inv_sku, ''))
+            if emb:
+                fallback_map[inv_sku] = emb
+        if fallback_map:
+            emb_matches = match_supplier_to_products(
+                list(set(fallback_map.values())),
+                augmented_skus,
+                threshold=threshold,
+                product_names=prod_names,
+            )
+            for inv_sku, emb_sku in fallback_map.items():
+                if emb_sku in emb_matches and emb_matches[emb_sku]['sku'] is not None:
+                    matches[inv_sku] = emb_matches[emb_sku]
+
     return {
         'matches': matches,
         'composite_lookup': composite_lookup,
@@ -610,32 +662,32 @@ for _grp in _SIZE_GROUPS:
 # Matching is bidirectional: "rød" matches "red" and vice versa.
 
 _TRANSLATION_GROUPS: list[tuple[str, ...]] = [
-    # Colours – Danish ↔ English
-    ('rød', 'red'),
-    ('blå', 'blue'),
-    ('grøn', 'green'),
-    ('gul', 'yellow'),
-    ('hvid', 'white'),
-    ('sort', 'black'),
-    ('grå', 'grey', 'gray'),
-    ('lilla', 'purple'),
-    ('orange', 'orange'),
+    # Colours – Danish ↔ English ↔ Spanish (abbrev + full) ↔ German
+    ('rød', 'red', 'ro', 'rojo', 'rot'),
+    ('blå', 'blue', 'az', 'azul', 'blau'),
+    ('grøn', 'green', 've', 'verde', 'grün', 'gruen'),
+    ('gul', 'yellow', 'amarillo', 'gelb'),
+    ('hvid', 'white', 'bl', 'blanco', 'weiß', 'weiss'),
+    ('sort', 'black', 'ne', 'negro', 'schwarz'),
+    ('grå', 'grey', 'gray', 'grau'),
+    ('lilla', 'purple', 'morado', 'lila'),
+    ('orange', 'orange', 'naranja'),
     ('rosa', 'lyserød', 'pink'),
-    ('brun', 'brown'),
+    ('brun', 'brown', 'marrón', 'braun'),
     ('turkis', 'turquoise'),
     ('guld', 'gold'),
-    ('sølv', 'silver'),
+    ('sølv', 'silver', 'silber'),
     ('beige', 'beige'),
     ('marineblå', 'navy'),
     ('bordeaux', 'burgundy', 'vinrød'),
-    # Materials – Danish ↔ English (common in product variants)
+    # Materials – Danish ↔ English ↔ German
     ('bomuld', 'cotton'),
     ('uld', 'wool'),
-    ('læder', 'leather'),
+    ('læder', 'leather', 'leder'),
     ('silke', 'silk'),
     ('polyester', 'polyester'),
-    ('stål', 'steel'),
-    ('træ', 'wood'),
+    ('stål', 'steel', 'stahl'),
+    ('træ', 'wood', 'holz'),
 ]
 
 _TRANSLATION_MAP: dict[str, frozenset[str]] = {}
@@ -782,6 +834,79 @@ def _narrow_variants(
     if hit_mask.any() and hit_mask.sum() < len(matched_products):
         return matched_products.loc[hit_mask]
     return matched_products
+
+
+# ---------------------------------------------------------------------------
+# AI-assisted column mapping (strategy stub)
+# ---------------------------------------------------------------------------
+
+def suggest_column_mapping(
+    df: pd.DataFrame,
+    *,
+    api_key: str | None = None,
+    model: str = 'gpt-4o-mini',
+) -> dict[str, str | None] | None:
+    """Suggest column mappings using an LLM when standard rules fail.
+
+    .. note::
+
+        This is a **strategy stub** for future AI integration.  It
+        describes the intended interface and lightweight approach for
+        using an LLM as "plumbing" to map messy PDF/CSV columns to
+        our data structure.  The actual API call is not yet implemented.
+
+    Strategy
+    --------
+    1. **Trigger**: Call this *only* when :func:`detect_invoice_columns`
+       or :func:`~domain.supplier.detect_supplier_columns` returns
+       ``None`` for a required field (SKU, quantity, price).
+    2. **Prompt construction**: Send the LLM a compact prompt containing:
+
+       - The first 3–5 rows of the DataFrame as a markdown table.
+       - A list of target column roles: ``sku``, ``qty``, ``price``,
+         ``description``, ``discount``, ``currency``.
+       - Instruction to return a JSON object mapping each role to the
+         best matching column name (or ``null``).
+
+    3. **API call**: Use ``requests.post`` with the ``openai``-compatible
+       ``/v1/chat/completions`` endpoint.  Keep ``max_tokens`` ≤ 200
+       and ``temperature`` = 0 for deterministic output.
+    4. **Validation**: Parse the JSON response and verify each suggested
+       column actually exists in ``df.columns``.  Discard any that don't.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The parsed invoice/supplier DataFrame whose columns need mapping.
+    api_key : str or None
+        OpenAI-compatible API key.  When ``None``, the function reads
+        ``OPENAI_API_KEY`` from the environment.
+    model : str
+        Model name (default ``'gpt-4o-mini'`` — cheapest option suitable
+        for structured extraction tasks).
+
+    Returns
+    -------
+    dict or None
+        ``{'sku': col_name, 'qty': col_name, ...}`` on success, or
+        ``None`` if no API key is configured or the call fails.
+
+    Setup
+    -----
+    Set the ``OPENAI_API_KEY`` environment variable::
+
+        export OPENAI_API_KEY="sk-..."
+
+    No additional dependencies are required beyond ``requests`` (already
+    in requirements.txt via ``streamlit``).
+    """
+    # --- Stub: not yet implemented ---
+    # When implemented, the function will:
+    # 1. Check for api_key or OPENAI_API_KEY env var
+    # 2. Build a compact markdown table from df.head(5)
+    # 3. POST to /v1/chat/completions with the prompt
+    # 4. Parse and validate the JSON response
+    return None
 
 
 # ---------------------------------------------------------------------------
