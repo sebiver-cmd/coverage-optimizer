@@ -85,8 +85,9 @@ def normalize_sku(sku: str) -> str:
 
 # Regex to extract an embedded SKU/model number from a description string.
 # Targets patterns like "adidas Box-Top schwarz/weiß, ADIBTT02" where
-# the SKU appears after the last comma.  The SKU must start with a letter
-# and contain at least one digit (to distinguish from regular words).
+# the SKU appears after the last comma.  The SKU must start with one or
+# more letters, contain at least one digit, and end with alphanumerics
+# — this distinguishes model codes from ordinary trailing words.
 _EMBEDDED_SKU_RE = re.compile(
     r',\s*([A-Za-z]+[A-Za-z0-9]*\d[A-Za-z0-9]*)\s*$'
 )
