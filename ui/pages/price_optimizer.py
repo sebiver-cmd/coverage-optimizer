@@ -2151,22 +2151,27 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
                         + export_df.to_csv(sep=';', index=False)
                     )
 
+                    _barcode_formats = {
+                        "standard": {
+                            "display": "Standard (A4, 2-column)",
+                            "filename": "ean_barcode_export.pdf",
+                        },
+                        "zd421_label": {
+                            "display": "ZD421 Label (50 × 100 mm)",
+                            "filename": "ean_zd421_labels.pdf",
+                        },
+                        "fast_scan": {
+                            "display": "Fast Scan (compact grid)",
+                            "filename": "ean_fast_scan.pdf",
+                        },
+                    }
+
                     ean_format = st.selectbox(
                         "Barcode PDF format",
-                        options=["standard", "zd421_label", "fast_scan"],
-                        format_func=lambda f: {
-                            "standard": "Standard (A4, 2-column)",
-                            "zd421_label": "ZD421 Label (50 × 100 mm)",
-                            "fast_scan": "Fast Scan (compact grid)",
-                        }.get(f, f),
+                        options=list(_barcode_formats),
+                        format_func=lambda f: _barcode_formats[f]["display"],
                         key="_ean_pdf_format",
                     )
-
-                    _format_filenames = {
-                        "standard": "ean_barcode_export.pdf",
-                        "zd421_label": "ean_zd421_labels.pdf",
-                        "fast_scan": "ean_fast_scan.pdf",
-                    }
 
                     dl_col1, dl_col2 = st.columns(2)
                     with dl_col1:
@@ -2176,9 +2181,7 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
                         st.download_button(
                             label="Download Barcode PDF",
                             data=pdf_bytes,
-                            file_name=_format_filenames.get(
-                                ean_format, "ean_barcode_export.pdf",
-                            ),
+                            file_name=_barcode_formats[ean_format]["filename"],
                             mime="application/pdf",
                             use_container_width=True,
                             key="_ean_download_pdf",

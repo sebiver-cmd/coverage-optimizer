@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from unittest.mock import patch
 
 import pandas as pd
@@ -1705,8 +1706,7 @@ class TestGenerateBarcodePdfZd421:
         pdf_bytes = _generate_barcode_pdf_zd421(_sample_export_df(1))
         # Parse raw PDF to check MediaBox dimensions
         text = pdf_bytes.decode('latin-1')
-        import re as _re
-        boxes = _re.findall(r'/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\]', text)
+        boxes = re.findall(r'/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\]', text)
         assert len(boxes) >= 1, "No MediaBox found in PDF"
         # fpdf2 writes dimensions in points (1 mm ≈ 2.8346 pt)
         w_pt = float(boxes[0][2])
@@ -1721,8 +1721,7 @@ class TestGenerateBarcodePdfZd421:
         n = 5
         pdf_bytes = _generate_barcode_pdf_zd421(_sample_export_df(n))
         text = pdf_bytes.decode('latin-1')
-        import re as _re
-        pages = _re.findall(r'/Type\s*/Page\b(?!s)', text)
+        pages = re.findall(r'/Type\s*/Page\b(?!s)', text)
         assert len(pages) == n, f"Expected {n} pages, found {len(pages)}"
 
     def test_empty_dataframe(self):
@@ -1768,8 +1767,7 @@ class TestGenerateBarcodePdfFastScan:
         n = 12
         pdf_bytes = _generate_barcode_pdf_fast_scan(_sample_export_df(n))
         text = pdf_bytes.decode('latin-1')
-        import re as _re
-        pages = _re.findall(r'/MediaBox', text)
+        pages = re.findall(r'/MediaBox', text)
         # With 3 cols × 7 rows = 21 per page, 12 items → 1 page
         assert len(pages) < n, (
             f"Expected fewer pages than {n} rows, got {len(pages)}"
@@ -1779,8 +1777,7 @@ class TestGenerateBarcodePdfFastScan:
         """Pages should be standard A4 (210 mm × 297 mm)."""
         pdf_bytes = _generate_barcode_pdf_fast_scan(_sample_export_df(1))
         text = pdf_bytes.decode('latin-1')
-        import re as _re
-        boxes = _re.findall(r'/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\]', text)
+        boxes = re.findall(r'/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\]', text)
         assert len(boxes) >= 1
         w_pt = float(boxes[0][2])
         h_pt = float(boxes[0][3])
@@ -1797,8 +1794,7 @@ class TestGenerateBarcodePdfFastScan:
         n = 21  # exactly fills first page (3 cols × 7 rows)
         pdf_bytes = _generate_barcode_pdf_fast_scan(_sample_export_df(n))
         text = pdf_bytes.decode('latin-1')
-        import re as _re
-        pages = _re.findall(r'/MediaBox', text)
+        pages = re.findall(r'/MediaBox', text)
         assert len(pages) == 1, f"21 items should fit on 1 page, got {len(pages)}"
 
     def test_empty_dataframe(self):
@@ -1815,8 +1811,7 @@ class TestGenerateBarcodePdfFastScan:
         n = 50  # more than one page
         pdf_bytes = _generate_barcode_pdf_fast_scan(_sample_export_df(n))
         text = pdf_bytes.decode('latin-1')
-        import re as _re
-        pages = _re.findall(r'/Type\s*/Page\b(?!s)', text)
+        pages = re.findall(r'/Type\s*/Page\b(?!s)', text)
         assert len(pages) >= 2, f"50 items should need ≥2 pages, got {len(pages)}"
 
 
@@ -1833,8 +1828,7 @@ class TestBarcodeFormatDispatcher:
         assert pdf_bytes[:5] == b'%PDF-'
         # Standard uses A4
         text = pdf_bytes.decode('latin-1')
-        import re as _re
-        boxes = _re.findall(r'/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\]', text)
+        boxes = re.findall(r'/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\]', text)
         w_mm = float(boxes[0][2]) / 2.8346
         assert abs(w_mm - 210) < 1
 
@@ -1844,8 +1838,7 @@ class TestBarcodeFormatDispatcher:
             _sample_export_df(1), export_format='zd421_label',
         )
         text = pdf_bytes.decode('latin-1')
-        import re as _re
-        boxes = _re.findall(r'/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\]', text)
+        boxes = re.findall(r'/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\]', text)
         w_mm = float(boxes[0][2]) / 2.8346
         assert abs(w_mm - 50) < 1
 
@@ -1856,8 +1849,7 @@ class TestBarcodeFormatDispatcher:
             _sample_export_df(n), export_format='fast_scan',
         )
         text = pdf_bytes.decode('latin-1')
-        import re as _re
-        pages = _re.findall(r'/MediaBox', text)
+        pages = re.findall(r'/MediaBox', text)
         assert len(pages) < n  # multiple items per page
 
     def test_backwards_compatible(self):

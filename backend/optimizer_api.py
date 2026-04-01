@@ -326,6 +326,19 @@ def run_optimization(payload: OptimizeRequest) -> OptimizeResponse:
 BARCODE_EXPORT_FORMATS: tuple[str, ...] = ("standard", "zd421_label", "fast_scan")
 
 
+class BarcodePdfRow(BaseModel):
+    """Single row for barcode PDF generation."""
+
+    model_config = {"populate_by_name": True}
+
+    SKU: str = ""
+    Product_Number: str = Field("", alias="Product Number")
+    Title: str = ""
+    Variant_Name: str = Field("", alias="Variant Name")
+    Amount: int = 1
+    EAN: str = ""
+
+
 class BarcodePdfRequest(BaseModel):
     """Parameters for barcode PDF generation."""
 
@@ -337,8 +350,7 @@ class BarcodePdfRequest(BaseModel):
             "or 'fast_scan' (compact A4 grid for rapid scanning)."
         ),
     )
-    rows: list[dict] = Field(
+    rows: list[BarcodePdfRow] = Field(
         ...,
-        description="Export rows with keys: SKU, Product Number, Title, "
-        "Variant Name, Amount, EAN.",
+        description="Export rows with product/barcode data.",
     )

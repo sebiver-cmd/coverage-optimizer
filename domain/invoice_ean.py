@@ -1186,6 +1186,7 @@ def _generate_barcode_pdf_fast_scan(export_df: pd.DataFrame) -> bytes:
         return text.encode('latin-1', 'replace').decode('latin-1')
 
     # Layout constants – 3-column compact grid
+    page_h_a4 = 297       # mm – A4 height
     label_w = 60          # mm
     label_h = 38          # mm
     margin_x = 7          # mm
@@ -1196,7 +1197,7 @@ def _generate_barcode_pdf_fast_scan(export_df: pd.DataFrame) -> bytes:
     barcode_w = 48        # mm
     barcode_h = 16        # mm
 
-    rows_per_page = int((297 - 2 * margin_y + gap_y) / (label_h + gap_y))
+    rows_per_page = int((page_h_a4 - 2 * margin_y + gap_y) / (label_h + gap_y))
 
     label_idx = 0
     for _, row in export_df.iterrows():
