@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from unittest.mock import patch
 
 import pandas as pd
@@ -19,6 +20,8 @@ from domain.invoice_ean import (
     _render_barcode_image,
     _variant_in_context,
     _parse_qty,
+    _generate_barcode_pdf_zd421,
+    _generate_barcode_pdf_fast_scan,
 )
 
 
@@ -1669,3 +1672,188 @@ class TestSuggestColumnMapping:
     def test_accepts_model_kwarg(self):
         df = pd.DataFrame({'A': [1]})
         assert suggest_column_mapping(df, model='gpt-4o') is None
+
+
+# ---------------------------------------------------------------------------
+# ZD421 Label Printer format
+# ---------------------------------------------------------------------------
+
+def _sample_export_df(n=2):
+    """Build a small export DataFrame for barcode PDF tests."""
+    return pd.DataFrame({
+        'SKU': [f'INV-{i:03d}' for i in range(n)],
+        'Product Number': [f'SKU-{i:03d}' for i in range(n)],
+        'Title': [f'Product {i}' for i in range(n)],
+        'Variant Name': [''] * n,
+        'Amount': [1] * n,
+        'EAN': ['5701234567890'] * n,
+        'Match %': [100] * n,
+    })
+
+
+class TestGenerateBarcodePdfZd421:
+    """Tests for the ZD421 label-printer format."""
+
+    def test_basic_pdf_output(self):
+        """Generates a valid PDF."""
+        pdf_bytes = _generate_barcode_pdf_zd421(_sample_export_df())
+        assert isinstance(pdf_bytes, bytes)
+        assert pdf_bytes[:5] == b'%PDF-'
+
+    def test_page_size_50x100mm(self):
+        """Each page should be 50 mm × 100 mm."""
+        from fpdf import FPDF
+        pdf_bytes = _generate_barcode_pdf_zd421(_sample_export_df(1))
+        # Parse raw PDF to check MediaBox dimensions
+        text = pdf_bytes.decode('latin-1')
+        boxes = re.findall(r'/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\]', text)
+        assert len(boxes) >= 1, "No MediaBox found in PDF"
+        # fpdf2 writes dimensions in points (1 mm ≈ 2.8346 pt)
+        w_pt = float(boxes[0][2])
+        h_pt = float(boxes[0][3])
+        w_mm = w_pt / 2.8346
+        h_mm = h_pt / 2.8346
+        assert abs(w_mm - 50) < 1, f"Width {w_mm:.1f} mm != 50 mm"
+        assert abs(h_mm - 100) < 1, f"Height {h_mm:.1f} mm != 100 mm"
+
+    def test_one_barcode_per_page(self):
+        """N rows must produce exactly N pages."""
+        n = 5
+        pdf_bytes = _generate_barcode_pdf_zd421(_sample_export_df(n))
+        text = pdf_bytes.decode('latin-1')
+        pages = re.findall(r'/Type\s*/Page\b(?!s)', text)
+        assert len(pages) == n, f"Expected {n} pages, found {len(pages)}"
+
+    def test_empty_dataframe(self):
+        """Empty DataFrame produces a valid PDF with placeholder."""
+        df = pd.DataFrame(columns=[
+            'SKU', 'Product Number', 'Title', 'Variant Name',
+            'Amount', 'EAN', 'Match %',
+        ])
+        pdf_bytes = _generate_barcode_pdf_zd421(df)
+        assert pdf_bytes[:5] == b'%PDF-'
+
+    def test_missing_ean_handled(self):
+        """Row without valid EAN renders text fallback."""
+        df = _sample_export_df(1)
+        df['EAN'] = ['']
+        pdf_bytes = _generate_barcode_pdf_zd421(df)
+        assert pdf_bytes[:5] == b'%PDF-'
+
+    def test_barcode_lib_missing_fallback(self):
+        """Text fallback when python-barcode unavailable."""
+        with patch(
+            'domain.invoice_ean._render_barcode_image', return_value=None,
+        ):
+            pdf_bytes = _generate_barcode_pdf_zd421(_sample_export_df(1))
+        assert pdf_bytes[:5] == b'%PDF-'
+
+
+# ---------------------------------------------------------------------------
+# Fast Scan format
+# ---------------------------------------------------------------------------
+
+class TestGenerateBarcodePdfFastScan:
+    """Tests for the compact fast-scan format."""
+
+    def test_basic_pdf_output(self):
+        """Generates a valid PDF."""
+        pdf_bytes = _generate_barcode_pdf_fast_scan(_sample_export_df())
+        assert isinstance(pdf_bytes, bytes)
+        assert pdf_bytes[:5] == b'%PDF-'
+
+    def test_multiple_barcodes_per_page(self):
+        """Fewer pages than rows means multiple barcodes per page."""
+        n = 12
+        pdf_bytes = _generate_barcode_pdf_fast_scan(_sample_export_df(n))
+        text = pdf_bytes.decode('latin-1')
+        pages = re.findall(r'/MediaBox', text)
+        # With 3 cols × 7 rows = 21 per page, 12 items → 1 page
+        assert len(pages) < n, (
+            f"Expected fewer pages than {n} rows, got {len(pages)}"
+        )
+
+    def test_a4_page_size(self):
+        """Pages should be standard A4 (210 mm × 297 mm)."""
+        pdf_bytes = _generate_barcode_pdf_fast_scan(_sample_export_df(1))
+        text = pdf_bytes.decode('latin-1')
+        boxes = re.findall(r'/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\]', text)
+        assert len(boxes) >= 1
+        w_pt = float(boxes[0][2])
+        h_pt = float(boxes[0][3])
+        w_mm = w_pt / 2.8346
+        h_mm = h_pt / 2.8346
+        assert abs(w_mm - 210) < 1, f"Width {w_mm:.1f} mm != 210 mm"
+        assert abs(h_mm - 297) < 1, f"Height {h_mm:.1f} mm != 297 mm"
+
+    def test_labels_within_page_bounds(self):
+        """All labels must fit within the A4 page (210 × 297 mm)."""
+        # Fast-scan layout: 3 cols × label_w=60 + margins + gaps
+        # margin_x=7, gap_x=3  →  max x = 7 + 3*(60+3) - 3 = 193 mm < 210 ✓
+        # margin_y=7, gap_y=2, label_h=38  →  7 rows: 7 + 7*(38+2) - 2 = 285 mm < 297 ✓
+        n = 21  # exactly fills first page (3 cols × 7 rows)
+        pdf_bytes = _generate_barcode_pdf_fast_scan(_sample_export_df(n))
+        text = pdf_bytes.decode('latin-1')
+        pages = re.findall(r'/MediaBox', text)
+        assert len(pages) == 1, f"21 items should fit on 1 page, got {len(pages)}"
+
+    def test_empty_dataframe(self):
+        """Empty DataFrame produces a valid PDF with placeholder."""
+        df = pd.DataFrame(columns=[
+            'SKU', 'Product Number', 'Title', 'Variant Name',
+            'Amount', 'EAN', 'Match %',
+        ])
+        pdf_bytes = _generate_barcode_pdf_fast_scan(df)
+        assert pdf_bytes[:5] == b'%PDF-'
+
+    def test_many_items_multi_page(self):
+        """Many items produce multiple pages."""
+        n = 50  # more than one page
+        pdf_bytes = _generate_barcode_pdf_fast_scan(_sample_export_df(n))
+        text = pdf_bytes.decode('latin-1')
+        pages = re.findall(r'/Type\s*/Page\b(?!s)', text)
+        assert len(pages) >= 2, f"50 items should need ≥2 pages, got {len(pages)}"
+
+
+# ---------------------------------------------------------------------------
+# Format dispatcher (generate_barcode_pdf with export_format)
+# ---------------------------------------------------------------------------
+
+class TestBarcodeFormatDispatcher:
+    """Tests that generate_barcode_pdf dispatches correctly."""
+
+    def test_default_is_standard(self):
+        """No explicit format ⇒ standard A4 layout."""
+        pdf_bytes = generate_barcode_pdf(_sample_export_df())
+        assert pdf_bytes[:5] == b'%PDF-'
+        # Standard uses A4
+        text = pdf_bytes.decode('latin-1')
+        boxes = re.findall(r'/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\]', text)
+        w_mm = float(boxes[0][2]) / 2.8346
+        assert abs(w_mm - 210) < 1
+
+    def test_zd421_format(self):
+        """Passing 'zd421_label' uses the label printer layout."""
+        pdf_bytes = generate_barcode_pdf(
+            _sample_export_df(1), export_format='zd421_label',
+        )
+        text = pdf_bytes.decode('latin-1')
+        boxes = re.findall(r'/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\]', text)
+        w_mm = float(boxes[0][2]) / 2.8346
+        assert abs(w_mm - 50) < 1
+
+    def test_fast_scan_format(self):
+        """Passing 'fast_scan' uses the compact grid layout."""
+        n = 12
+        pdf_bytes = generate_barcode_pdf(
+            _sample_export_df(n), export_format='fast_scan',
+        )
+        text = pdf_bytes.decode('latin-1')
+        pages = re.findall(r'/MediaBox', text)
+        assert len(pages) < n  # multiple items per page
+
+    def test_backwards_compatible(self):
+        """Calling without export_format still works (no TypeError)."""
+        pdf_bytes = generate_barcode_pdf(_sample_export_df())
+        assert isinstance(pdf_bytes, bytes)
+        assert len(pdf_bytes) > 0

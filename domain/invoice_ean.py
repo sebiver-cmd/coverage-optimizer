@@ -955,7 +955,10 @@ def _render_barcode_image(ean_value: str) -> io.BytesIO | None:
     return buf
 
 
-def generate_barcode_pdf(export_df: pd.DataFrame) -> bytes:
+def generate_barcode_pdf(
+    export_df: pd.DataFrame,
+    export_format: str = "standard",
+) -> bytes:
     """Generate a PDF document with scannable EAN barcodes.
 
     Each row from *export_df* is rendered as a label containing
@@ -967,12 +970,20 @@ def generate_barcode_pdf(export_df: pd.DataFrame) -> bytes:
         DataFrame produced by :func:`build_ean_export`.  Expected
         columns: ``SKU``, ``Product Number``, ``Title``,
         ``Variant Name``, ``Amount``, ``EAN``.
+    export_format:
+        Layout variant — ``"standard"`` (default, A4 2-column grid),
+        ``"zd421_label"`` (50 mm × 100 mm single-label pages), or
+        ``"fast_scan"`` (compact A4 grid for rapid scanning).
 
     Returns
     -------
     bytes
         Raw PDF file content.
     """
+    if export_format == "zd421_label":
+        return _generate_barcode_pdf_zd421(export_df)
+    if export_format == "fast_scan":
+        return _generate_barcode_pdf_fast_scan(export_df)
     from fpdf import FPDF
 
     pdf = FPDF(orientation='P', unit='mm', format='A4')
@@ -1057,6 +1068,193 @@ def generate_barcode_pdf(export_df: pd.DataFrame) -> bytes:
         pdf.set_font('Helvetica', '', 6)
         pdf.set_xy(x, y + label_h - 5)
         pdf.cell(label_w, 4, f"EAN: {ean_val}" if ean_val else '', align='C')
+
+        label_idx += 1
+
+    if label_idx == 0:
+        pdf.add_page()
+        pdf.set_font('Helvetica', '', 12)
+        pdf.cell(0, 10, 'No products with EAN barcodes to display.', align='C')
+
+    return bytes(pdf.output())
+
+
+# ---------------------------------------------------------------------------
+# ZD421 Label Printer format (50 mm × 100 mm, one barcode per page)
+# ---------------------------------------------------------------------------
+
+def _generate_barcode_pdf_zd421(export_df: pd.DataFrame) -> bytes:
+    """Generate a label-printer PDF (50 mm × 100 mm, one barcode per page).
+
+    Designed for the ZD421 (or similar) label printer.  Each page
+    holds exactly one barcode with concise product metadata.
+    """
+    from fpdf import FPDF
+
+    page_w = 50   # mm
+    page_h = 100  # mm
+
+    pdf = FPDF(orientation='P', unit='mm', format=(page_w, page_h))
+    pdf.set_auto_page_break(auto=False)
+
+    def _latin1(text: str) -> str:
+        return text.encode('latin-1', 'replace').decode('latin-1')
+
+    barcode_w = 44   # mm – fits within 50 mm page with margins
+    barcode_h = 20   # mm
+    margin = 3       # mm
+
+    label_count = 0
+    for _, row in export_df.iterrows():
+        pdf.add_page()
+        label_count += 1
+
+        cx = page_w / 2  # centre x
+
+        # SKU header (centred)
+        pdf.set_font('Helvetica', 'B', 7)
+        sku = str(row.get('SKU', ''))
+        prod_num = str(row.get('Product Number', ''))
+        pdf.set_xy(margin, margin)
+        pdf.cell(
+            page_w - 2 * margin, 4,
+            _latin1(f"SKU: {sku}  |  #{prod_num}"),
+            align='C',
+        )
+
+        # Title / variant
+        pdf.set_font('Helvetica', '', 6)
+        title = str(row.get('Title', ''))[:40]
+        variant = str(row.get('Variant Name', '') or '')
+        if variant:
+            title = f"{title} - {variant}"
+        pdf.set_xy(margin, margin + 5)
+        pdf.cell(page_w - 2 * margin, 3.5, _latin1(title), align='C')
+
+        # Quantity
+        amount = row.get('Amount', 1)
+        try:
+            amount = int(float(amount))
+        except (ValueError, TypeError):
+            amount = 1
+        pdf.set_font('Helvetica', 'B', 6)
+        pdf.set_xy(margin, margin + 9.5)
+        pdf.cell(page_w - 2 * margin, 3.5, f"Qty: {amount}", align='C')
+
+        # Barcode image (centred)
+        ean_val = str(row.get('EAN', '') or '')
+        barcode_buf = _render_barcode_image(ean_val)
+        bc_y = margin + 14
+        if barcode_buf is not None:
+            bc_x = cx - barcode_w / 2
+            pdf.image(barcode_buf, x=bc_x, y=bc_y, w=barcode_w, h=barcode_h)
+        else:
+            pdf.set_font('Helvetica', '', 8)
+            pdf.set_xy(margin, bc_y + 5)
+            display = ean_val if ean_val else '(no EAN)'
+            pdf.cell(page_w - 2 * margin, 5, display, align='C')
+
+        # EAN footer
+        pdf.set_font('Helvetica', '', 5)
+        pdf.set_xy(0, page_h - 6)
+        pdf.cell(page_w, 4, f"EAN: {ean_val}" if ean_val else '', align='C')
+
+    if label_count == 0:
+        pdf.add_page()
+        pdf.set_font('Helvetica', '', 8)
+        pdf.cell(0, 10, 'No products with EAN barcodes.', align='C')
+
+    return bytes(pdf.output())
+
+
+# ---------------------------------------------------------------------------
+# Fast Scan format (compact A4 grid for rapid inventory scanning)
+# ---------------------------------------------------------------------------
+
+def _generate_barcode_pdf_fast_scan(export_df: pd.DataFrame) -> bytes:
+    """Generate a compact A4 barcode PDF for fast inventory scanning.
+
+    Uses a dense grid layout (3 columns) to fit more barcodes per
+    page while keeping them large enough for reliable scanning.
+    """
+    from fpdf import FPDF
+
+    pdf = FPDF(orientation='P', unit='mm', format='A4')
+    pdf.set_auto_page_break(auto=False)
+
+    def _latin1(text: str) -> str:
+        return text.encode('latin-1', 'replace').decode('latin-1')
+
+    # Layout constants – 3-column compact grid
+    page_h_a4 = 297       # mm – A4 height
+    label_w = 60          # mm
+    label_h = 38          # mm
+    margin_x = 7          # mm
+    margin_y = 7          # mm
+    gap_x = 3             # mm – small horizontal gap
+    gap_y = 2             # mm – small vertical gap
+    cols = 3
+    barcode_w = 48        # mm
+    barcode_h = 16        # mm
+
+    rows_per_page = int((page_h_a4 - 2 * margin_y + gap_y) / (label_h + gap_y))
+
+    label_idx = 0
+    for _, row in export_df.iterrows():
+        if label_idx % (cols * rows_per_page) == 0:
+            pdf.add_page()
+
+        pos_on_page = label_idx % (cols * rows_per_page)
+        col = pos_on_page % cols
+        grid_row = pos_on_page // cols
+
+        x = margin_x + col * (label_w + gap_x)
+        y = margin_y + grid_row * (label_h + gap_y)
+
+        # Thin border
+        pdf.set_draw_color(220, 220, 220)
+        pdf.rect(x, y, label_w, label_h)
+
+        text_x = x + 2
+        text_y = y + 1.5
+
+        # SKU line (compact)
+        pdf.set_font('Helvetica', 'B', 6)
+        pdf.set_xy(text_x, text_y)
+        sku = str(row.get('SKU', ''))
+        prod_num = str(row.get('Product Number', ''))
+        pdf.cell(
+            label_w - 4, 3,
+            _latin1(f"{sku} | #{prod_num}"),
+            new_x='LMARGIN', new_y='NEXT',
+        )
+
+        # Title (truncated)
+        pdf.set_font('Helvetica', '', 5)
+        pdf.set_xy(text_x, text_y + 3.5)
+        title = str(row.get('Title', ''))[:35]
+        variant = str(row.get('Variant Name', '') or '')
+        if variant:
+            title = f"{title} - {variant}"
+        pdf.cell(label_w - 4, 2.5, _latin1(title), new_x='LMARGIN', new_y='NEXT')
+
+        # Barcode image (centred in label)
+        ean_val = str(row.get('EAN', '') or '')
+        barcode_buf = _render_barcode_image(ean_val)
+        bc_y = text_y + 7
+        if barcode_buf is not None:
+            bc_x = x + (label_w - barcode_w) / 2
+            pdf.image(barcode_buf, x=bc_x, y=bc_y, w=barcode_w, h=barcode_h)
+        else:
+            pdf.set_font('Helvetica', '', 7)
+            pdf.set_xy(text_x, bc_y + 3)
+            display = ean_val if ean_val else '(no EAN)'
+            pdf.cell(label_w - 4, 4, display, align='C')
+
+        # EAN footer
+        pdf.set_font('Helvetica', '', 5)
+        pdf.set_xy(x, y + label_h - 4)
+        pdf.cell(label_w, 3, f"EAN: {ean_val}" if ean_val else '', align='C')
 
         label_idx += 1
 
