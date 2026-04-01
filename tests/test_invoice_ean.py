@@ -13,6 +13,9 @@ from domain.invoice_ean import (
     match_invoice_to_products,
     build_export_from_matches,
     generate_barcode_pdf,
+    normalize_sku,
+    extract_sku_from_description,
+    suggest_column_mapping,
     _render_barcode_image,
     _variant_in_context,
     _parse_qty,
@@ -1463,3 +1466,206 @@ class TestSearchProducts:
             top_n=3,
         )
         assert len(results) <= 3
+
+
+# ---------------------------------------------------------------------------
+# normalize_sku edge cases
+# ---------------------------------------------------------------------------
+
+class TestNormalizeSku:
+    """Tests for normalize_sku with tricky strings."""
+
+    def test_comma_and_spaces(self):
+        assert normalize_sku(' GTBL 4,5') == 'GTBL45'
+
+    def test_dots_and_spaces(self):
+        assert normalize_sku('GTBL 4.5') == 'GTBL45'
+
+    def test_hyphens(self):
+        assert normalize_sku('14105-003-XXS') == '14105003XXS'
+
+    def test_prefix_stripping(self):
+        assert normalize_sku('TO-AFK-110') == 'AFK110'
+
+    def test_prefix_with_space_not_stripped(self):
+        # PR followed by space (not hyphen) should NOT strip the prefix
+        assert normalize_sku('PR 1720-U-0') == 'PR1720U0'
+
+    def test_lowercase_converted(self):
+        assert normalize_sku('adiWOBG1') == 'ADIWOBG1'
+
+    def test_empty_string(self):
+        assert normalize_sku('') == ''
+
+    def test_slashes_removed(self):
+        assert normalize_sku('ABC/123') == 'ABC123'
+
+    def test_webshop_and_invoice_match(self):
+        """GTBL 4,5 from invoice and GTBL4.5 from webshop normalise identically."""
+        assert normalize_sku(' GTBL 4,5') == normalize_sku('GTBL4.5')
+        assert normalize_sku(' GTBL 4,5') == normalize_sku('GTBL-4.5')
+        assert normalize_sku(' GTBL 4,5') == normalize_sku('GTBL 4.5')
+
+
+# ---------------------------------------------------------------------------
+# Spanish colour abbreviation translations
+# ---------------------------------------------------------------------------
+
+class TestSpanishColorCodes:
+    """Tests for Spanish colour abbreviation matching via _TRANSLATION_GROUPS."""
+
+    def test_ne_matches_black(self):
+        assert _variant_in_context('black', 'item NE color')
+
+    def test_az_matches_blue(self):
+        assert _variant_in_context('blue', 'item AZ color')
+
+    def test_ro_matches_red(self):
+        assert _variant_in_context('red', 'item RO something')
+
+    def test_bl_matches_white(self):
+        assert _variant_in_context('white', 'item BL here')
+
+    def test_ve_matches_green(self):
+        assert _variant_in_context('green', 'item VE code')
+
+    def test_negro_matches_sort(self):
+        assert _variant_in_context('sort', 'shirt negro')
+
+    def test_azul_matches_blaa(self):
+        assert _variant_in_context('blå', 'shirt azul')
+
+    def test_proforma_sku_context_narrows_black(self):
+        """Proforma SKU suffix '-NE' should match Black/sort variant."""
+        assert _variant_in_context('sort', 'PR 1721-U-NE JR FOREARM MITT')
+        assert _variant_in_context('black', 'PR 1721-U-NE JR FOREARM MITT')
+
+    def test_proforma_sku_context_narrows_blue(self):
+        assert _variant_in_context('blue', 'PRO 20916-XS-AZ WT NEW MASK')
+
+    def test_proforma_sku_context_narrows_red(self):
+        assert _variant_in_context('red', 'PR 2055-S-RO HEAD GEAR')
+
+    def test_proforma_sku_context_narrows_white(self):
+        assert _variant_in_context('white', 'PR 2055-M-BL HEAD GEAR')
+
+
+# ---------------------------------------------------------------------------
+# German colour translations
+# ---------------------------------------------------------------------------
+
+class TestGermanColorTranslations:
+    """Tests for German colour name matching via _TRANSLATION_GROUPS."""
+
+    def test_schwarz_matches_black(self):
+        assert _variant_in_context('black', 'Box-Top schwarz/weiß')
+
+    def test_weiss_matches_white(self):
+        assert _variant_in_context('white', 'Box-Top schwarz/weiß')
+        assert _variant_in_context('white', 'Box-Top schwarz/weiss')
+
+    def test_blau_matches_blue(self):
+        assert _variant_in_context('blue', 'Box-Top blau/weiß')
+
+    def test_rot_matches_red(self):
+        assert _variant_in_context('red', 'Box-Top rot/weiß')
+
+    def test_gruen_matches_green(self):
+        assert _variant_in_context('green', 'item grün here')
+        assert _variant_in_context('green', 'item gruen here')
+
+    def test_gelb_matches_yellow(self):
+        assert _variant_in_context('yellow', 'item gelb here')
+
+    def test_grau_matches_grey(self):
+        assert _variant_in_context('grey', 'item grau here')
+
+    def test_leder_matches_leather(self):
+        assert _variant_in_context('leather', 'Boxhandschuhe Leder')
+
+
+# ---------------------------------------------------------------------------
+# extract_sku_from_description  (German "Produkt / Dienst" column)
+# ---------------------------------------------------------------------------
+
+class TestExtractSkuFromDescription:
+    """Tests for embedded SKU extraction from German descriptions."""
+
+    def test_adibtt02(self):
+        assert extract_sku_from_description(
+            'adidas Box-Top schwarz/weiß, ADIBTT02'
+        ) == 'ADIBTT02'
+
+    def test_adiwobg1(self):
+        assert extract_sku_from_description(
+            'adidas World Boxing Boxhandschuhe Leder, adiWOBG1'
+        ) == 'adiWOBG1'
+
+    def test_adiwobh1(self):
+        assert extract_sku_from_description(
+            'adidas World Boxing Kopfschutz Leder, adiWOBH1'
+        ) == 'adiWOBH1'
+
+    def test_adibts02(self):
+        assert extract_sku_from_description(
+            'adidas Box-Short blau/weiß, ADIBTS02'
+        ) == 'ADIBTS02'
+
+    def test_no_embedded_sku(self):
+        assert extract_sku_from_description('Widget with no SKU') is None
+
+    def test_empty_string(self):
+        assert extract_sku_from_description('') is None
+
+    def test_none_safe(self):
+        assert extract_sku_from_description(None) is None
+
+    def test_word_only_after_comma_no_digit(self):
+        """Pure alphabetic word after comma should NOT be extracted."""
+        assert extract_sku_from_description('Something, Leder') is None
+
+    def test_fallback_matching_uses_extracted_sku(self):
+        """Unmatched internal Prod.-Nr. should fall back to description SKU."""
+        products = _make_products(
+            NUMBER=['ADIBTT02', 'ADIBTT02'],
+            VARIANT_ID=['', '10'],
+            VARIANT_TYPES=['', 'M'],
+            EAN=['5700000000010', '5700000000020'],
+            TITLE_DK=['Box-Top', 'Box-Top'],
+            BUY_PRICE=['50,00', '50,00'],
+            PRICE=['100,00', '100,00'],
+            BUY_PRICE_NUM=[50.0, 50.0],
+            PRICE_NUM=[100.0, 100.0],
+            PRODUCT_ID=['1', '1'],
+            PRODUCER=['adidas', 'adidas'],
+            PRODUCER_ID=[1, 1],
+            ONLINE=[True, True],
+        )
+        # Invoice uses internal Prod.-Nr. but description has the real SKU
+        invoice = pd.DataFrame({
+            'Article': ['702074002'],
+            'Quantity': ['5'],
+            'Description': ['adidas Box-Top schwarz/weiß, ADIBTT02'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=70,
+            invoice_desc_col='Description',
+        )
+        assert len(result) >= 1
+        assert result.iloc[0]['Product Number'] == 'ADIBTT02'
+
+
+# ---------------------------------------------------------------------------
+# suggest_column_mapping  (AI strategy stub)
+# ---------------------------------------------------------------------------
+
+class TestSuggestColumnMapping:
+    """Tests for the AI column-mapping stub."""
+
+    def test_returns_none_without_api_key(self):
+        df = pd.DataFrame({'A': [1], 'B': [2]})
+        assert suggest_column_mapping(df) is None
+
+    def test_accepts_model_kwarg(self):
+        df = pd.DataFrame({'A': [1]})
+        assert suggest_column_mapping(df, model='gpt-4o') is None

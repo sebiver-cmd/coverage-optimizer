@@ -88,6 +88,7 @@ _SKU_NAMES = [
     'produktnummer', 'model', 'mpn', 'reference', 'ref', 'nummer',
     'number', 'art.nr', 'art. nr.', 'artnr', 'bestillingsnr',
     'ordernumber', 'artikelcode', 'itemcode', 'code', 'produktnr',
+    'prod.-nr.', 'prod.nr.', 'prod-nr',
 ]
 _PRICE_NAMES = [
     'price', 'pris', 'preis', 'unit price', 'enhedspris',
