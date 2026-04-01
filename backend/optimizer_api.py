@@ -316,3 +316,29 @@ def run_optimization(payload: OptimizeRequest) -> OptimizeResponse:
             status_code=500,
             detail=f"Internal error: {type(exc).__name__}",
         ) from exc
+
+
+# ---------------------------------------------------------------------------
+# Barcode PDF export format routing
+# ---------------------------------------------------------------------------
+
+#: Valid barcode export format identifiers.
+BARCODE_EXPORT_FORMATS: tuple[str, ...] = ("standard", "zd421_label", "fast_scan")
+
+
+class BarcodePdfRequest(BaseModel):
+    """Parameters for barcode PDF generation."""
+
+    export_format: str = Field(
+        default="standard",
+        description=(
+            "Layout variant: 'standard' (A4 2-column grid), "
+            "'zd421_label' (50 mm × 100 mm single-label pages), "
+            "or 'fast_scan' (compact A4 grid for rapid scanning)."
+        ),
+    )
+    rows: list[dict] = Field(
+        ...,
+        description="Export rows with keys: SKU, Product Number, Title, "
+        "Variant Name, Amount, EAN.",
+    )

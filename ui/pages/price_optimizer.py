@@ -2151,13 +2151,34 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
                         + export_df.to_csv(sep=';', index=False)
                     )
 
+                    ean_format = st.selectbox(
+                        "Barcode PDF format",
+                        options=["standard", "zd421_label", "fast_scan"],
+                        format_func=lambda f: {
+                            "standard": "Standard (A4, 2-column)",
+                            "zd421_label": "ZD421 Label (50 × 100 mm)",
+                            "fast_scan": "Fast Scan (compact grid)",
+                        }.get(f, f),
+                        key="_ean_pdf_format",
+                    )
+
+                    _format_filenames = {
+                        "standard": "ean_barcode_export.pdf",
+                        "zd421_label": "ean_zd421_labels.pdf",
+                        "fast_scan": "ean_fast_scan.pdf",
+                    }
+
                     dl_col1, dl_col2 = st.columns(2)
                     with dl_col1:
-                        pdf_bytes = generate_barcode_pdf(export_df)
+                        pdf_bytes = generate_barcode_pdf(
+                            export_df, export_format=ean_format,
+                        )
                         st.download_button(
                             label="Download Barcode PDF",
                             data=pdf_bytes,
-                            file_name="ean_barcode_export.pdf",
+                            file_name=_format_filenames.get(
+                                ean_format, "ean_barcode_export.pdf",
+                            ),
                             mime="application/pdf",
                             use_container_width=True,
                             key="_ean_download_pdf",
