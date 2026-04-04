@@ -369,7 +369,7 @@ Redis.
 ## Phase 3 — Background Jobs + Caching (early)
 
 ### Task 3.1 — Arq worker + async optimize
-- [ ] Task 3.1
+- [x] Task 3.1
 
 **Objective**: Long-running optimisation runs as a background job instead of
 blocking HTTP.

@@ -84,6 +84,12 @@ class Settings(BaseSettings):
     postgres_password: Optional[str] = Field(default=None)
     postgres_db: Optional[str] = Field(default=None)
 
+    # -- Jobs / Arq -------------------------------------------------------
+    job_result_ttl_s: int = Field(
+        default=3600,
+        description="TTL in seconds for job result keys in Redis.",
+    )
+
     # -- Crypto / Auth (placeholders for future tasks) --------------------
     encryption_key: Optional[str] = Field(default=None)
     jwt_secret: Optional[str] = Field(default=None)
