@@ -2369,9 +2369,10 @@ class TestBuildMatchesDf:
         mdata = self._simple_match_data()
         mdf = build_matches_df(products, mdata)
         expected_cols = [
-            'inv_row_id', 'inv_sku', 'inv_description', 'inv_qty',
-            'matched_number', 'matched_variant', 'matched_title',
-            'matched_ean', 'match_score', 'match_source', 'status',
+            'src_row_id', 'src_type', 'src_sku', 'src_description',
+            'src_qty', 'matched_number', 'matched_variant',
+            'matched_title', 'matched_ean', 'match_score',
+            'match_source', 'status',
         ]
         assert list(mdf.columns) == expected_cols
 
@@ -2382,7 +2383,7 @@ class TestBuildMatchesDf:
         mdf = build_matches_df(products, mdata)
         auto = mdf.loc[mdf['match_source'] == 'auto-sku']
         assert len(auto) >= 1
-        assert auto.iloc[0]['inv_sku'] == 'INV-001'
+        assert auto.iloc[0]['src_sku'] == 'INV-001'
         assert auto.iloc[0]['matched_number'] == 'PROD-A'
         assert auto.iloc[0]['match_score'] == 95
 
@@ -2393,7 +2394,7 @@ class TestBuildMatchesDf:
         mdf = build_matches_df(products, mdata)
         unmatched = mdf.loc[mdf['match_source'] == 'unmatched']
         assert len(unmatched) == 1
-        assert unmatched.iloc[0]['inv_sku'] == 'INV-002'
+        assert unmatched.iloc[0]['src_sku'] == 'INV-002'
         assert unmatched.iloc[0]['status'] == 'needs-manual'
 
     def test_manual_override(self):
@@ -2406,7 +2407,7 @@ class TestBuildMatchesDf:
         )
         manual = mdf.loc[mdf['match_source'] == 'manual']
         assert len(manual) == 1
-        assert manual.iloc[0]['inv_sku'] == 'INV-002'
+        assert manual.iloc[0]['src_sku'] == 'INV-002'
         assert manual.iloc[0]['matched_number'] == 'PROD-B'
         assert manual.iloc[0]['match_score'] == 100
 
@@ -2422,7 +2423,7 @@ class TestBuildMatchesDf:
         }
         mdf = build_matches_df(products, mdata)
         assert mdf.empty
-        assert 'inv_sku' in mdf.columns
+        assert 'src_sku' in mdf.columns
 
 
 # ---------------------------------------------------------------------------
@@ -2435,10 +2436,11 @@ class TestExportFromMatchesDf:
     def test_basic_export(self):
         """Matched rows are exported with correct columns."""
         mdf = pd.DataFrame({
-            'inv_row_id': [0, 1],
-            'inv_sku': ['INV-001', 'INV-002'],
-            'inv_description': ['Desc A', 'Desc B'],
-            'inv_qty': [5.0, 3.0],
+            'src_row_id': [0, 1],
+            'src_type': ['invoice', 'invoice'],
+            'src_sku': ['INV-001', 'INV-002'],
+            'src_description': ['Desc A', 'Desc B'],
+            'src_qty': [5.0, 3.0],
             'matched_number': ['PROD-A', ''],
             'matched_variant': ['Red', ''],
             'matched_title': ['Product A', ''],
@@ -2459,10 +2461,11 @@ class TestExportFromMatchesDf:
     def test_manual_rows_included(self):
         """Manually overridden rows are included in export."""
         mdf = pd.DataFrame({
-            'inv_row_id': [0, 1],
-            'inv_sku': ['INV-001', 'INV-002'],
-            'inv_description': ['', ''],
-            'inv_qty': [5.0, 3.0],
+            'src_row_id': [0, 1],
+            'src_type': ['invoice', 'invoice'],
+            'src_sku': ['INV-001', 'INV-002'],
+            'src_description': ['', ''],
+            'src_qty': [5.0, 3.0],
             'matched_number': ['PROD-A', 'PROD-B'],
             'matched_variant': ['', ''],
             'matched_title': ['A', 'B'],
@@ -2477,10 +2480,11 @@ class TestExportFromMatchesDf:
     def test_unmatched_rows_excluded(self):
         """Unmatched rows are not in the export."""
         mdf = pd.DataFrame({
-            'inv_row_id': [0],
-            'inv_sku': ['INV-001'],
-            'inv_description': [''],
-            'inv_qty': [5.0],
+            'src_row_id': [0],
+            'src_type': ['invoice'],
+            'src_sku': ['INV-001'],
+            'src_description': [''],
+            'src_qty': [5.0],
             'matched_number': [''],
             'matched_variant': [''],
             'matched_title': [''],
@@ -2495,9 +2499,10 @@ class TestExportFromMatchesDf:
     def test_empty_matches_df(self):
         """Empty matches_df produces empty export."""
         mdf = pd.DataFrame(columns=[
-            'inv_row_id', 'inv_sku', 'inv_description', 'inv_qty',
-            'matched_number', 'matched_variant', 'matched_title',
-            'matched_ean', 'match_score', 'match_source', 'status',
+            'src_row_id', 'src_type', 'src_sku', 'src_description',
+            'src_qty', 'matched_number', 'matched_variant',
+            'matched_title', 'matched_ean', 'match_score',
+            'match_source', 'status',
         ])
         export = export_from_matches_df(mdf)
         assert export.empty
@@ -2509,10 +2514,11 @@ class TestExportFromMatchesDf:
     def test_export_column_order(self):
         """Export has the canonical column order."""
         mdf = pd.DataFrame({
-            'inv_row_id': [0],
-            'inv_sku': ['INV-001'],
-            'inv_description': [''],
-            'inv_qty': [5.0],
+            'src_row_id': [0],
+            'src_type': ['invoice'],
+            'src_sku': ['INV-001'],
+            'src_description': [''],
+            'src_qty': [5.0],
             'matched_number': ['PROD-A'],
             'matched_variant': [''],
             'matched_title': ['Title'],
@@ -2526,3 +2532,253 @@ class TestExportFromMatchesDf:
             'SKU', 'Product Number', 'Title', 'Variant Name',
             'Amount', 'EAN', 'Match %',
         ]
+
+    def test_legacy_inv_columns_accepted(self):
+        """export_from_matches_df accepts legacy inv_* column names."""
+        mdf = pd.DataFrame({
+            'inv_row_id': [0],
+            'inv_sku': ['INV-001'],
+            'inv_description': ['Desc'],
+            'inv_qty': [2.0],
+            'matched_number': ['PROD-A'],
+            'matched_variant': ['Red'],
+            'matched_title': ['Title'],
+            'matched_ean': ['123'],
+            'match_score': [90],
+            'match_source': ['auto-sku'],
+            'status': ['ok'],
+        })
+        export = export_from_matches_df(mdf)
+        assert len(export) == 1
+        assert export.iloc[0]['SKU'] == 'INV-001'
+        assert export.iloc[0]['Amount'] == 2.0
+
+
+# ---------------------------------------------------------------------------
+# Supplier-style input through unified pipeline
+# ---------------------------------------------------------------------------
+
+class TestSupplierViaUnifiedPipeline:
+    """Verify that supplier-style input through build_matches_df produces
+    the same quality and structure as invoice/EAN input."""
+
+    @staticmethod
+    def _catalogue():
+        """Product catalogue with variants and EANs."""
+        return _make_products(
+            NUMBER=[
+                'PROD-A', 'PROD-A', 'PROD-B', 'PROD-C',
+                'PROD-D', 'PROD-D',
+            ],
+            VARIANT_ID=['v1', 'v2', 'v3', '', 'v4', 'v5'],
+            VARIANT_TYPES=[
+                'Small', 'Large', '', '', 'Red', 'Blue',
+            ],
+            EAN=[
+                '5701234567890', '5701234567891', '5709876543210',
+                '', '1234567890128', '1234567890135',
+            ],
+            TITLE_DK=[
+                'Widget A', 'Widget A', 'Widget B', 'Widget C',
+                'Colourful D', 'Colourful D',
+            ],
+            BUY_PRICE=['10', '10', '20', '30', '15', '15'],
+            PRICE=['20', '20', '40', '60', '30', '30'],
+            BUY_PRICE_NUM=[10.0, 10.0, 20.0, 30.0, 15.0, 15.0],
+            PRICE_NUM=[20.0, 20.0, 40.0, 60.0, 30.0, 30.0],
+            PRODUCT_ID=['1', '1', '2', '3', '4', '4'],
+            PRODUCER=['Brand', 'Brand', 'Brand', 'Brand',
+                      'Brand', 'Brand'],
+            PRODUCER_ID=[1, 1, 2, 3, 4, 4],
+            ONLINE=[True] * 6,
+        )
+
+    def test_supplier_input_uses_same_pipeline(self):
+        """Supplier-style input through match_invoice_to_products and
+        build_matches_df produces a valid matches_df with 'supplier'
+        src_type."""
+        catalogue = self._catalogue()
+        supplier_df = pd.DataFrame({
+            'Artikelnr': ['PROD-A', 'PROD-B', 'PROD-C', 'UNKNOWN-X'],
+            'Beschreibung': ['Widget A Small', 'Widget B', 'C item', '???'],
+            'Preis': ['10,50', '22,00', '35,00', '99,00'],
+        })
+
+        mdata = match_invoice_to_products(
+            products_df=catalogue,
+            invoice_df=supplier_df,
+            invoice_sku_col='Artikelnr',
+            invoice_qty_col=None,
+            threshold=70,
+            invoice_desc_col='Beschreibung',
+        )
+
+        mdf = build_matches_df(
+            catalogue, mdata, src_type='supplier',
+        )
+
+        # Schema check
+        assert 'src_type' in mdf.columns
+        assert 'src_sku' in mdf.columns
+        assert (mdf['src_type'] == 'supplier').all()
+
+        # Known matches should be found
+        matched = mdf.loc[mdf['match_source'] != 'unmatched']
+        matched_skus = set(matched['src_sku'])
+        assert 'PROD-A' in matched_skus
+        assert 'PROD-B' in matched_skus
+        assert 'PROD-C' in matched_skus
+
+    def test_supplier_ean_crosscheck(self):
+        """Supplier SKUs that are bare EANs get matched via EAN cross-check."""
+        catalogue = self._catalogue()
+        supplier_df = pd.DataFrame({
+            'SKU': ['5701234567890'],
+            'Name': ['EAN-based item'],
+        })
+
+        mdata = match_invoice_to_products(
+            products_df=catalogue,
+            invoice_df=supplier_df,
+            invoice_sku_col='SKU',
+            invoice_qty_col=None,
+            threshold=70,
+            invoice_desc_col='Name',
+        )
+
+        mdf = build_matches_df(catalogue, mdata, src_type='supplier')
+
+        matched = mdf.loc[mdf['match_source'] != 'unmatched']
+        assert len(matched) >= 1
+        assert matched.iloc[0]['matched_number'] == 'PROD-A'
+        assert matched.iloc[0]['match_score'] == 100
+
+    def test_supplier_and_invoice_produce_same_schema(self):
+        """Both src_type='invoice' and 'supplier' produce identical schemas."""
+        catalogue = self._catalogue()
+        simple_df = pd.DataFrame({
+            'SKU': ['PROD-A'],
+            'Qty': ['1'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, simple_df, 'SKU', 'Qty', threshold=70,
+        )
+        inv_mdf = build_matches_df(catalogue, mdata, src_type='invoice')
+        sup_mdf = build_matches_df(catalogue, mdata, src_type='supplier')
+        assert list(inv_mdf.columns) == list(sup_mdf.columns)
+        assert (inv_mdf['src_type'] == 'invoice').all()
+        assert (sup_mdf['src_type'] == 'supplier').all()
+
+    def test_supplier_numeric_variant_narrowing(self):
+        """Numeric variant narrowing works for supplier input too."""
+        catalogue = _make_products(
+            NUMBER=['BELT-01', 'BELT-01', 'BELT-01'],
+            VARIANT_ID=['v1', 'v2', 'v3'],
+            VARIANT_TYPES=['265 cm / 3.0', '275 cm / 3.5', '285 cm / 4.0'],
+            EAN=['', '', ''],
+            TITLE_DK=['Belt', 'Belt', 'Belt'],
+            BUY_PRICE=['50', '50', '50'],
+            PRICE=['100', '100', '100'],
+            BUY_PRICE_NUM=[50.0, 50.0, 50.0],
+            PRICE_NUM=[100.0, 100.0, 100.0],
+            PRODUCT_ID=['1', '1', '1'],
+            PRODUCER=['Brand', 'Brand', 'Brand'],
+            PRODUCER_ID=[1, 1, 1],
+            ONLINE=[True, True, True],
+        )
+        supplier_df = pd.DataFrame({
+            'Article': ['BELT-01 3,5'],
+            'Name': ['Belt 275'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, supplier_df, 'Article', None,
+            threshold=60, invoice_desc_col='Name',
+        )
+        mdf = build_matches_df(catalogue, mdata, src_type='supplier')
+        matched = mdf.loc[mdf['match_source'] != 'unmatched']
+        # Should narrow to the 3.5 variant
+        assert len(matched) >= 1
+        assert '3.5' in matched.iloc[0]['matched_variant']
+
+
+class TestManualOverridesInMatchesDf:
+    """Verify that manual overrides stored in matches_df are respected
+    by export_from_matches_df without re-running matching logic."""
+
+    def test_manual_override_appears_in_export(self):
+        """A manually overridden row is included in the export output."""
+        mdf = pd.DataFrame({
+            'src_row_id': [0, 1],
+            'src_type': ['supplier', 'supplier'],
+            'src_sku': ['SUP-001', 'SUP-002'],
+            'src_description': ['Item A', 'Item B'],
+            'src_qty': [10.0, 5.0],
+            'matched_number': ['PROD-A', 'PROD-B'],
+            'matched_variant': ['', 'Red'],
+            'matched_title': ['Product A', 'Product B'],
+            'matched_ean': ['111', '222'],
+            'match_score': [80, 100],
+            'match_source': ['auto-sku', 'manual'],
+            'status': ['ok', 'ok'],
+        })
+        export = export_from_matches_df(mdf)
+        assert len(export) == 2
+        manual_row = export.loc[export['SKU'] == 'SUP-002']
+        assert len(manual_row) == 1
+        assert manual_row.iloc[0]['Product Number'] == 'PROD-B'
+        assert manual_row.iloc[0]['Match %'] == 100
+
+    def test_export_does_not_rerun_matching(self):
+        """export_from_matches_df purely reads the DataFrame — it does
+        not call any matching functions."""
+        # Construct a DF with nonsensical but consistent data;
+        # if export tried to match, it would fail.
+        mdf = pd.DataFrame({
+            'src_row_id': [0],
+            'src_type': ['supplier'],
+            'src_sku': ['FAKE-SKU'],
+            'src_description': [''],
+            'src_qty': [1.0],
+            'matched_number': ['CUSTOM-PROD'],
+            'matched_variant': ['Custom Variant'],
+            'matched_title': ['Custom Title'],
+            'matched_ean': ['9999999999999'],
+            'match_score': [100],
+            'match_source': ['manual'],
+            'status': ['ok'],
+        })
+        export = export_from_matches_df(mdf)
+        assert len(export) == 1
+        assert export.iloc[0]['Product Number'] == 'CUSTOM-PROD'
+        assert export.iloc[0]['Variant Name'] == 'Custom Variant'
+
+    def test_inline_edit_overwrites_auto_match(self):
+        """Simulates the UI flow: user edits matches_df directly to
+        change an auto-matched row to a manual selection."""
+        mdf = pd.DataFrame({
+            'src_row_id': [0],
+            'src_type': ['supplier'],
+            'src_sku': ['SUP-001'],
+            'src_description': ['Widget'],
+            'src_qty': [3.0],
+            'matched_number': ['WRONG-PROD'],
+            'matched_variant': [''],
+            'matched_title': ['Wrong Title'],
+            'matched_ean': ['000'],
+            'match_score': [60],
+            'match_source': ['auto-sku'],
+            'status': ['ok'],
+        })
+        # Simulate user overriding the match in the DataFrame
+        mdf.loc[0, 'matched_number'] = 'CORRECT-PROD'
+        mdf.loc[0, 'matched_variant'] = 'Blue'
+        mdf.loc[0, 'matched_title'] = 'Correct Title'
+        mdf.loc[0, 'matched_ean'] = '999'
+        mdf.loc[0, 'match_score'] = 100
+        mdf.loc[0, 'match_source'] = 'manual'
+
+        export = export_from_matches_df(mdf)
+        assert len(export) == 1
+        assert export.iloc[0]['Product Number'] == 'CORRECT-PROD'
+        assert export.iloc[0]['Variant Name'] == 'Blue'
+        assert export.iloc[0]['Match %'] == 100

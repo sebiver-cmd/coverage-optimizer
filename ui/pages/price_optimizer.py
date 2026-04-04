@@ -1364,7 +1364,13 @@ def _render_analysis(
 # ---------------------------------------------------------------------------
 
 def _render_supplier_match(work_df: pd.DataFrame) -> None:
-    """Render the supplier file match tab."""
+    """Render the supplier file match tab.
+
+    Uses the same ``match_invoice_to_products`` → ``build_matches_df``
+    pipeline as the EAN/invoice flow, ensuring consistent matching
+    quality (numeric variant narrowing, EAN cross-check, composite SKU
+    logic).  Manual matching is handled inline via the matches DataFrame.
+    """
     st.markdown(
         "Upload a **supplier price list** (CSV or PDF) to automatically "
         "match SKUs and update cost prices. Supports fuzzy SKU matching, "
@@ -1504,8 +1510,7 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                 )
 
             if sup_sku_col != '(none)' and sup_price_col != '(none)':
-                # Use the unified matching function (same one
-                # used by EAN matching) for consistent behaviour.
+                # Use the unified matching pipeline (same as EAN/invoice)
                 desc_col_for_match = (
                     sup_desc_col
                     if sup_desc_col != '(none)' else None
@@ -1520,9 +1525,16 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                     invoice_desc_col=desc_col_for_match,
                 )
 
-                matches = mdata['matches']
-                composite_lookup = mdata['composite_lookup']
+                raw_matches = mdata['matches']
                 title_lookup = mdata['title_lookup']
+                composite_lookup = mdata['composite_lookup']
+
+                # Build flat product SKU list for search
+                _all_product_skus = list({
+                    str(n).strip()
+                    for n in work_df['NUMBER'].dropna()
+                    if str(n).strip()
+                })
                 product_names = (
                     title_lookup if title_lookup else None
                 )
@@ -1535,20 +1547,7 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                         sup_df[sup_desc_col].astype(str).str.strip(),
                     ))
 
-                # Resolve augmented keys back to plain NUMBERs
-                # so that downstream code can look up products.
-                for sup_sku, mentry in matches.items():
-                    mk = mentry['sku']
-                    if mk is not None and mk in composite_lookup:
-                        mentry['sku'] = composite_lookup[mk][0]
-                    new_alts = []
-                    for alt_key, alt_score in mentry['alternatives']:
-                        num = composite_lookup.get(
-                            alt_key, (alt_key, '')
-                        )[0]
-                        new_alts.append((num, alt_score))
-                    mentry['alternatives'] = new_alts
-
+                # Detect discount lines
                 disc_col_name = (
                     sup_disc_col if sup_disc_col != '(none)' else None
                 )
@@ -1565,42 +1564,14 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                             hide_index=True,
                         )
 
-                # Build variant lookup for display in suggestions
-                _variant_lookup: dict[str, list[str]] = {}
-                if 'VARIANT_TYPES' in work_df.columns:
-                    _nums = (
-                        work_df['NUMBER'].fillna('').astype(str)
-                        .str.strip()
-                    )
-                    _vtypes = (
-                        work_df['VARIANT_TYPES'].fillna('').astype(str)
-                        .str.strip()
-                    )
-                    for _n, _vt in zip(_nums, _vtypes):
-                        if _n and _vt:
-                            _variant_lookup.setdefault(
-                                _n, []
-                            ).append(_vt)
-
-                # Build flat product SKU list for search
-                _all_product_skus = list({
-                    str(n).strip()
-                    for n in work_df['NUMBER'].dropna()
-                    if str(n).strip()
-                })
-
-                # Split into auto-matched and unmatched
-                auto_matches = {
-                    k: v for k, v in matches.items()
-                    if v['sku'] is not None
-                }
+                # Split into unmatched for inline manual resolution
                 unmatched = {
-                    k: v for k, v in matches.items()
+                    k: v for k, v in raw_matches.items()
                     if v['sku'] is None and v['alternatives']
                 }
 
-                # Manual selection for unmatched SKUs
-                manual_matches: dict = {}
+                # Inline manual matching for unmatched SKUs
+                manual_overrides: dict[str, str] = {}
                 if unmatched:
                     st.markdown(
                         f"\u26a0\ufe0f **{len(unmatched)} unmatched "
@@ -1611,8 +1582,9 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                         "automatically matched. Pick from the "
                         "suggestions or type to search all products."
                     )
-                    for sup_sku, mdata_item in unmatched.items():
-                        alts = mdata_item['alternatives']
+
+                    for sup_sku, md_item in unmatched.items():
+                        alts = md_item['alternatives']
 
                         sup_label = f"\U0001f50d **{sup_sku}**"
                         if (supplier_names
@@ -1643,25 +1615,18 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                                 candidates = alts
 
                             options = ['(skip \u2014 no match)']
-                            for alt_sku, alt_score in candidates:
-                                lbl = alt_sku
-                                if (product_names
-                                        and alt_sku
-                                        in product_names):
+                            for alt_key, alt_score in candidates:
+                                _num, _vt = composite_lookup.get(
+                                    alt_key, (alt_key, '')
+                                )
+                                lbl = _num
+                                if (_num in title_lookup):
                                     lbl += (
                                         f" \u2014 "
-                                        f"{product_names[alt_sku]}"
+                                        f"{title_lookup[_num]}"
                                     )
-                                if alt_sku in _variant_lookup:
-                                    lbl += (
-                                        " ["
-                                        + ", ".join(
-                                            _variant_lookup[
-                                                alt_sku
-                                            ]
-                                        )
-                                        + "]"
-                                    )
+                                if _vt:
+                                    lbl += f" [{_vt}]"
                                 lbl += f" ({alt_score}%)"
                                 options.append(lbl)
 
@@ -1673,62 +1638,120 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
                             )
                             if sel != '(skip \u2014 no match)':
                                 idx = options.index(sel) - 1
-                                alt_sku, alt_score = (
-                                    candidates[idx]
-                                )
-                                manual_matches[sup_sku] = {
-                                    'sku': alt_sku,
-                                    'score': alt_score,
-                                    'alternatives': alts,
-                                }
+                                alt_key, _ = candidates[idx]
+                                manual_overrides[sup_sku] = alt_key
 
-                all_matches = {**auto_matches, **manual_matches}
+                # Build the matches DataFrame (single source of truth)
+                matches_df = build_matches_df(
+                    work_df, mdata,
+                    manual_overrides=manual_overrides or None,
+                    src_type='supplier',
+                )
 
-                if not all_matches:
+                if matches_df.empty:
                     st.warning(
                         "No SKU matches found. Try lowering the "
                         "match threshold or checking the SKU column."
                     )
                 else:
-                    desc_col_name = (
-                        sup_desc_col
-                        if sup_desc_col != '(none)' else None
+                    matched_rows = matches_df.loc[
+                        matches_df['match_source'] != 'unmatched'
+                    ]
+                    ambiguous_rows = matches_df.loc[
+                        matches_df['status'] == 'ambiguous'
+                    ]
+                    manual_rows = matches_df.loc[
+                        matches_df['match_source'] == 'manual'
+                    ]
+                    unmatched_rows = matches_df.loc[
+                        matches_df['match_source'] == 'unmatched'
+                    ]
+
+                    status_parts = [
+                        f"**{len(matched_rows)}** SKU match"
+                        f"{'es' if len(matched_rows) != 1 else ''}"
+                    ]
+                    if len(manual_rows) > 0:
+                        status_parts.append(
+                            f"({len(manual_rows)} manual)"
+                        )
+                    if len(ambiguous_rows) > 0:
+                        status_parts.append(
+                            f"\u2014 {len(ambiguous_rows)} ambiguous"
+                        )
+                    if len(unmatched_rows) > 0:
+                        status_parts.append(
+                            f"\u2014 {len(unmatched_rows)} skipped"
+                        )
+                    st.markdown(" ".join(status_parts))
+
+                    # Show the matches table inline
+                    display_cols = [
+                        'src_sku', 'src_description',
+                        'matched_number', 'matched_variant',
+                        'matched_title', 'matched_ean',
+                        'match_score', 'match_source', 'status',
+                    ]
+                    visible = [
+                        c for c in display_cols
+                        if c in matches_df.columns
+                    ]
+                    st.dataframe(
+                        matches_df[visible],
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            'match_score': st.column_config.ProgressColumn(
+                                'Match %',
+                                min_value=0,
+                                max_value=100,
+                                format="%d%%",
+                            ),
+                            'src_sku': 'Supplier SKU',
+                            'src_description': 'Description',
+                            'matched_number': 'Product #',
+                            'matched_variant': 'Variant',
+                            'matched_title': 'Title',
+                            'matched_ean': 'EAN',
+                            'match_source': 'Source',
+                            'status': 'Status',
+                        },
                     )
-                    match_rows = _build_match_rows(
-                        all_matches, sup_df, sup_sku_col,
+
+                    # Build price update rows from matches_df
+                    match_rows = _build_match_rows_from_df(
+                        matches_df, sup_df, sup_sku_col,
                         sup_price_col, disc_lines, exchange_rate,
                         sup_currency, work_df,
-                        sup_desc_col=desc_col_name,
                     )
 
                     if match_rows:
                         match_result_df = pd.DataFrame(match_rows)
-                        display_cols = [
+                        price_display = [
                             c for c in match_result_df.columns
                             if not c.startswith('_')
                         ]
-                        st.markdown(
-                            f"**{len(match_rows)}** SKU match"
-                            f"{'es' if len(match_rows) != 1 else ''} "
-                            f"found"
-                        )
-                        st.dataframe(
-                            match_result_df[display_cols],
-                            use_container_width=True,
-                            hide_index=True,
-                            column_config={
-                                'Score': st.column_config.ProgressColumn(
-                                    'Match %',
-                                    min_value=0,
-                                    max_value=100,
-                                    format="%d%%",
-                                ),
-                                'Diff': st.column_config.NumberColumn(
-                                    'Diff (DKK)',
-                                    format="%.2f",
-                                ),
-                            },
-                        )
+                        with st.expander(
+                            "Price comparison details",
+                            expanded=False,
+                        ):
+                            st.dataframe(
+                                match_result_df[price_display],
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config={
+                                    'Score': st.column_config.ProgressColumn(
+                                        'Match %',
+                                        min_value=0,
+                                        max_value=100,
+                                        format="%d%%",
+                                    ),
+                                    'Diff': st.column_config.NumberColumn(
+                                        'Diff (DKK)',
+                                        format="%.2f",
+                                    ),
+                                },
+                            )
 
                         if st.button(
                             "Update Cost Prices from Supplier",
@@ -1749,18 +1772,36 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
         )
 
 
-def _build_match_rows(
-    matches, sup_df, sup_sku_col, sup_price_col,
+def _build_match_rows_from_df(
+    matches_df, sup_df, sup_sku_col, sup_price_col,
     disc_lines, exchange_rate, sup_currency, work_df,
-    sup_desc_col=None,
 ):
-    """Build the match result rows for supplier matching."""
+    """Build the price-comparison rows from the matches DataFrame.
+
+    Derives rows from ``matches_df`` (the single source of truth) rather
+    than a separate matches dict, ensuring the export and price update
+    are always consistent with what the user sees.
+    """
     match_rows = []
-    for sup_sku, match_data in matches.items():
-        prod_sku = match_data['sku']
-        score = match_data['score']
-        if prod_sku is None:
+    # Only process matched rows (auto or manual)
+    exportable = matches_df.loc[
+        matches_df['match_source'] != 'unmatched'
+    ]
+    # Deduplicate on src_sku to avoid processing the same supplier line
+    # multiple times when a product has multiple expanded variants.
+    seen_sup_skus: set[str] = set()
+
+    for _, mrow in exportable.iterrows():
+        sup_sku = mrow['src_sku']
+        if sup_sku in seen_sup_skus:
             continue
+        seen_sup_skus.add(sup_sku)
+
+        prod_sku = mrow['matched_number']
+        score = mrow['match_score']
+        if not prod_sku:
+            continue
+
         sup_row = sup_df.loc[
             sup_df[sup_sku_col].astype(str).str.strip() == sup_sku
         ]
@@ -1789,21 +1830,16 @@ def _build_match_rows(
                 prod_mask, 'BUY_PRICE_NUM'
             ].iloc[0]
 
-        sup_name = ''
-        if sup_desc_col and sup_desc_col in sup_row.columns:
-            sup_name = str(sup_row.iloc[0][sup_desc_col]).strip()
+        sup_name = str(mrow['src_description'] or '').strip()
 
         prod_name = ''
         prod_price_row = work_df.loc[prod_mask]
-        variant_name = ''
+        variant_name = str(mrow['matched_variant'] or '').strip()
         if not prod_price_row.empty:
             if 'TITLE_DK' in prod_price_row.columns:
                 prod_name = str(
                     prod_price_row['TITLE_DK'].iloc[0]
                 ).strip()
-            variant_name = str(
-                prod_price_row['VARIANT_TYPES'].iloc[0]
-            ).strip() if 'VARIANT_TYPES' in prod_price_row.columns else ''
             sell_ex_vat = (
                 prod_price_row['PRICE_NUM'].iloc[0] / (1 + VAT_RATE)
             )
@@ -2130,6 +2166,7 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
                 matches_df = build_matches_df(
                     work_df, mdata,
                     manual_overrides=manual_overrides or None,
+                    src_type='invoice',
                 )
 
                 if matches_df.empty:
@@ -2172,7 +2209,7 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
 
                     # Display the matches DataFrame
                     display_cols = [
-                        'inv_sku', 'inv_description', 'inv_qty',
+                        'src_sku', 'src_description', 'src_qty',
                         'matched_number', 'matched_variant',
                         'matched_title', 'matched_ean',
                         'match_score', 'match_source', 'status',
@@ -2192,12 +2229,12 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
                                 max_value=100,
                                 format="%d%%",
                             ),
-                            'inv_qty': st.column_config.NumberColumn(
+                            'src_qty': st.column_config.NumberColumn(
                                 'Qty',
                                 format="%.0f",
                             ),
-                            'inv_sku': 'Invoice SKU',
-                            'inv_description': 'Description',
+                            'src_sku': 'Invoice SKU',
+                            'src_description': 'Description',
                             'matched_number': 'Product #',
                             'matched_variant': 'Variant',
                             'matched_title': 'Title',
