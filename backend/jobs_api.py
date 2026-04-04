@@ -94,9 +94,9 @@ async def _get_redis():
     if not settings.redis_url:
         return None
     try:
-        import redis.asyncio as aioredis  # noqa: WPS433
+        import redis.asyncio as redis_async  # noqa: WPS433
 
-        return aioredis.from_url(settings.redis_url, decode_responses=True)
+        return redis_async.from_url(settings.redis_url, decode_responses=True)
     except Exception:
         logger.exception("Failed to connect to Redis")
         return None
@@ -118,7 +118,7 @@ async def _get_arq_pool():
         rs = RedisSettings(
             host=parsed.hostname or "localhost",
             port=parsed.port or 6379,
-            database=int(parsed.path.lstrip("/") or 0),
+            database=int(parsed.path.lstrip("/") or 0) if parsed.path.lstrip("/").isdigit() else 0,
             password=parsed.password,
         )
         return await create_pool(rs)

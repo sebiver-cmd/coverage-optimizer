@@ -62,7 +62,7 @@ async def optimize_job(ctx: dict, job_id: str, payload: dict):
     """
     redis = ctx.get("redis") or ctx.get("arq")
     if redis is None:
-        logger.error("optimize_job: no redis handle in ctx")
+        logger.error("optimize_job %s: Redis connection unavailable in worker context — job cannot be processed", job_id)
         return
 
     await _update_job(redis, job_id, JobStatus.running)
@@ -99,7 +99,7 @@ def _redis_settings() -> RedisSettings:
     return RedisSettings(
         host=parsed.hostname or "localhost",
         port=parsed.port or 6379,
-        database=int(parsed.path.lstrip("/") or 0),
+        database=int(parsed.path.lstrip("/") or 0) if parsed.path.lstrip("/").isdigit() else 0,
         password=parsed.password,
     )
 
