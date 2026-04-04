@@ -8,6 +8,40 @@ The core matching functions (``match_supplier_to_products``,
 ``normalize_sku``, etc.) live in :mod:`domain.invoice_ean` which is the
 single source of truth for all SKU matching logic.  They are re-exported
 here for backward compatibility.
+
+.. rubric:: Matching + Transformation Pipeline
+
+The end-to-end flow for supplier/invoice data is:
+
+1. **File parsing** — :func:`parse_supplier_file` reads CSV or PDF into
+   a raw :class:`~pandas.DataFrame` with string columns.
+2. **Column detection** — :func:`detect_supplier_columns` (or
+   :func:`~domain.invoice_ean.detect_invoice_columns`) identifies which
+   columns hold SKU, price, quantity, etc.  Uses LLM first, heuristics
+   as fallback.
+3. **SKU matching** — :func:`~domain.invoice_ean.match_supplier_to_products`
+   fuzzy-matches supplier SKUs to the product catalogue.
+4. **Export / result construction** —
+   :func:`~domain.invoice_ean.build_export_from_matches` builds the final
+   DataFrame with one row per logical line item.
+
+**Design invariant**: after step 4, each (SKU, Product Number, Variant Name)
+combination appears exactly once.  All reshaping (variant narrowing,
+deduplication) happens inside DataFrame operations — no ad-hoc row-level
+loops construct parallel data structures.
+
+.. rubric:: Duplication prevention
+
+Historical duplication of SKUs (e.g. "FB 400 XXS" appearing twice) was
+caused by:
+
+- Multiple catalogue rows sharing the same ``(NUMBER, VARIANT_TYPES)``
+  with different ``VARIANT_ID`` values.
+- Variant narrowing returning multiple rows when variant text was a
+  substring of another variant (e.g. "XS" inside "XXS").
+
+Both are now guarded by :func:`~domain.invoice_ean._dedupe_product_rows`
+and :func:`~domain.invoice_ean._normalize_export_df`.
 """
 
 from __future__ import annotations
@@ -449,3 +483,91 @@ def detect_discount_lines(df, discount_col=None):
                             pass
 
     return discounts
+
+
+# ---------------------------------------------------------------------------
+# Debugging helpers
+# ---------------------------------------------------------------------------
+
+def debug_print_mapping(
+    df: pd.DataFrame,
+    mapping: dict | None = None,
+    *,
+    llm_raw: str | None = None,
+    heuristic_repairs: dict | None = None,
+    final_df: pd.DataFrame | None = None,
+    out=None,
+) -> str:
+    """Return a human-readable summary of the column-mapping pipeline state.
+
+    Designed for developer debugging of mapping errors.  Shows:
+
+    - Raw DataFrame head (columns + first 3 rows).
+    - The LLM's raw JSON response (if available).
+    - The parsed mapping dict.
+    - Any heuristic repairs that were applied.
+    - The final unified DataFrame head (if available).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The raw parsed supplier/invoice DataFrame.
+    mapping : dict or None
+        The column mapping dict ``{'sku': col_name, ...}``.
+    llm_raw : str or None
+        The raw LLM response text (before parsing).
+    heuristic_repairs : dict or None
+        Any fields that were gap-filled by heuristics.
+    final_df : pd.DataFrame or None
+        The final export/unified DataFrame after all transformations.
+    out : file-like or None
+        If provided, also writes the summary to this stream.
+
+    Returns
+    -------
+    str
+        The formatted summary text.
+    """
+    lines: list[str] = []
+    lines.append("=== Column Mapping Debug ===")
+    lines.append(f"\nRaw DataFrame ({len(df)} rows, {len(df.columns)} cols):")
+    lines.append(f"  Columns: {list(df.columns)}")
+    if not df.empty:
+        lines.append(f"  Head (3 rows):\n{df.head(3).to_string(index=False)}")
+    else:
+        lines.append("  (empty)")
+
+    if llm_raw is not None:
+        lines.append(f"\nLLM raw response:\n  {llm_raw!r}")
+
+    if mapping is not None:
+        lines.append(f"\nParsed mapping: {mapping}")
+    else:
+        lines.append("\nParsed mapping: None (LLM unavailable or failed)")
+
+    if heuristic_repairs:
+        lines.append(f"\nHeuristic repairs applied: {heuristic_repairs}")
+    else:
+        lines.append("\nHeuristic repairs: none")
+
+    if final_df is not None:
+        lines.append(
+            f"\nFinal DataFrame ({len(final_df)} rows, "
+            f"{len(final_df.columns)} cols):"
+        )
+        lines.append(f"  Columns: {list(final_df.columns)}")
+        if not final_df.empty:
+            lines.append(
+                f"  Head (3 rows):\n{final_df.head(3).to_string(index=False)}"
+            )
+        else:
+            lines.append("  (empty)")
+
+    lines.append("\n=== End Debug ===")
+    text = '\n'.join(lines)
+
+    if out is not None:
+        out.write(text)
+        out.write('\n')
+
+    return text
