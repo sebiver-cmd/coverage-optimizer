@@ -27,7 +27,6 @@ from __future__ import annotations
 import json
 import logging
 import math
-import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -36,6 +35,7 @@ from pydantic import BaseModel, Field
 
 from dandomain_api import DanDomainClient
 from backend.apply_constants import BATCH_DIR, UUID_RE, AUDIT_LOG
+from backend.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -129,11 +129,17 @@ ENABLE_APPLY_ENV = "SB_OPTIMA_ENABLE_APPLY"
 def is_apply_enabled() -> bool:
     """Return *True* only when the apply endpoint is explicitly enabled.
 
-    Reads ``SB_OPTIMA_ENABLE_APPLY`` from the environment.  The value
-    must be the literal string ``"true"`` (case-insensitive) to enable
-    writes.  Any other value — including absent — means disabled.
+    Reads ``SB_OPTIMA_ENABLE_APPLY`` via :func:`~backend.config.get_settings`.
+    The value must be the literal string ``"true"`` (case-insensitive) to
+    enable writes.  Any other value — including absent — means disabled.
+
+    .. note::
+        A fresh :class:`~backend.config.Settings` object is constructed on
+        each call so that ``monkeypatch.setenv`` in tests takes effect
+        immediately.
     """
-    return os.environ.get(ENABLE_APPLY_ENV, "").strip().lower() == "true"
+    from backend.config import Settings  # local import to avoid circular
+    return Settings().enable_apply
 
 
 # ---------------------------------------------------------------------------

@@ -14,7 +14,6 @@ existing test suite can run without a database.
 
 from __future__ import annotations
 
-import os
 from typing import Generator
 
 from sqlalchemy import create_engine, text
@@ -52,7 +51,10 @@ def init_engine(database_url: str | None = None) -> Engine | None:
     """
     global _engine, _SessionLocal  # noqa: PLW0603
 
-    url = database_url or os.environ.get("DATABASE_URL", "")
+    url = database_url or ""
+    if not url:
+        from backend.config import get_settings
+        url = get_settings().database_url or ""
     if not url:
         return None
 
