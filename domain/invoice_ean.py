@@ -8,6 +8,11 @@ This module is the **single source of truth** for all SKU matching logic.
 Both Supplier price-list matching and Invoice/EAN matching use the same
 functions defined here.
 
+The unified ``matches_df`` schema (produced by :func:`build_matches_df`)
+uses ``src_*`` column names (``src_sku``, ``src_qty``, ``src_type``, etc.)
+to be source-agnostic.  ``export_from_matches_df`` also accepts the
+legacy ``inv_*`` column names for backward compatibility.
+
 The export document is **read-only** — it is never used for API imports.
 """
 
@@ -617,10 +622,20 @@ _EXPORT_COLUMNS = [
 
 # Canonical column names for the matches DataFrame.
 _MATCHES_COLUMNS = [
-    'inv_row_id', 'inv_sku', 'inv_description', 'inv_qty',
+    'src_row_id', 'src_type', 'src_sku', 'src_description', 'src_qty',
     'matched_number', 'matched_variant', 'matched_title',
     'matched_ean', 'match_score', 'match_source', 'status',
 ]
+
+# Legacy aliases — ``inv_*`` names that older callers may rely on.
+# ``build_matches_df`` always produces the ``src_*`` canonical names,
+# and ``export_from_matches_df`` accepts both ``src_*`` and ``inv_*``.
+_LEGACY_ALIASES = {
+    'inv_row_id': 'src_row_id',
+    'inv_sku': 'src_sku',
+    'inv_description': 'src_description',
+    'inv_qty': 'src_qty',
+}
 
 
 def build_matches_df(
@@ -628,16 +643,18 @@ def build_matches_df(
     match_data: dict,
     *,
     manual_overrides: dict[str, str] | None = None,
+    src_type: str = 'invoice',
 ) -> pd.DataFrame:
     """Build a unified matches DataFrame for UI display and export.
 
-    Produces a single DataFrame where each row represents one invoice line
-    and its match state.  Columns:
+    Produces a single DataFrame where each row represents one source line
+    (invoice or supplier) and its match state.  Columns:
 
-    - ``inv_row_id`` — unique row identifier (sequential).
-    - ``inv_sku`` — invoice SKU text.
-    - ``inv_description`` — invoice description text.
-    - ``inv_qty`` — parsed invoice quantity.
+    - ``src_row_id`` — unique row identifier (sequential).
+    - ``src_type`` — ``"invoice"`` or ``"supplier"``.
+    - ``src_sku`` — source SKU text.
+    - ``src_description`` — source description text.
+    - ``src_qty`` — parsed source quantity.
     - ``matched_number`` — product NUMBER of best match (or empty).
     - ``matched_variant`` — VARIANT_TYPES of narrowed match.
     - ``matched_title`` — product title.
@@ -658,8 +675,10 @@ def build_matches_df(
     match_data:
         Dict returned by :func:`match_invoice_to_products`.
     manual_overrides:
-        Optional dict mapping invoice SKUs to augmented product SKUs
+        Optional dict mapping source SKUs to augmented product SKUs
         for manual corrections.
+    src_type:
+        Label for the ``src_type`` column (``"invoice"`` or ``"supplier"``).
     """
     matches = dict(match_data['matches'])  # shallow copy
     composite_lookup = match_data['composite_lookup']
@@ -670,8 +689,8 @@ def build_matches_df(
     overrides = manual_overrides or {}
 
     # Apply manual overrides on a copy so we don't mutate the original
-    for inv_sku, prod_key in overrides.items():
-        matches[inv_sku] = {
+    for src_sku, prod_key in overrides.items():
+        matches[src_sku] = {
             'sku': prod_key,
             'score': 100,
             'alternatives': [],
@@ -686,19 +705,20 @@ def build_matches_df(
     records: list[dict] = []
     row_id = 0
 
-    for inv_sku, mentry in matches.items():
+    for src_sku, mentry in matches.items():
         matched_key = mentry['sku']
         score = mentry['score']
-        inv_qty = qty_map.get(inv_sku, 1.0)
-        inv_desc = desc_map.get(inv_sku, '')
+        src_qty = qty_map.get(src_sku, 1.0)
+        src_desc = desc_map.get(src_sku, '')
 
         if matched_key is None:
             # Unmatched
             records.append({
-                'inv_row_id': row_id,
-                'inv_sku': inv_sku,
-                'inv_description': inv_desc,
-                'inv_qty': inv_qty,
+                'src_row_id': row_id,
+                'src_type': src_type,
+                'src_sku': src_sku,
+                'src_description': src_desc,
+                'src_qty': src_qty,
                 'matched_number': '',
                 'matched_variant': '',
                 'matched_title': '',
@@ -712,7 +732,7 @@ def build_matches_df(
 
         number, vtype = composite_lookup.get(matched_key, (matched_key, ''))
         source = (
-            'manual' if inv_sku in overrides
+            'manual' if src_sku in overrides
             else 'auto-sku'
         )
 
@@ -720,10 +740,11 @@ def build_matches_df(
         prod_rows = prods.loc[prods['_num_key'] == number]
         if prod_rows.empty:
             records.append({
-                'inv_row_id': row_id,
-                'inv_sku': inv_sku,
-                'inv_description': inv_desc,
-                'inv_qty': inv_qty,
+                'src_row_id': row_id,
+                'src_type': src_type,
+                'src_sku': src_sku,
+                'src_description': src_desc,
+                'src_qty': src_qty,
                 'matched_number': number,
                 'matched_variant': vtype,
                 'matched_title': title_lookup.get(number, ''),
@@ -737,11 +758,11 @@ def build_matches_df(
 
         # Build a mini-group for narrowing
         group = prod_rows.copy()
-        group['_inv_sku'] = inv_sku
-        group['_inv_desc'] = inv_desc
+        group['_inv_sku'] = src_sku
+        group['_inv_desc'] = src_desc
         group['_matched_number'] = number
         group['_matched_vtype'] = vtype
-        group['_inv_qty'] = inv_qty
+        group['_inv_qty'] = src_qty
         group['_score'] = score
 
         narrowed = _narrow_group_variants(group)
@@ -764,10 +785,11 @@ def build_matches_df(
                 var_name = str(r.get('VARIANT_TYPES', '') or '').strip()
                 ean = str(r.get('EAN', '') or '').strip()
                 records.append({
-                    'inv_row_id': row_id,
-                    'inv_sku': inv_sku,
-                    'inv_description': inv_desc,
-                    'inv_qty': inv_qty,
+                    'src_row_id': row_id,
+                    'src_type': src_type,
+                    'src_sku': src_sku,
+                    'src_description': src_desc,
+                    'src_qty': src_qty,
                     'matched_number': number,
                     'matched_variant': var_name,
                     'matched_title': title,
@@ -784,10 +806,11 @@ def build_matches_df(
             status = 'ok'
 
         records.append({
-            'inv_row_id': row_id,
-            'inv_sku': inv_sku,
-            'inv_description': inv_desc,
-            'inv_qty': inv_qty,
+            'src_row_id': row_id,
+            'src_type': src_type,
+            'src_sku': src_sku,
+            'src_description': src_desc,
+            'src_qty': src_qty,
             'matched_number': number,
             'matched_variant': var_name,
             'matched_title': title,
@@ -807,8 +830,11 @@ def build_matches_df(
 def export_from_matches_df(matches_df: pd.DataFrame) -> pd.DataFrame:
     """Convert a matches DataFrame to the canonical export format.
 
-    Filters to rows with ``status != 'needs-manual'`` (i.e. matched rows)
+    Filters to rows with ``match_source != 'unmatched'`` (i.e. matched rows)
     and renames columns to the standard export column names.
+
+    Accepts both the canonical ``src_*`` column names and the legacy
+    ``inv_*`` names for backward compatibility.
 
     This replaces the need to re-run ``build_export_from_matches`` after
     manual overrides — the user edits ``matches_df`` directly and then
@@ -817,20 +843,26 @@ def export_from_matches_df(matches_df: pd.DataFrame) -> pd.DataFrame:
     if matches_df.empty:
         return pd.DataFrame(columns=_EXPORT_COLUMNS)
 
+    # Normalise legacy column names → canonical names
+    df = matches_df.copy()
+    for old, new in _LEGACY_ALIASES.items():
+        if old in df.columns and new not in df.columns:
+            df = df.rename(columns={old: new})
+
     # Only export rows that have a match (auto or manual)
-    exportable = matches_df.loc[
-        matches_df['match_source'] != 'unmatched'
+    exportable = df.loc[
+        df['match_source'] != 'unmatched'
     ].copy()
 
     if exportable.empty:
         return pd.DataFrame(columns=_EXPORT_COLUMNS)
 
     export = pd.DataFrame({
-        'SKU': exportable['inv_sku'],
+        'SKU': exportable['src_sku'],
         'Product Number': exportable['matched_number'],
         'Title': exportable['matched_title'],
         'Variant Name': exportable['matched_variant'],
-        'Amount': exportable['inv_qty'],
+        'Amount': exportable['src_qty'],
         'EAN': exportable['matched_ean'],
         'Match %': exportable['match_score'],
     })
