@@ -207,14 +207,27 @@ def match_supplier_to_products(
     absolute closest match from all candidates.
 
     Returns ``{supplier_sku: {'sku': best_product_sku | None,
-    'score': int, 'alternatives': [(product_sku, score), …]}}``.
+    'score': int, 'alternatives': [(product_sku, score), …],
+    'method': str}}``.
     ``sku`` is ``None`` when no match exceeds *threshold*.
+    The ``method`` field indicates how the match was made:
+    ``"sku-exact"``, ``"craft-exact"``, ``"fuzzy"``, or ``""``.
     """
     norm_to_orig: dict[str, str] = {}
     for sku in product_skus:
         norm = normalize_sku(sku)
         if norm and norm not in norm_to_orig:
             norm_to_orig[norm] = sku
+
+    # Parallel raw-key map: uppercased, trimmed originals preserving
+    # hyphens so that Craft-normalised keys like "1910163-999000-XL"
+    # can be matched case-insensitively without relying on
+    # normalize_sku (which strips separators and may cause fuzzy drift).
+    raw_upper_to_orig: dict[str, str] = {}
+    for sku in product_skus:
+        key = str(sku).upper().strip()
+        if key and key not in raw_upper_to_orig:
+            raw_upper_to_orig[key] = sku
 
     norm_list = list(norm_to_orig.keys())
 
@@ -240,20 +253,33 @@ def match_supplier_to_products(
                 'sku': norm_to_orig[norm_sup],
                 'score': 100,
                 'alternatives': [],
+                'method': 'sku-exact',
             }
             continue
 
         # Craft-style size-index → size-label normalisation.
         # E.g. invoice "1910163-999000-7" → "1910163-999000-XL" which
         # should match the catalogue entry directly.
+        # Try raw case-insensitive match first (preserves hyphens),
+        # then fall back to normalize_sku comparison.
         craft_norm = _normalize_craft_sku(sup_sku)
         if craft_norm is not None:
+            craft_upper = craft_norm.upper().strip()
+            if craft_upper in raw_upper_to_orig:
+                matches[sup_sku] = {
+                    'sku': raw_upper_to_orig[craft_upper],
+                    'score': 100,
+                    'alternatives': [],
+                    'method': 'craft-exact',
+                }
+                continue
             craft_key = normalize_sku(craft_norm)
             if craft_key and craft_key in norm_to_orig:
                 matches[sup_sku] = {
                     'sku': norm_to_orig[craft_key],
                     'score': 100,
                     'alternatives': [],
+                    'method': 'craft-exact',
                 }
                 continue
 
@@ -272,6 +298,7 @@ def match_supplier_to_products(
                 'sku': best_sku,
                 'score': best_score,
                 'alternatives': ranked[1:top_n + 1],
+                'method': 'fuzzy',
             }
             continue
 
@@ -304,6 +331,7 @@ def match_supplier_to_products(
             'sku': None,
             'score': 0,
             'alternatives': ranked,
+            'method': '',
         }
 
     return matches
@@ -637,6 +665,7 @@ def match_invoice_to_products(
                         'sku': matched_key,
                         'score': 100,
                         'alternatives': [],
+                        'method': 'ean-exact',
                     }
 
     # --- Fallback: extract embedded SKUs from descriptions for unmatched ---
@@ -661,7 +690,9 @@ def match_invoice_to_products(
             )
             for inv_sku, emb_sku in fallback_map.items():
                 if emb_sku in emb_matches and emb_matches[emb_sku]['sku'] is not None:
-                    matches[inv_sku] = emb_matches[emb_sku]
+                    emb_entry = emb_matches[emb_sku].copy()
+                    emb_entry['method'] = 'embedded-sku'
+                    matches[inv_sku] = emb_entry
 
     return {
         'matches': matches,
@@ -683,7 +714,8 @@ _MATCHES_COLUMNS = [
     'src_row_id', 'src_type', 'src_sku', 'src_sku_craft_normalized',
     'src_description', 'src_qty',
     'matched_number', 'matched_variant', 'matched_title',
-    'matched_ean', 'match_score', 'match_source', 'status',
+    'matched_ean', 'match_score', 'match_source',
+    'match_method_detail', 'status',
 ]
 
 # Legacy aliases — ``inv_*`` names that older callers may rely on.
@@ -753,6 +785,7 @@ def build_matches_df(
             'sku': prod_key,
             'score': 100,
             'alternatives': [],
+            'method': 'manual',
         }
 
     # Build a lookup from product NUMBER → best (title, variant, ean)
@@ -767,6 +800,7 @@ def build_matches_df(
     for src_sku, mentry in matches.items():
         matched_key = mentry['sku']
         score = mentry['score']
+        method_detail = mentry.get('method', '')
         src_qty = qty_map.get(src_sku, 1.0)
         src_desc = desc_map.get(src_sku, '')
         craft_norm = _normalize_craft_sku(src_sku) or ''
@@ -786,6 +820,7 @@ def build_matches_df(
                 'matched_ean': '',
                 'match_score': 0,
                 'match_source': 'unmatched',
+                'match_method_detail': method_detail,
                 'status': 'needs-manual',
             })
             row_id += 1
@@ -796,6 +831,8 @@ def build_matches_df(
             'manual' if src_sku in overrides
             else 'auto-sku'
         )
+        if src_sku in overrides:
+            method_detail = 'manual'
 
         # Find matching products to narrow variant
         prod_rows = prods.loc[prods['_num_key'] == number]
@@ -813,6 +850,7 @@ def build_matches_df(
                 'matched_ean': '',
                 'match_score': score,
                 'match_source': source,
+                'match_method_detail': method_detail,
                 'status': 'ok',
             })
             row_id += 1
@@ -859,6 +897,7 @@ def build_matches_df(
                     'matched_ean': ean,
                     'match_score': score,
                     'match_source': source,
+                    'match_method_detail': method_detail,
                     'status': 'ok',
                 })
                 row_id += 1
@@ -881,6 +920,7 @@ def build_matches_df(
             'matched_ean': ean,
             'match_score': score,
             'match_source': source,
+            'match_method_detail': method_detail,
             'status': status,
         })
         row_id += 1

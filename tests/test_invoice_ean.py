@@ -12,6 +12,7 @@ from domain.invoice_ean import (
     detect_invoice_columns,
     build_ean_export,
     match_invoice_to_products,
+    match_supplier_to_products,
     build_export_from_matches,
     build_matches_df,
     export_from_matches_df,
@@ -2374,7 +2375,7 @@ class TestBuildMatchesDf:
             'src_sku_craft_normalized', 'src_description',
             'src_qty', 'matched_number', 'matched_variant',
             'matched_title', 'matched_ean', 'match_score',
-            'match_source', 'status',
+            'match_source', 'match_method_detail', 'status',
         ]
         assert list(mdf.columns) == expected_cols
 
@@ -2978,3 +2979,138 @@ class TestCraftSkuMatching:
         assert mdf.iloc[0]['match_score'] == 100
         assert mdf.iloc[0]['src_type'] == 'supplier'
         assert mdf.iloc[0]['src_sku_craft_normalized'] == '1910163-999000-XL'
+
+    def test_craft_exact_beats_fuzzy_near_miss(self):
+        """Craft exact-match must beat fuzzy near-miss with a similar base SKU.
+
+        Regression test: invoice SKU '1910163-999000-7' (EVOLVE PANTS XL)
+        must match '1910163-999000-XL' and NOT drift to the similar
+        '1910173-999000' (a completely different product).
+        """
+        catalogue = _make_products(
+            NUMBER=[
+                '1910163-999000-XL', '1910163-999000-L',
+                '1910163-999000-M', '1910173-999000',
+            ],
+            TITLE_DK=[
+                'Craft EVOLVE PANTS M Black XL',
+                'Craft EVOLVE PANTS M Black L',
+                'Craft EVOLVE PANTS M Black M',
+                'Craft t-shirt Progress 2.0 Solid Jersey',
+            ],
+            VARIANT_ID=['', '', '', ''],
+            VARIANT_TYPES=['', '', '', 'X-Large / 42'],
+            EAN=['', '', '', '7318573536943'],
+            BUY_PRICE=['100', '100', '100', '80'],
+            PRICE=['200', '200', '200', '160'],
+            BUY_PRICE_NUM=[100.0, 100.0, 100.0, 80.0],
+            PRICE_NUM=[200.0, 200.0, 200.0, 160.0],
+            PRODUCT_ID=['10', '11', '12', '20'],
+            PRODUCER=['Craft', 'Craft', 'Craft', 'Craft'],
+            PRODUCER_ID=[5, 5, 5, 5],
+            ONLINE=[True, True, True, True],
+        )
+        invoice_df = pd.DataFrame({
+            'SKU': ['1910163-999000-7'],
+            'Qty': ['2'],
+            'Description': ['EVOLVE PANTS M Black XL'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty',
+            threshold=70, invoice_desc_col='Description',
+        )
+        m = mdata['matches']['1910163-999000-7']
+        # Must match the CORRECT product, not the near-miss
+        assert m['sku'] == '1910163-999000-XL', (
+            f"Expected '1910163-999000-XL' but got '{m['sku']}'"
+        )
+        assert m['score'] == 100
+        assert m.get('method') == 'craft-exact'
+
+    def test_craft_exact_beats_fuzzy_in_build_matches_df(self):
+        """build_matches_df reports correct product and method for Craft exact.
+
+        End-to-end regression: the matched_number must be the correct
+        Craft product, match_method_detail must be 'craft-exact', and
+        the wrong product must NOT appear.
+        """
+        catalogue = _make_products(
+            NUMBER=[
+                '1910163-999000-XL', '1910163-999000-L',
+                '1910173-999000',
+            ],
+            TITLE_DK=[
+                'Craft EVOLVE PANTS M Black XL',
+                'Craft EVOLVE PANTS M Black L',
+                'Craft t-shirt Progress 2.0 Solid Jersey',
+            ],
+            VARIANT_ID=['', '', ''],
+            VARIANT_TYPES=['', '', 'X-Large / 42'],
+            EAN=['', '', '7318573536943'],
+            BUY_PRICE=['100', '100', '80'],
+            PRICE=['200', '200', '160'],
+            BUY_PRICE_NUM=[100.0, 100.0, 80.0],
+            PRICE_NUM=[200.0, 200.0, 160.0],
+            PRODUCT_ID=['10', '11', '20'],
+            PRODUCER=['Craft', 'Craft', 'Craft'],
+            PRODUCER_ID=[5, 5, 5],
+            ONLINE=[True, True, True],
+        )
+        invoice_df = pd.DataFrame({
+            'SKU': ['1910163-999000-7'],
+            'Qty': ['2'],
+            'Description': ['EVOLVE PANTS M Black XL'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty',
+            threshold=70, invoice_desc_col='Description',
+        )
+        mdf = build_matches_df(catalogue, mdata)
+        row = mdf.iloc[0]
+        assert row['matched_number'] == '1910163-999000-XL'
+        assert row['match_score'] == 100
+        assert row['match_method_detail'] == 'craft-exact'
+        assert row['src_sku_craft_normalized'] == '1910163-999000-XL'
+        # Must NOT be the wrong product
+        assert row['matched_number'] != '1910173-999000'
+
+    def test_supplier_craft_exact_beats_fuzzy_near_miss(self):
+        """Supplier flow: Craft exact-match beats fuzzy near-miss.
+
+        Uses match_supplier_to_products directly to verify the
+        deterministic Craft matching at the lowest level.
+        """
+        product_skus = [
+            '1910163-999000-XL', '1910163-999000-L',
+            '1910173-999000',
+        ]
+        result = match_supplier_to_products(
+            ['1910163-999000-7'],
+            product_skus,
+            threshold=70,
+            supplier_names={'1910163-999000-7': 'EVOLVE PANTS M Black XL'},
+            product_names={
+                '1910163-999000-XL': 'Craft EVOLVE PANTS',
+                '1910163-999000-L': 'Craft EVOLVE PANTS',
+                '1910173-999000': 'Craft t-shirt Progress 2.0',
+            },
+        )
+        m = result['1910163-999000-7']
+        assert m['sku'] == '1910163-999000-XL'
+        assert m['score'] == 100
+        assert m['method'] == 'craft-exact'
+
+    def test_match_method_detail_column_populated(self):
+        """match_method_detail column is populated for various match types."""
+        catalogue = self._craft_catalogue()
+        invoice_df = pd.DataFrame({
+            'SKU': ['1910163-999000-7'],
+            'Qty': ['1'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty', threshold=70,
+        )
+        mdf = build_matches_df(catalogue, mdata)
+        assert 'match_method_detail' in mdf.columns
+        row = mdf.iloc[0]
+        assert row['match_method_detail'] == 'craft-exact'
