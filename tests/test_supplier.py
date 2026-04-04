@@ -442,10 +442,13 @@ class TestBuildMappingPrompt(unittest.TestCase):
     def test_limits_rows_to_five(self):
         df = pd.DataFrame({'A': list(range(20))})
         prompt = _build_mapping_prompt(df)
-        # Should contain at most 5 data rows
-        # Count occurrences of values 0-4 (should be there) vs 5+ (should not)
-        self.assertIn('4', prompt)
-        self.assertNotIn('| 10', prompt)
+        # The prompt should contain a markdown table with exactly 5 data rows
+        # (header + separator + 5 rows = 7 lines starting with '|')
+        table_lines = [
+            ln for ln in prompt.splitlines() if ln.strip().startswith('|')
+        ]
+        # header + separator + 5 data rows
+        self.assertEqual(len(table_lines), 7)
 
 
 class TestParseLLMMappingResponse(unittest.TestCase):

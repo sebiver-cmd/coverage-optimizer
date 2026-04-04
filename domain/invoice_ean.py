@@ -853,7 +853,7 @@ INTERNAL_FIELDS: frozenset[str] = frozenset({
 
 #: Type alias for the injectable LLM call function.
 #: Signature: (prompt, api_key, model) -> response_text or None
-LLMCallFn = Callable[[str, str, str], str | None]
+LLMCallFn = Callable[[str, str, str], "str | None"]
 
 
 def _build_mapping_prompt(df: pd.DataFrame) -> str:
