@@ -46,6 +46,8 @@ from domain.invoice_ean import (
     build_ean_export,
     match_invoice_to_products,
     build_export_from_matches,
+    build_matches_df,
+    export_from_matches_df,
     generate_barcode_pdf,
     search_products,
 )
@@ -2023,19 +2025,6 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
                 title_lookup = mdata['title_lookup']
                 ean_composite = mdata['composite_lookup']
 
-                # Build invoice-side name map for display
-                inv_names: dict[str, str] = {}
-                if desc_col and desc_col in inv_df.columns:
-                    for idx in inv_df.index:
-                        raw_sku = inv_df.at[idx, inv_sku_col]
-                        if pd.isna(raw_sku):
-                            continue
-                        k = str(raw_sku).strip()
-                        if k and k not in inv_names:
-                            inv_names[k] = str(
-                                inv_df.at[idx, desc_col] or ''
-                            ).strip()
-
                 # Build flat product SKU list for search
                 _ean_product_skus = list({
                     str(n).strip()
@@ -2046,11 +2035,7 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
                     title_lookup if title_lookup else None
                 )
 
-                # Split into auto-matched and unmatched
-                auto_matched = {
-                    k: v for k, v in raw_matches.items()
-                    if v['sku'] is not None
-                }
+                # Split into unmatched for manual resolution
                 unmatched = {
                     k: v for k, v in raw_matches.items()
                     if v['sku'] is None and v['alternatives']
@@ -2069,6 +2054,20 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
                         "automatically matched. Pick from the "
                         "suggestions or type to search all products."
                     )
+
+                    # Build invoice-side name map for display
+                    inv_names: dict[str, str] = {}
+                    if desc_col and desc_col in inv_df.columns:
+                        for idx in inv_df.index:
+                            raw_sku = inv_df.at[idx, inv_sku_col]
+                            if pd.isna(raw_sku):
+                                continue
+                            k = str(raw_sku).strip()
+                            if k and k not in inv_names:
+                                inv_names[k] = str(
+                                    inv_df.at[idx, desc_col] or ''
+                                ).strip()
+
                     for inv_sku, md in unmatched.items():
                         alts = md['alternatives']
 
@@ -2126,101 +2125,141 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
                                 alt_sku, _ = candidates[idx]
                                 manual_overrides[inv_sku] = alt_sku
 
-                # Step 3: build the export with manual overrides
-                export_df = build_export_from_matches(
+                # Step 3: build the matches DataFrame (single source
+                # of truth for all match state).
+                matches_df = build_matches_df(
                     work_df, mdata,
                     manual_overrides=manual_overrides or None,
                 )
 
-                matched_count = len(auto_matched) + len(manual_overrides)
-                skipped = len(unmatched) - len(manual_overrides)
-
-                if export_df.empty:
+                if matches_df.empty:
                     st.warning(
                         "No matches found. Try lowering the match "
                         "threshold or checking the SKU column."
                     )
                 else:
-                    status_parts = [
-                        f"**{len(export_df)}** matched line"
-                        f"{'s' if len(export_df) != 1 else ''}"
+                    # Show the matches table
+                    matched_rows = matches_df.loc[
+                        matches_df['match_source'] != 'unmatched'
                     ]
-                    if manual_overrides:
+                    ambiguous_rows = matches_df.loc[
+                        matches_df['status'] == 'ambiguous'
+                    ]
+                    manual_rows = matches_df.loc[
+                        matches_df['match_source'] == 'manual'
+                    ]
+                    unmatched_rows = matches_df.loc[
+                        matches_df['match_source'] == 'unmatched'
+                    ]
+
+                    status_parts = [
+                        f"**{len(matched_rows)}** matched line"
+                        f"{'s' if len(matched_rows) != 1 else ''}"
+                    ]
+                    if len(manual_rows) > 0:
                         status_parts.append(
-                            f"({len(manual_overrides)} manual)"
+                            f"({len(manual_rows)} manual)"
                         )
-                    if skipped > 0:
+                    if len(ambiguous_rows) > 0:
                         status_parts.append(
-                            f"\u2014 {skipped} skipped"
+                            f"\u2014 {len(ambiguous_rows)} ambiguous"
+                        )
+                    if len(unmatched_rows) > 0:
+                        status_parts.append(
+                            f"\u2014 {len(unmatched_rows)} skipped"
                         )
                     st.markdown(" ".join(status_parts))
+
+                    # Display the matches DataFrame
+                    display_cols = [
+                        'inv_sku', 'inv_description', 'inv_qty',
+                        'matched_number', 'matched_variant',
+                        'matched_title', 'matched_ean',
+                        'match_score', 'match_source', 'status',
+                    ]
+                    visible = [
+                        c for c in display_cols
+                        if c in matches_df.columns
+                    ]
                     st.dataframe(
-                        export_df,
+                        matches_df[visible],
                         use_container_width=True,
                         hide_index=True,
                         column_config={
-                            'Match %': st.column_config.ProgressColumn(
+                            'match_score': st.column_config.ProgressColumn(
                                 'Match %',
                                 min_value=0,
                                 max_value=100,
                                 format="%d%%",
                             ),
-                            'Amount': st.column_config.NumberColumn(
-                                'Amount',
+                            'inv_qty': st.column_config.NumberColumn(
+                                'Qty',
                                 format="%.0f",
                             ),
+                            'inv_sku': 'Invoice SKU',
+                            'inv_description': 'Description',
+                            'matched_number': 'Product #',
+                            'matched_variant': 'Variant',
+                            'matched_title': 'Title',
+                            'matched_ean': 'EAN',
+                            'match_source': 'Source',
+                            'status': 'Status',
                         },
                     )
 
-                    csv_data = (
-                        "\ufeff"
-                        + export_df.to_csv(sep=';', index=False)
-                    )
+                    # Derive the export from the matches DF
+                    export_df = export_from_matches_df(matches_df)
 
-                    _barcode_formats = {
-                        "standard": {
-                            "display": "Standard (A4, 2-column)",
-                            "filename": "ean_barcode_export.pdf",
-                        },
-                        "zd421_label": {
-                            "display": "ZD421 Label (50 × 100 mm)",
-                            "filename": "ean_zd421_labels.pdf",
-                        },
-                        "fast_scan": {
-                            "display": "Fast Scan (compact grid)",
-                            "filename": "ean_fast_scan.pdf",
-                        },
-                    }
+                    if not export_df.empty:
+                        csv_data = (
+                            "\ufeff"
+                            + export_df.to_csv(sep=';', index=False)
+                        )
 
-                    ean_format = st.selectbox(
-                        "Barcode PDF format",
-                        options=list(_barcode_formats),
-                        format_func=lambda f: _barcode_formats[f]["display"],
-                        key="_ean_pdf_format",
-                    )
+                        _barcode_formats = {
+                            "standard": {
+                                "display": "Standard (A4, 2-column)",
+                                "filename": "ean_barcode_export.pdf",
+                            },
+                            "zd421_label": {
+                                "display": "ZD421 Label (50 × 100 mm)",
+                                "filename": "ean_zd421_labels.pdf",
+                            },
+                            "fast_scan": {
+                                "display": "Fast Scan (compact grid)",
+                                "filename": "ean_fast_scan.pdf",
+                            },
+                        }
 
-                    dl_col1, dl_col2 = st.columns(2)
-                    with dl_col1:
-                        pdf_bytes = generate_barcode_pdf(
-                            export_df, export_format=ean_format,
+                        ean_format = st.selectbox(
+                            "Barcode PDF format",
+                            options=list(_barcode_formats),
+                            format_func=lambda f: _barcode_formats[f]["display"],
+                            key="_ean_pdf_format",
                         )
-                        st.download_button(
-                            label="Download Barcode PDF",
-                            data=pdf_bytes,
-                            file_name=_barcode_formats[ean_format]["filename"],
-                            mime="application/pdf",
-                            use_container_width=True,
-                            key="_ean_download_pdf",
-                        )
-                    with dl_col2:
-                        st.download_button(
-                            label="Download Data (CSV)",
-                            data=csv_data.encode('utf-8'),
-                            file_name="ean_barcode_export.csv",
-                            mime="text/csv; charset=utf-8",
-                            use_container_width=True,
-                            key="_ean_download",
-                        )
+
+                        dl_col1, dl_col2 = st.columns(2)
+                        with dl_col1:
+                            pdf_bytes = generate_barcode_pdf(
+                                export_df, export_format=ean_format,
+                            )
+                            st.download_button(
+                                label="Download Barcode PDF",
+                                data=pdf_bytes,
+                                file_name=_barcode_formats[ean_format]["filename"],
+                                mime="application/pdf",
+                                use_container_width=True,
+                                key="_ean_download_pdf",
+                            )
+                        with dl_col2:
+                            st.download_button(
+                                label="Download Data (CSV)",
+                                data=csv_data.encode('utf-8'),
+                                file_name="ean_barcode_export.csv",
+                                mime="text/csv; charset=utf-8",
+                                use_container_width=True,
+                                key="_ean_download",
+                            )
             else:
                 st.info(
                     "Select the **SKU / Article** column above to "

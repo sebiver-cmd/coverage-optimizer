@@ -522,6 +522,60 @@ def match_invoice_to_products(
         product_names=prod_names,
     )
 
+    # --- EAN cross-check: use EAN as a strong signal ---
+    # If the product catalogue has EAN values, build a reverse lookup
+    # from EAN → (NUMBER, VARIANT_TYPES).  For any invoice SKU that is
+    # a bare EAN (pure digits, 8/12/13 chars) or whose description
+    # contains a valid EAN, override the fuzzy match with a 100% EAN match.
+    # This ensures EAN-based and SKU-based matching stay consistent.
+    # Valid lengths: EAN-8 (8 digits), UPC-A (12 digits), EAN-13 (13 digits).
+    _VALID_EAN_LENGTHS = (8, 12, 13)
+    ean_to_product: dict[str, tuple[str, str]] = {}
+    if 'EAN' in products_df.columns:
+        for _, row in products_df.iterrows():
+            ean = re.sub(r'\D', '', str(row.get('EAN', '') or '').strip())
+            num = str(row.get('NUMBER', '') or '').strip()
+            vtype = str(row.get('VARIANT_TYPES', '') or '').strip()
+            if ean and len(ean) in _VALID_EAN_LENGTHS and num:
+                if ean not in ean_to_product:
+                    ean_to_product[ean] = (num, vtype)
+
+    if ean_to_product:
+        for inv_sku in invoice_skus.tolist():
+            # Check if the invoice SKU itself is a bare EAN
+            digits = re.sub(r'\D', '', inv_sku)
+            ean_hit = None
+            if digits and len(digits) in _VALID_EAN_LENGTHS:
+                ean_hit = ean_to_product.get(digits)
+
+            # Also check if description contains an EAN
+            if ean_hit is None and inv_sku in desc_map:
+                desc_digits = re.findall(r'\b\d{8,13}\b', desc_map[inv_sku])
+                for dd in desc_digits:
+                    if dd in ean_to_product:
+                        ean_hit = ean_to_product[dd]
+                        break
+
+            if ean_hit is not None:
+                num, vtype = ean_hit
+                # Build a composite key that resolves to the specific variant
+                if vtype:
+                    composite = f"{num} {vtype}"
+                    if composite in composite_lookup:
+                        matched_key = composite
+                    else:
+                        matched_key = num
+                else:
+                    matched_key = num
+                # Only override if the EAN match is stronger than existing
+                existing = matches.get(inv_sku)
+                if existing is None or existing['sku'] is None or existing['score'] < 100:
+                    matches[inv_sku] = {
+                        'sku': matched_key,
+                        'score': 100,
+                        'alternatives': [],
+                    }
+
     # --- Fallback: extract embedded SKUs from descriptions for unmatched ---
     # German-style invoices often have an internal Prod.-Nr. as the SKU
     # column value (e.g. "702074002") while the *actual* product code
@@ -560,6 +614,228 @@ _EXPORT_COLUMNS = [
     'SKU', 'Product Number', 'Title', 'Variant Name',
     'Amount', 'EAN', 'Match %',
 ]
+
+# Canonical column names for the matches DataFrame.
+_MATCHES_COLUMNS = [
+    'inv_row_id', 'inv_sku', 'inv_description', 'inv_qty',
+    'matched_number', 'matched_variant', 'matched_title',
+    'matched_ean', 'match_score', 'match_source', 'status',
+]
+
+
+def build_matches_df(
+    products_df: pd.DataFrame,
+    match_data: dict,
+    *,
+    manual_overrides: dict[str, str] | None = None,
+) -> pd.DataFrame:
+    """Build a unified matches DataFrame for UI display and export.
+
+    Produces a single DataFrame where each row represents one invoice line
+    and its match state.  Columns:
+
+    - ``inv_row_id`` — unique row identifier (sequential).
+    - ``inv_sku`` — invoice SKU text.
+    - ``inv_description`` — invoice description text.
+    - ``inv_qty`` — parsed invoice quantity.
+    - ``matched_number`` — product NUMBER of best match (or empty).
+    - ``matched_variant`` — VARIANT_TYPES of narrowed match.
+    - ``matched_title`` — product title.
+    - ``matched_ean`` — EAN barcode of matched variant.
+    - ``match_score`` — fuzzy match score (0–100).
+    - ``match_source`` — ``"auto-sku"``, ``"auto-ean"``, ``"manual"``,
+      or ``"unmatched"``.
+    - ``status`` — ``"ok"``, ``"ambiguous"``, or ``"needs-manual"``.
+
+    This DataFrame serves as the **single source of truth** for the
+    matching step.  The Streamlit UI renders it directly, and
+    :func:`export_from_matches_df` converts it to the final export.
+
+    Parameters
+    ----------
+    products_df:
+        Product catalogue DataFrame.
+    match_data:
+        Dict returned by :func:`match_invoice_to_products`.
+    manual_overrides:
+        Optional dict mapping invoice SKUs to augmented product SKUs
+        for manual corrections.
+    """
+    matches = dict(match_data['matches'])  # shallow copy
+    composite_lookup = match_data['composite_lookup']
+    title_lookup = match_data.get('title_lookup', {})
+    qty_map = match_data['qty_map']
+    desc_map = match_data['desc_map']
+
+    overrides = manual_overrides or {}
+
+    # Apply manual overrides on a copy so we don't mutate the original
+    for inv_sku, prod_key in overrides.items():
+        matches[inv_sku] = {
+            'sku': prod_key,
+            'score': 100,
+            'alternatives': [],
+        }
+
+    # Build a lookup from product NUMBER → best (title, variant, ean)
+    # by doing the same expansion + narrowing as build_export_from_matches
+    # but collecting per-SKU results.
+    prods = products_df[['NUMBER', 'VARIANT_TYPES', 'EAN', 'TITLE_DK']].copy()
+    prods['_num_key'] = prods['NUMBER'].astype(str).str.strip()
+
+    records: list[dict] = []
+    row_id = 0
+
+    for inv_sku, mentry in matches.items():
+        matched_key = mentry['sku']
+        score = mentry['score']
+        inv_qty = qty_map.get(inv_sku, 1.0)
+        inv_desc = desc_map.get(inv_sku, '')
+
+        if matched_key is None:
+            # Unmatched
+            records.append({
+                'inv_row_id': row_id,
+                'inv_sku': inv_sku,
+                'inv_description': inv_desc,
+                'inv_qty': inv_qty,
+                'matched_number': '',
+                'matched_variant': '',
+                'matched_title': '',
+                'matched_ean': '',
+                'match_score': 0,
+                'match_source': 'unmatched',
+                'status': 'needs-manual',
+            })
+            row_id += 1
+            continue
+
+        number, vtype = composite_lookup.get(matched_key, (matched_key, ''))
+        source = (
+            'manual' if inv_sku in overrides
+            else 'auto-sku'
+        )
+
+        # Find matching products to narrow variant
+        prod_rows = prods.loc[prods['_num_key'] == number]
+        if prod_rows.empty:
+            records.append({
+                'inv_row_id': row_id,
+                'inv_sku': inv_sku,
+                'inv_description': inv_desc,
+                'inv_qty': inv_qty,
+                'matched_number': number,
+                'matched_variant': vtype,
+                'matched_title': title_lookup.get(number, ''),
+                'matched_ean': '',
+                'match_score': score,
+                'match_source': source,
+                'status': 'ok',
+            })
+            row_id += 1
+            continue
+
+        # Build a mini-group for narrowing
+        group = prod_rows.copy()
+        group['_inv_sku'] = inv_sku
+        group['_inv_desc'] = inv_desc
+        group['_matched_number'] = number
+        group['_matched_vtype'] = vtype
+        group['_inv_qty'] = inv_qty
+        group['_score'] = score
+
+        narrowed = _narrow_group_variants(group)
+        title = title_lookup.get(number, '')
+
+        if len(narrowed) == 1:
+            r = narrowed.iloc[0]
+            var_name = str(r.get('VARIANT_TYPES', '') or '').strip()
+            ean = str(r.get('EAN', '') or '').strip()
+            status = 'ok'
+        elif len(narrowed) > 1 and vtype:
+            # Had a hint but couldn't resolve → ambiguous, show first
+            r = narrowed.iloc[0]
+            var_name = str(r.get('VARIANT_TYPES', '') or '').strip()
+            ean = str(r.get('EAN', '') or '').strip()
+            status = 'ambiguous'
+        elif len(narrowed) > 1:
+            # Multiple variants, no hint — expand all
+            for _, r in narrowed.iterrows():
+                var_name = str(r.get('VARIANT_TYPES', '') or '').strip()
+                ean = str(r.get('EAN', '') or '').strip()
+                records.append({
+                    'inv_row_id': row_id,
+                    'inv_sku': inv_sku,
+                    'inv_description': inv_desc,
+                    'inv_qty': inv_qty,
+                    'matched_number': number,
+                    'matched_variant': var_name,
+                    'matched_title': title,
+                    'matched_ean': ean,
+                    'match_score': score,
+                    'match_source': source,
+                    'status': 'ok',
+                })
+                row_id += 1
+            continue
+        else:
+            var_name = ''
+            ean = ''
+            status = 'ok'
+
+        records.append({
+            'inv_row_id': row_id,
+            'inv_sku': inv_sku,
+            'inv_description': inv_desc,
+            'inv_qty': inv_qty,
+            'matched_number': number,
+            'matched_variant': var_name,
+            'matched_title': title,
+            'matched_ean': ean,
+            'match_score': score,
+            'match_source': source,
+            'status': status,
+        })
+        row_id += 1
+
+    if not records:
+        return pd.DataFrame(columns=_MATCHES_COLUMNS)
+
+    return pd.DataFrame(records, columns=_MATCHES_COLUMNS)
+
+
+def export_from_matches_df(matches_df: pd.DataFrame) -> pd.DataFrame:
+    """Convert a matches DataFrame to the canonical export format.
+
+    Filters to rows with ``status != 'needs-manual'`` (i.e. matched rows)
+    and renames columns to the standard export column names.
+
+    This replaces the need to re-run ``build_export_from_matches`` after
+    manual overrides — the user edits ``matches_df`` directly and then
+    calls this function to produce the export.
+    """
+    if matches_df.empty:
+        return pd.DataFrame(columns=_EXPORT_COLUMNS)
+
+    # Only export rows that have a match (auto or manual)
+    exportable = matches_df.loc[
+        matches_df['match_source'] != 'unmatched'
+    ].copy()
+
+    if exportable.empty:
+        return pd.DataFrame(columns=_EXPORT_COLUMNS)
+
+    export = pd.DataFrame({
+        'SKU': exportable['inv_sku'],
+        'Product Number': exportable['matched_number'],
+        'Title': exportable['matched_title'],
+        'Variant Name': exportable['matched_variant'],
+        'Amount': exportable['inv_qty'],
+        'EAN': exportable['matched_ean'],
+        'Match %': exportable['match_score'],
+    })
+
+    return export.reset_index(drop=True)
 
 
 def _dedupe_product_rows(matched_products: pd.DataFrame) -> pd.DataFrame:
@@ -607,28 +883,99 @@ def _dedupe_product_rows(matched_products: pd.DataFrame) -> pd.DataFrame:
     return matched_products.loc[keep_idxs]
 
 
+# Regex for extracting standalone numbers from text.  Uses Unicode range
+# \u00c0–\u024f in lookbehind/lookahead to cover Latin Extended characters
+# (Danish ø, å, æ, German ü, ö, ä, etc.) so that numbers embedded in
+# European words are not accidentally extracted.
+_NUMERIC_HINT_RE = re.compile(
+    r'(?<![A-Za-z0-9\u00c0-\u024f])'
+    r'(\d+(?:[.,]\d+)?)'
+    r'(?![A-Za-z0-9\u00c0-\u024f])'
+)
+
+
+def _extract_numeric_hints(text: str) -> set[float]:
+    """Extract decimal/integer numbers from *text* that look like size hints.
+
+    Handles European decimal commas (``3,0`` → ``3.0``) as well as
+    standard decimal points.  Only returns numbers that are plausible
+    size/length values (> 0 and finite).
+
+    Used to match invoice lines like ``"GTBL 3,0"`` against product
+    variants with numeric lengths such as ``"265 cm / 3.5"``.
+    """
+    # Match numbers with optional decimal (comma or dot)
+    # Patterns like "3,0", "3.5", "265", "4.0"
+    nums: set[float] = set()
+    for m in _NUMERIC_HINT_RE.finditer(text):
+        raw = m.group(1).replace(',', '.')
+        try:
+            val = float(raw)
+            if val > 0 and math.isfinite(val):
+                nums.add(val)
+        except (ValueError, TypeError):
+            pass
+    return nums
+
+
+def _numeric_match_variants(
+    group: pd.DataFrame,
+    context_nums: set[float],
+) -> pd.DataFrame:
+    """Narrow variant rows using numeric hints from the invoice line.
+
+    For each variant name (e.g. ``"265 cm / 3.5"``), extract its numeric
+    values and check if *any* match one of the *context_nums* from the
+    invoice.  Returns only the matching rows, or the full group if no
+    rows (or all rows) match.
+    """
+    if not context_nums or group.empty:
+        return group
+
+    vt_col = group['VARIANT_TYPES'].fillna('').astype(str)
+
+    def _has_matching_number(vt: str) -> bool:
+        vt_nums = _extract_numeric_hints(vt)
+        return bool(vt_nums & context_nums)
+
+    hit_mask = vt_col.apply(_has_matching_number)
+    if hit_mask.any() and hit_mask.sum() < len(group):
+        return group.loc[hit_mask]
+    return group
+
+
 def _has_variant_hint(text: str, product_number: str) -> bool:
-    """Detect whether *text* contains a size token absent from *product_number*.
+    """Detect whether *text* contains a size/numeric token absent from *product_number*.
 
     Used as a defensive check after variant narrowing fails: if the invoice
     SKU text contains a recognised size abbreviation (e.g. ``"XXS"``,
-    ``"XL"``, ``"M"``) that is **not** part of the product NUMBER itself,
-    we treat the SKU as carrying an unresolved variant hint and limit the
-    export to a single row instead of emitting all catalogue variants with
+    ``"XL"``, ``"M"``) or a numeric value (e.g. ``"3,0"``, ``"4.5"``)
+    that is **not** part of the product NUMBER itself, we treat the SKU
+    as carrying an unresolved variant hint and limit the export to a
+    single row instead of emitting all catalogue variants with
     duplicated quantity.
 
-    This prevents the "FB 400 XXS" duplication bug where the invoice
-    intends a specific size but the narrowing logic cannot resolve it
-    (e.g. because the variant name uses an unfamiliar alias).
+    This prevents:
+    - The "FB 400 XXS" duplication bug where the invoice intends a
+      specific size but the narrowing logic cannot resolve it.
+    - The "GTBL 3,0" duplication bug where a numeric hint maps to a
+      belt length but cannot be resolved to a specific variant.
     """
     text_lower = text.lower().strip()
     num_lower = product_number.lower().strip()
+    # Check size-alias tokens
     for key in _SIZE_ALIAS_MAP:
         if len(key) < 1:
             continue
         if _boundary_pattern(key).search(text_lower):
             if not _boundary_pattern(key).search(num_lower):
                 return True
+    # Check numeric hints not present in the product number
+    text_nums = _extract_numeric_hints(text_lower)
+    num_nums = _extract_numeric_hints(num_lower)
+    extra_nums = text_nums - num_nums
+    if extra_nums:
+        return True
     return False
 
 
@@ -684,6 +1031,16 @@ def _narrow_group_variants(group: pd.DataFrame) -> pd.DataFrame:
     vt_col = group['VARIANT_TYPES'].fillna('').astype(str).str.strip()
     original_count = len(group)
 
+    # Pre-compute numeric hints from the invoice line for numeric
+    # variant matching (e.g. "GTBL 3,0" → {3.0}).
+    context_text = inv_sku
+    if inv_desc:
+        context_text = f"{context_text} {inv_desc}"
+    context_nums = _extract_numeric_hints(context_text)
+    number_nums = _extract_numeric_hints(number)
+    # Only consider hints NOT already in the product number
+    extra_nums = context_nums - number_nums
+
     if vtype:
         # ---- Composite key specified a variant type ----
         # Try exact match on VARIANT_TYPES
@@ -701,6 +1058,12 @@ def _narrow_group_variants(group: pd.DataFrame) -> pd.DataFrame:
         if len(narrowed) < original_count:
             return _dedupe_product_rows(narrowed)
 
+        # Try numeric matching (e.g. vtype "3,0" → 3.0 against "3.5")
+        if extra_nums:
+            num_narrowed = _numeric_match_variants(group, extra_nums)
+            if len(num_narrowed) < original_count:
+                return _dedupe_product_rows(num_narrowed)
+
         # Variant hint existed (vtype was set) but unresolvable.
         # Emit ONE row to prevent duplicated quantity across variants.
         return _dedupe_product_rows(group).head(1)
@@ -710,9 +1073,17 @@ def _narrow_group_variants(group: pd.DataFrame) -> pd.DataFrame:
     if len(narrowed) < original_count:
         return _dedupe_product_rows(narrowed)
 
+    # Try numeric matching for cases like "GTBL 3,0" where the number
+    # 3.0 matches a variant like "285 cm / 3.0"
+    if extra_nums:
+        num_narrowed = _numeric_match_variants(group, extra_nums)
+        if len(num_narrowed) < original_count:
+            return _dedupe_product_rows(num_narrowed)
+
     # Check if the invoice SKU text carries an unresolved variant hint
     # (e.g. "FB 400 XXS" has size token "XXS" not in product number
-    # "TO-FB400") — limit to 1 row if so.
+    # "TO-FB400", or "GTBL 3,0" has numeric "3.0" not in "GTBL")
+    # — limit to 1 row if so.
     if _has_variant_hint(inv_sku, number):
         return _dedupe_product_rows(group).head(1)
 
