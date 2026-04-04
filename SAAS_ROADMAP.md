@@ -476,7 +476,7 @@ add per-caller rate limiting.
 **Mitigation**: use UUID (standard for SaaS; avoids enumeration).
 
 ### Task 4.2 — Authentication (JWT)
-- [ ] Task 4.2
+- [x] Task 4.2
 
 **Objective**: Signup, login, JWT issuance, tenant-scoped middleware.
 

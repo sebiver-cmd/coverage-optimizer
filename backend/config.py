@@ -122,9 +122,30 @@ class Settings(BaseSettings):
         ),
     )
 
-    # -- Crypto / Auth (placeholders for future tasks) --------------------
+    # -- Crypto / Auth ----------------------------------------------------
     encryption_key: Optional[str] = Field(default=None)
-    jwt_secret: Optional[str] = Field(default=None)
+    jwt_secret: Optional[str] = Field(
+        default=None,
+        description=(
+            "Secret key for signing JWTs.  Required in prod; "
+            "falls back to 'dev-secret' only when SBOPTIMA_ENV=dev."
+        ),
+    )
+    jwt_algorithm: str = Field(
+        default="HS256",
+        description="Algorithm used when signing/verifying JWTs.",
+    )
+    jwt_access_token_exp_minutes: int = Field(
+        default=60,
+        description="Lifetime of an access token in minutes.",
+    )
+    sboptima_auth_required: bool = Field(
+        default=False,
+        description=(
+            "When True, protected endpoints reject unauthenticated requests. "
+            "When False (default), auth is optional — useful for local dev / migration."
+        ),
+    )
 
     # -----------------------------------------------------------------
     # Validators
@@ -159,6 +180,22 @@ class Settings(BaseSettings):
         if not self.cors_origins:
             return []
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    def get_jwt_secret(self) -> str:
+        """Return the effective JWT signing secret.
+
+        In *dev* mode (``sboptima_env == "dev"``), a missing secret falls
+        back to ``"dev-secret"`` so that local development works without
+        explicit configuration.  In any other environment a missing secret
+        raises :class:`ValueError`.
+        """
+        if self.jwt_secret:
+            return self.jwt_secret
+        if self.sboptima_env == "dev":
+            return "dev-secret"
+        raise ValueError(
+            "JWT_SECRET must be set when SBOPTIMA_ENV is not 'dev'."
+        )
 
     # -----------------------------------------------------------------
     # Safe representation (no secrets)
