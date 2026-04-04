@@ -168,6 +168,12 @@ _log = logging.getLogger(__name__)
 # Multilingual header/section detection for PDF line-item extraction
 # ---------------------------------------------------------------------------
 
+#: Max continuation lines to scan for size/colour info after a line item.
+_MAX_CONTINUATION_LINES = 5
+
+#: Max lines to feed to the LLM for line-item extraction (cost control).
+_MAX_LLM_LINES = 80
+
 #: Keywords that signal the start of a line-item section in multilingual invoices.
 _LINE_SECTION_HEADERS = re.compile(
     r'\b(?:'
@@ -398,7 +404,7 @@ def _extract_line_items_german_invoice(full_text: str) -> pd.DataFrame | None:
 
             # Scan next few lines for size/colour
             extras: list[str] = []
-            for j in range(i + 1, min(i + 5, len(lines))):
+            for j in range(i + 1, min(i + _MAX_CONTINUATION_LINES, len(lines))):
                 nxt = lines[j].strip()
                 if _line_re.match(nxt):
                     break
@@ -603,7 +609,7 @@ def _identify_line_item_section(full_text: str) -> str:
 def _build_line_item_extraction_prompt(text_section: str) -> str:
     """Build a prompt for LLM-based line-item extraction from PDF text."""
     # Limit to ~80 lines to keep costs down
-    lines = text_section.splitlines()[:80]
+    lines = text_section.splitlines()[:_MAX_LLM_LINES]
     sample = '\n'.join(lines)
 
     return (

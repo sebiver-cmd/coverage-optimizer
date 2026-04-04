@@ -330,11 +330,13 @@ class TestGermanInvoiceParsing(unittest.TestCase):
         self.assertTrue(any('(' in d and ')' in d for d in descs))
 
     def test_article_numbers_are_numeric(self):
+        """German invoice Prod.-Nr. values should be pure digit codes."""
         for val in self.df['Article No'].tolist():
             val_stripped = val.strip()
             if val_stripped:
+                # The German regex extracts 6-12 digit Prod.-Nr. codes
                 self.assertTrue(val_stripped.isdigit(),
-                                f"Expected numeric article no, got: {val_stripped!r}")
+                                f"Expected numeric Prod.-Nr., got: {val_stripped!r}")
 
 
 # ---------------------------------------------------------------------------
