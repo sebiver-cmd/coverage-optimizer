@@ -1939,24 +1939,25 @@ def generate_barcode_pdf(
 # ---------------------------------------------------------------------------
 
 def _generate_barcode_pdf_zd421(export_df: pd.DataFrame) -> bytes:
-    """Generate a label-printer PDF (50 mm × 100 mm, one barcode per page).
+    """Generate a label-printer PDF (100 mm × 50 mm landscape, one barcode per page).
 
     Designed for the ZD421 (or similar) label printer.  Each page
     holds exactly one barcode with concise product metadata.
+    Text runs along the longer (100 mm) edge of the label.
     """
     from fpdf import FPDF
 
-    page_w = 50   # mm
-    page_h = 100  # mm
+    page_w = 100  # mm  (landscape width)
+    page_h = 50   # mm  (landscape height)
 
-    pdf = FPDF(orientation='P', unit='mm', format=(page_w, page_h))
+    pdf = FPDF(orientation='L', unit='mm', format=(page_h, page_w))
     pdf.set_auto_page_break(auto=False)
 
     def _latin1(text: str) -> str:
         return text.encode('latin-1', 'replace').decode('latin-1')
 
-    barcode_w = 44   # mm – fits within 50 mm page with margins
-    barcode_h = 20   # mm
+    barcode_w = 70   # mm – fits within 100 mm page with margins
+    barcode_h = 22   # mm
     margin = 3       # mm
 
     label_count = 0
@@ -1979,7 +1980,7 @@ def _generate_barcode_pdf_zd421(export_df: pd.DataFrame) -> bytes:
 
         # Title / variant
         pdf.set_font('Helvetica', '', 6)
-        title = str(row.get('Title', ''))[:40]
+        title = str(row.get('Title', ''))[:60]
         variant = str(row.get('Variant Name', '') or '')
         if variant:
             title = f"{title} - {variant}"
