@@ -525,16 +525,18 @@ def match_invoice_to_products(
     # --- EAN cross-check: use EAN as a strong signal ---
     # If the product catalogue has EAN values, build a reverse lookup
     # from EAN → (NUMBER, VARIANT_TYPES).  For any invoice SKU that is
-    # a bare EAN (pure digits, 8 or 13 chars) or whose description
+    # a bare EAN (pure digits, 8/12/13 chars) or whose description
     # contains a valid EAN, override the fuzzy match with a 100% EAN match.
     # This ensures EAN-based and SKU-based matching stay consistent.
+    # Valid lengths: EAN-8 (8 digits), UPC-A (12 digits), EAN-13 (13 digits).
+    _VALID_EAN_LENGTHS = (8, 12, 13)
     ean_to_product: dict[str, tuple[str, str]] = {}
     if 'EAN' in products_df.columns:
         for _, row in products_df.iterrows():
             ean = re.sub(r'\D', '', str(row.get('EAN', '') or '').strip())
             num = str(row.get('NUMBER', '') or '').strip()
             vtype = str(row.get('VARIANT_TYPES', '') or '').strip()
-            if ean and len(ean) in (8, 12, 13) and num:
+            if ean and len(ean) in _VALID_EAN_LENGTHS and num:
                 if ean not in ean_to_product:
                     ean_to_product[ean] = (num, vtype)
 
@@ -543,7 +545,7 @@ def match_invoice_to_products(
             # Check if the invoice SKU itself is a bare EAN
             digits = re.sub(r'\D', '', inv_sku)
             ean_hit = None
-            if digits and len(digits) in (8, 12, 13):
+            if digits and len(digits) in _VALID_EAN_LENGTHS:
                 ean_hit = ean_to_product.get(digits)
 
             # Also check if description contains an EAN
@@ -758,8 +760,7 @@ def build_matches_df(
             status = 'ambiguous'
         elif len(narrowed) > 1:
             # Multiple variants, no hint — expand all
-            for i in range(len(narrowed)):
-                r = narrowed.iloc[i]
+            for _, r in narrowed.iterrows():
                 var_name = str(r.get('VARIANT_TYPES', '') or '').strip()
                 ean = str(r.get('EAN', '') or '').strip()
                 records.append({
@@ -882,6 +883,17 @@ def _dedupe_product_rows(matched_products: pd.DataFrame) -> pd.DataFrame:
     return matched_products.loc[keep_idxs]
 
 
+# Regex for extracting standalone numbers from text.  Uses Unicode range
+# \u00c0–\u024f in lookbehind/lookahead to cover Latin Extended characters
+# (Danish ø, å, æ, German ü, ö, ä, etc.) so that numbers embedded in
+# European words are not accidentally extracted.
+_NUMERIC_HINT_RE = re.compile(
+    r'(?<![A-Za-z0-9\u00c0-\u024f])'
+    r'(\d+(?:[.,]\d+)?)'
+    r'(?![A-Za-z0-9\u00c0-\u024f])'
+)
+
+
 def _extract_numeric_hints(text: str) -> set[float]:
     """Extract decimal/integer numbers from *text* that look like size hints.
 
@@ -895,7 +907,7 @@ def _extract_numeric_hints(text: str) -> set[float]:
     # Match numbers with optional decimal (comma or dot)
     # Patterns like "3,0", "3.5", "265", "4.0"
     nums: set[float] = set()
-    for m in re.finditer(r'(?<![A-Za-z0-9\u00c0-\u024f])(\d+(?:[.,]\d+)?)(?![A-Za-z0-9\u00c0-\u024f])', text):
+    for m in _NUMERIC_HINT_RE.finditer(text):
         raw = m.group(1).replace(',', '.')
         try:
             val = float(raw)
