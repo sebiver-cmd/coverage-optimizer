@@ -882,5 +882,367 @@ class TestHeuristicHelpers(unittest.TestCase):
         self.assertEqual(result['description'], 'Description')
 
 
+# ===================================================================
+# DataFrame-centric deduplication — FB 400 XXS scenario
+# ===================================================================
+
+def _make_products_df(rows: list[dict]) -> pd.DataFrame:
+    """Helper to build a mini product catalogue DataFrame."""
+    cols = ['NUMBER', 'TITLE_DK', 'VARIANT_ID', 'VARIANT_TYPES', 'EAN']
+    data = []
+    for r in rows:
+        data.append({c: r.get(c, '') for c in cols})
+    return pd.DataFrame(data)
+
+
+def _make_invoice_df(rows: list[dict], cols=None) -> pd.DataFrame:
+    """Helper to build a mini invoice DataFrame."""
+    if cols is None:
+        cols = list(rows[0].keys()) if rows else []
+    return pd.DataFrame(rows, columns=cols)
+
+
+class TestBuildExportNoDuplication(unittest.TestCase):
+    """Regression tests for the FB 400 XXS duplication scenario.
+
+    When the product catalogue has multiple rows for the same
+    (NUMBER, VARIANT_TYPES) — e.g. different VARIANT_IDs sharing the
+    same type text — the export must NOT duplicate the SKU row.
+    """
+
+    def _run_export(self, products, invoice_rows, inv_sku_col='SKU',
+                    inv_qty_col='Qty', inv_desc_col=None):
+        from domain.invoice_ean import (
+            match_invoice_to_products, build_export_from_matches,
+        )
+        products_df = _make_products_df(products)
+        invoice_df = _make_invoice_df(invoice_rows)
+        mdata = match_invoice_to_products(
+            products_df, invoice_df, inv_sku_col,
+            inv_qty_col, threshold=60,
+            invoice_desc_col=inv_desc_col,
+        )
+        return build_export_from_matches(products_df, mdata)
+
+    def test_fb400_xxs_not_duplicated(self):
+        """SKU 'FB 400 XXS' should appear exactly once, not duplicated
+        across multiple catalogue entries for the same variant type."""
+        products = [
+            {'NUMBER': 'FB 400', 'TITLE_DK': 'Fighter Belt',
+             'VARIANT_ID': '101', 'VARIANT_TYPES': 'XXS', 'EAN': '111'},
+            {'NUMBER': 'FB 400', 'TITLE_DK': 'Fighter Belt',
+             'VARIANT_ID': '102', 'VARIANT_TYPES': 'XXS', 'EAN': '222'},
+            {'NUMBER': 'FB 400', 'TITLE_DK': 'Fighter Belt',
+             'VARIANT_ID': '103', 'VARIANT_TYPES': 'XS', 'EAN': '333'},
+            {'NUMBER': 'FB 400', 'TITLE_DK': 'Fighter Belt',
+             'VARIANT_ID': '104', 'VARIANT_TYPES': 'S', 'EAN': '444'},
+        ]
+        invoice = [{'SKU': 'FB 400 XXS', 'Qty': '5', 'Desc': 'Belt XXS'}]
+        export = self._run_export(products, invoice, inv_desc_col='Desc')
+
+        # Should have exactly one row for "FB 400 XXS"
+        xxs_rows = export[export['SKU'] == 'FB 400 XXS']
+        self.assertEqual(len(xxs_rows), 1, "FB 400 XXS should not be duplicated")
+        self.assertEqual(xxs_rows.iloc[0]['Variant Name'], 'XXS')
+        self.assertEqual(xxs_rows.iloc[0]['Amount'], 5.0)
+
+    def test_quantity_not_replicated_across_variants(self):
+        """When catalogue has duplicate variant entries, qty must NOT be
+        replicated per catalogue row."""
+        products = [
+            {'NUMBER': 'AB100', 'TITLE_DK': 'Gloves',
+             'VARIANT_ID': '1', 'VARIANT_TYPES': 'M', 'EAN': ''},
+            {'NUMBER': 'AB100', 'TITLE_DK': 'Gloves',
+             'VARIANT_ID': '2', 'VARIANT_TYPES': 'M', 'EAN': '555'},
+        ]
+        invoice = [{'SKU': 'AB100 M', 'Qty': '10'}]
+        export = self._run_export(products, invoice)
+
+        m_rows = export[export['SKU'] == 'AB100 M']
+        self.assertEqual(len(m_rows), 1, "Should be deduplicated to one row")
+        self.assertEqual(m_rows.iloc[0]['Amount'], 10.0)
+        # Should prefer the row with EAN
+        self.assertEqual(m_rows.iloc[0]['EAN'], '555')
+
+    def test_distinct_variants_not_collapsed(self):
+        """Different variant types should NOT be collapsed — only
+        duplicate (NUMBER, VARIANT_TYPES) combos are deduplicated."""
+        products = [
+            {'NUMBER': 'CD200', 'TITLE_DK': 'Shirt',
+             'VARIANT_ID': '1', 'VARIANT_TYPES': 'S', 'EAN': '111'},
+            {'NUMBER': 'CD200', 'TITLE_DK': 'Shirt',
+             'VARIANT_ID': '2', 'VARIANT_TYPES': 'M', 'EAN': '222'},
+            {'NUMBER': 'CD200', 'TITLE_DK': 'Shirt',
+             'VARIANT_ID': '3', 'VARIANT_TYPES': 'L', 'EAN': '333'},
+        ]
+        # Invoice SKU matches base product (no variant in SKU text)
+        invoice = [{'SKU': 'CD200', 'Qty': '3'}]
+        export = self._run_export(products, invoice)
+
+        # All three distinct variants should appear (no dedup here)
+        cd_rows = export[export['Product Number'] == 'CD200']
+        self.assertEqual(len(cd_rows), 3)
+        variant_names = set(cd_rows['Variant Name'])
+        self.assertEqual(variant_names, {'S', 'M', 'L'})
+
+    def test_single_variant_exact_match(self):
+        """When variant narrowing finds an exact match, only that row appears."""
+        products = [
+            {'NUMBER': 'EF300', 'TITLE_DK': 'Pants',
+             'VARIANT_ID': '1', 'VARIANT_TYPES': 'XXS', 'EAN': '111'},
+            {'NUMBER': 'EF300', 'TITLE_DK': 'Pants',
+             'VARIANT_ID': '2', 'VARIANT_TYPES': 'XS', 'EAN': '222'},
+            {'NUMBER': 'EF300', 'TITLE_DK': 'Pants',
+             'VARIANT_ID': '3', 'VARIANT_TYPES': 'S', 'EAN': '333'},
+        ]
+        invoice = [{'SKU': 'EF300 XS', 'Qty': '7'}]
+        export = self._run_export(products, invoice)
+
+        xs_rows = export[export['SKU'] == 'EF300 XS']
+        self.assertEqual(len(xs_rows), 1)
+        self.assertEqual(xs_rows.iloc[0]['Variant Name'], 'XS')
+        self.assertEqual(xs_rows.iloc[0]['Amount'], 7.0)
+
+    def test_no_variant_product_not_duplicated(self):
+        """Product with no variants should produce exactly one row."""
+        products = [
+            {'NUMBER': 'GH500', 'TITLE_DK': 'Simple Product',
+             'VARIANT_ID': '', 'VARIANT_TYPES': '', 'EAN': '999'},
+        ]
+        invoice = [{'SKU': 'GH500', 'Qty': '2'}]
+        export = self._run_export(products, invoice)
+
+        self.assertEqual(len(export), 1)
+        self.assertEqual(export.iloc[0]['SKU'], 'GH500')
+        self.assertEqual(export.iloc[0]['Amount'], 2.0)
+
+
+class TestBuildExportIncompleteLLMMapping(unittest.TestCase):
+    """Ensure the DataFrame-centric design prevents duplication even
+    when the LLM output is incomplete and heuristic fallback is used."""
+
+    def test_heuristic_fallback_still_prevents_duplication(self):
+        """Even without LLM mapping, the deduplication pipeline
+        should prevent row duplication from catalogue duplicates."""
+        from domain.invoice_ean import (
+            match_invoice_to_products, build_export_from_matches,
+        )
+        products = _make_products_df([
+            {'NUMBER': 'FB 400', 'TITLE_DK': 'Belt',
+             'VARIANT_ID': '1', 'VARIANT_TYPES': 'XXS', 'EAN': '111'},
+            {'NUMBER': 'FB 400', 'TITLE_DK': 'Belt',
+             'VARIANT_ID': '2', 'VARIANT_TYPES': 'XXS', 'EAN': ''},
+            {'NUMBER': 'FB 400', 'TITLE_DK': 'Belt',
+             'VARIANT_ID': '3', 'VARIANT_TYPES': 'XS', 'EAN': '333'},
+        ])
+        invoice = pd.DataFrame({
+            'Article No': ['FB 400 XXS'],
+            'Qty': ['5'],
+            'Designation': ['Belt XXS'],
+        })
+        mdata = match_invoice_to_products(
+            products, invoice, 'Article No', 'Qty',
+            threshold=60, invoice_desc_col='Designation',
+        )
+        export = build_export_from_matches(products, mdata)
+
+        xxs_rows = export[export['Variant Name'] == 'XXS']
+        self.assertEqual(
+            len(xxs_rows), 1,
+            "Duplicate catalogue entries for XXS should be deduplicated",
+        )
+        self.assertEqual(xxs_rows.iloc[0]['Amount'], 5.0)
+        # Should prefer the row with EAN
+        self.assertEqual(xxs_rows.iloc[0]['EAN'], '111')
+
+
+# ===================================================================
+# debug_print_mapping helper
+# ===================================================================
+
+class TestDebugPrintMapping(unittest.TestCase):
+    """Tests for the developer debugging helper."""
+
+    def test_returns_string_with_basic_info(self):
+        from domain.supplier import debug_print_mapping
+
+        df = pd.DataFrame({'SKU': ['X1', 'X2'], 'Price': [10, 20]})
+        mapping = {'sku': 'SKU', 'price': 'Price'}
+        result = debug_print_mapping(df, mapping)
+        self.assertIn('Column Mapping Debug', result)
+        self.assertIn('SKU', result)
+        self.assertIn('Price', result)
+        self.assertIn("'sku': 'SKU'", result)
+
+    def test_handles_none_mapping(self):
+        from domain.supplier import debug_print_mapping
+
+        df = pd.DataFrame({'A': [1]})
+        result = debug_print_mapping(df)
+        self.assertIn('None', result)
+
+    def test_includes_llm_raw(self):
+        from domain.supplier import debug_print_mapping
+
+        df = pd.DataFrame({'A': [1]})
+        result = debug_print_mapping(
+            df, llm_raw='{"A": "sku"}',
+        )
+        self.assertIn('LLM raw response', result)
+        self.assertIn('{"A": "sku"}', result)
+
+    def test_includes_final_df(self):
+        from domain.supplier import debug_print_mapping
+
+        df = pd.DataFrame({'A': [1]})
+        final = pd.DataFrame({'SKU': ['X1'], 'Amount': [5]})
+        result = debug_print_mapping(df, final_df=final)
+        self.assertIn('Final DataFrame', result)
+        self.assertIn('X1', result)
+
+    def test_writes_to_out(self):
+        from domain.supplier import debug_print_mapping
+
+        df = pd.DataFrame({'A': [1]})
+        buf = io.StringIO()
+        debug_print_mapping(df, out=buf)
+        self.assertIn('Column Mapping Debug', buf.getvalue())
+
+
+# ===================================================================
+# _dedupe_product_rows — direct unit tests
+# ===================================================================
+
+class TestDedupeProductRows(unittest.TestCase):
+    """Tests for the internal _dedupe_product_rows helper."""
+
+    def test_single_row_unchanged(self):
+        from domain.invoice_ean import _dedupe_product_rows
+
+        df = _make_products_df([
+            {'NUMBER': 'A1', 'VARIANT_TYPES': 'S', 'EAN': '111'},
+        ])
+        result = _dedupe_product_rows(df)
+        self.assertEqual(len(result), 1)
+
+    def test_unique_variants_unchanged(self):
+        from domain.invoice_ean import _dedupe_product_rows
+
+        df = _make_products_df([
+            {'NUMBER': 'A1', 'VARIANT_TYPES': 'S', 'EAN': '111'},
+            {'NUMBER': 'A1', 'VARIANT_TYPES': 'M', 'EAN': '222'},
+            {'NUMBER': 'A1', 'VARIANT_TYPES': 'L', 'EAN': '333'},
+        ])
+        result = _dedupe_product_rows(df)
+        self.assertEqual(len(result), 3)
+
+    def test_duplicate_variants_deduped(self):
+        from domain.invoice_ean import _dedupe_product_rows
+
+        df = _make_products_df([
+            {'NUMBER': 'A1', 'VARIANT_TYPES': 'S', 'EAN': '111'},
+            {'NUMBER': 'A1', 'VARIANT_TYPES': 'S', 'EAN': ''},
+        ])
+        result = _dedupe_product_rows(df)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result.iloc[0]['EAN'], '111')
+
+    def test_prefers_row_with_ean(self):
+        from domain.invoice_ean import _dedupe_product_rows
+
+        df = _make_products_df([
+            {'NUMBER': 'B2', 'VARIANT_TYPES': 'M', 'EAN': ''},
+            {'NUMBER': 'B2', 'VARIANT_TYPES': 'M', 'EAN': '999'},
+        ])
+        result = _dedupe_product_rows(df)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result.iloc[0]['EAN'], '999')
+
+    def test_empty_df_unchanged(self):
+        from domain.invoice_ean import _dedupe_product_rows
+
+        df = _make_products_df([])
+        result = _dedupe_product_rows(df)
+        self.assertEqual(len(result), 0)
+
+
+# ===================================================================
+# _normalize_export_df — direct unit tests
+# ===================================================================
+
+class TestNormalizeExportDf(unittest.TestCase):
+    """Tests for the final export DataFrame normalization."""
+
+    def test_no_duplicates_unchanged(self):
+        from domain.invoice_ean import _normalize_export_df
+
+        df = pd.DataFrame({
+            'SKU': ['A', 'B'],
+            'Product Number': ['P1', 'P2'],
+            'Variant Name': ['S', 'M'],
+            'Title': ['T1', 'T2'],
+            'Amount': [1, 2],
+            'EAN': ['111', '222'],
+            'Match %': [90, 85],
+        })
+        result = _normalize_export_df(df)
+        self.assertEqual(len(result), 2)
+
+    def test_duplicates_deduped(self):
+        from domain.invoice_ean import _normalize_export_df
+
+        df = pd.DataFrame({
+            'SKU': ['A', 'A'],
+            'Product Number': ['P1', 'P1'],
+            'Variant Name': ['S', 'S'],
+            'Title': ['T1', 'T1'],
+            'Amount': [5, 5],
+            'EAN': ['', '111'],
+            'Match %': [90, 90],
+        })
+        result = _normalize_export_df(df)
+        self.assertEqual(len(result), 1)
+        # Should prefer row with EAN
+        self.assertEqual(result.iloc[0]['EAN'], '111')
+
+    def test_empty_df_unchanged(self):
+        from domain.invoice_ean import _normalize_export_df
+
+        df = pd.DataFrame(columns=[
+            'SKU', 'Product Number', 'Variant Name',
+            'Title', 'Amount', 'EAN', 'Match %',
+        ])
+        result = _normalize_export_df(df)
+        self.assertEqual(len(result), 0)
+
+
+# ===================================================================
+# Enhanced LLM prompt — domain-specific checks
+# ===================================================================
+
+class TestBuildMappingPromptEnhanced(unittest.TestCase):
+    """Tests for the improved LLM prompt content."""
+
+    def test_prompt_distinguishes_qty_from_price(self):
+        """Prompt should include guidance on distinguishing qty from price."""
+        df = pd.DataFrame({'Antal': [5], 'Pris': [99.50]})
+        prompt = _build_mapping_prompt(df)
+        self.assertIn('count of units', prompt)
+        self.assertIn('NOT a price', prompt)
+
+    def test_prompt_explains_sku_vs_variant(self):
+        """Prompt should explain that SKU is the product code, not variant."""
+        df = pd.DataFrame({'Art': ['FB 400 XXS']})
+        prompt = _build_mapping_prompt(df)
+        self.assertIn('variant', prompt.lower())
+        self.assertIn('base product', prompt.lower())
+
+    def test_prompt_warns_about_line_totals(self):
+        """Prompt should warn about not mapping line totals to price."""
+        df = pd.DataFrame({'Item Value': [220.00]})
+        prompt = _build_mapping_prompt(df)
+        self.assertIn('line-item total', prompt.lower())
+
+
 if __name__ == '__main__':
     unittest.main()

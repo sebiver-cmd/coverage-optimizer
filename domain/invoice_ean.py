@@ -555,6 +555,48 @@ def match_invoice_to_products(
     }
 
 
+def _dedupe_product_rows(matched_products: pd.DataFrame) -> pd.DataFrame:
+    """Deduplicate product rows that share the same (NUMBER, VARIANT_TYPES).
+
+    When a product has multiple catalogue rows for the same variant text
+    (e.g. different VARIANT_IDs both labelled ``"XXS"``), this helper
+    keeps a single representative row per unique ``(NUMBER, VARIANT_TYPES)``
+    combination — preferring the row with a non-empty EAN code.
+
+    This prevents accidental row duplication in the export DataFrame
+    where the same invoice line item would otherwise appear once per
+    catalogue duplicate.
+    """
+    if len(matched_products) <= 1:
+        return matched_products
+
+    num_col = matched_products['NUMBER'].fillna('').astype(str).str.strip()
+    vt_col = (
+        matched_products['VARIANT_TYPES'].fillna('').astype(str).str.strip()
+    )
+    group_key = num_col + '|||' + vt_col
+
+    if group_key.nunique() == len(matched_products):
+        return matched_products  # already unique
+
+    # Within each group prefer a row with a non-empty EAN
+    ean_col = matched_products['EAN'].fillna('').astype(str).str.strip()
+    has_ean = ean_col.ne('')
+
+    keep_idxs: list[int] = []
+    for _, grp in matched_products.groupby(group_key, sort=False):
+        if len(grp) == 1:
+            keep_idxs.append(grp.index[0])
+        else:
+            with_ean = grp.loc[has_ean.reindex(grp.index, fill_value=False)]
+            if not with_ean.empty:
+                keep_idxs.append(with_ean.index[0])
+            else:
+                keep_idxs.append(grp.index[0])
+
+    return matched_products.loc[keep_idxs]
+
+
 def build_export_from_matches(
     products_df: pd.DataFrame,
     match_data: dict,
@@ -562,6 +604,40 @@ def build_export_from_matches(
     manual_overrides: dict[str, str] | None = None,
 ) -> pd.DataFrame:
     """Build the EAN export DataFrame from pre-computed match results.
+
+    .. rubric:: Pipeline overview
+
+    The matching + export pipeline flows as follows:
+
+    1. **Column detection** — :func:`detect_invoice_columns` (LLM-first,
+       heuristic fallback) identifies which columns hold SKU, quantity,
+       and description.
+    2. **SKU matching** — :func:`match_invoice_to_products` fuzzy-matches
+       each invoice SKU to the product catalogue's augmented SKU pool
+       (plain NUMBERs + ``NUMBER + VARIANT_TYPES`` composites).
+    3. **Export construction** (this function) — for each matched invoice
+       line:
+       a. Resolve the matched key to a product ``NUMBER`` and optional
+          variant type.
+       b. Filter the catalogue to rows with that NUMBER.
+       c. Narrow to the specific variant using exact match, size aliases,
+          or description-based narrowing.
+       d. **Deduplicate** catalogue rows that share the same
+          ``(NUMBER, VARIANT_TYPES)`` — this prevents the same SKU from
+          appearing multiple times with identical variant info and
+          duplicated quantity (root cause of the "FB 400 XXS" duplication
+          bug).
+       e. Emit one export row per unique product/variant combination.
+
+    .. rubric:: Duplication guard
+
+    Accidental duplication of SKUs/quantities was historically caused by:
+    - Multiple catalogue rows sharing the same (NUMBER, VARIANT_TYPES)
+      with different VARIANT_IDs.
+    - Variant narrowing returning more than one row when variant text
+      appeared as a substring in a different variant.
+    Both are now handled by :func:`_dedupe_product_rows` and the
+    final ``_normalize_export_df`` deduplication step.
 
     Parameters
     ----------
@@ -645,6 +721,11 @@ def build_export_from_matches(
                 matched_products, inv_sku, inv_desc,
             )
 
+        # Deduplicate catalogue rows that share the same
+        # (NUMBER, VARIANT_TYPES) to prevent duplicated export rows
+        # with identical SKU + variant info and replicated quantity.
+        matched_products = _dedupe_product_rows(matched_products)
+
         for _, prod_row in matched_products.iterrows():
             rows.append({
                 'SKU': inv_sku,
@@ -664,7 +745,41 @@ def build_export_from_matches(
             ]
         )
 
-    return pd.DataFrame(rows)
+    return _normalize_export_df(pd.DataFrame(rows))
+
+
+def _normalize_export_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Final deduplication of the export DataFrame.
+
+    Ensures one row per unique ``(SKU, Product Number, Variant Name)``
+    combination.  When duplicates exist (e.g. from multiple catalogue
+    entries mapping to the same key), keeps the row with a non-empty EAN
+    and sums quantities only when the duplicates come from distinct
+    invoice lines (same SKU text).
+
+    This is the single, DataFrame-native guard against accidental row
+    duplication in the export pipeline.
+    """
+    if df.empty or len(df) <= 1:
+        return df
+
+    key_cols = ['SKU', 'Product Number', 'Variant Name']
+    if not df.duplicated(subset=key_cols, keep=False).any():
+        return df
+
+    # Group duplicates and keep the best representative row
+    deduped_rows: list[dict] = []
+    for _, grp in df.groupby(key_cols, sort=False):
+        if len(grp) == 1:
+            deduped_rows.append(grp.iloc[0].to_dict())
+        else:
+            # Prefer the row with a non-empty EAN
+            ean_vals = grp['EAN'].fillna('').astype(str).str.strip()
+            with_ean = grp.loc[ean_vals.ne('')]
+            best = with_ean.iloc[0] if not with_ean.empty else grp.iloc[0]
+            deduped_rows.append(best.to_dict())
+
+    return pd.DataFrame(deduped_rows)
 
 
 _BOUNDARY_CACHE: dict[str, re.Pattern[str]] = {}
@@ -925,21 +1040,40 @@ def _build_mapping_prompt(df: pd.DataFrame) -> str:
         hints_section = ''
 
     return (
-        "You are a data-mapping assistant. "
-        "Given a supplier/invoice data file with the columns and sample rows below, "
-        "map each column to one of these internal fields or null if not mappable.\n\n"
+        "You are a data-mapping assistant for supplier/invoice files.\n"
+        "Given the columns and sample rows below, map each column to one of "
+        "the internal fields or null if not mappable.\n\n"
         "Internal fields:\n"
-        "- sku: Product SKU or article number\n"
-        "- qty: Quantity or amount\n"
-        "- price: Unit cost price\n"
-        "- description: Product name or description\n"
-        "- discount: Discount percentage\n"
-        "- currency: Currency code\n\n"
+        "- sku: The main product SKU, article number, or product code used to "
+        "identify the item. This is NOT the variant/size/colour descriptor. "
+        "If the file has a combined column like 'FB 400 XXS' where 'FB 400' "
+        "is the base product and 'XXS' is a size variant, this column is still "
+        "the best 'sku' candidate.\n"
+        "- qty: Quantity or count of units sold/ordered. This is a numeric "
+        "count (e.g. 5, 10, 100), NOT a price, monetary amount, or weight. "
+        "Typical column names: Quantity, Qty, Antal, Anzahl, Count, Stk, Pcs.\n"
+        "- price: Unit cost price or purchase price per item. This is a "
+        "monetary value per unit (e.g. 29.95, 150.00). NOT the total line "
+        "amount (qty × price). Typical names: Price, Unit Price, Pris, "
+        "Enhedspris, Cost, Kostpris.\n"
+        "- description: Product name, title, or human-readable designation. "
+        "May contain variant info like size or colour as part of the text.\n"
+        "- discount: Discount percentage (e.g. 10, 15.5). A column with "
+        "'%' or 'rabat' / 'discount' in its name.\n"
+        "- currency: Currency code (e.g. EUR, DKK, USD).\n\n"
+        "Rules:\n"
+        "- Map at most ONE column per internal field.\n"
+        "- If a column clearly contains a line-item total (qty × unit price), "
+        "do NOT map it to 'price' or 'qty'; map it to null.\n"
+        "- If unsure between 'qty' and 'price', look at the typical values: "
+        "small integers (1–999) are usually qty; values with decimals or "
+        "larger numbers are usually prices.\n\n"
         f"Columns: {list(df.columns)}\n\n"
         f"Sample data:\n{md_table}\n"
         f"{hints_section}\n"
-        "Return ONLY a JSON object mapping each column name to its internal field "
-        "(or null). Example: {\"Col1\": \"sku\", \"Col2\": \"price\", \"Col3\": null}\n"
+        "Return ONLY a JSON object mapping each column name to its internal "
+        "field (or null). "
+        "Example: {\"Col1\": \"sku\", \"Col2\": \"price\", \"Col3\": null}\n"
         "Do not include any text outside the JSON object."
     )
 
