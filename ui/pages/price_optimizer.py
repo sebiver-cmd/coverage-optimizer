@@ -102,6 +102,47 @@ def _fetch_brands_from_backend(
         return []
 
 
+def _fetch_catalog_products(
+    backend_url: str,
+    api_username: str,
+    api_password: str,
+    site_id: int = 1,
+    include_offline: bool = False,
+    include_variants: bool = True,
+    brand_ids: list[int] | None = None,
+) -> pd.DataFrame:
+    """Fetch variant-enriched product catalogue from ``POST /catalog/products``.
+
+    Returns a DataFrame with at least ``NUMBER``, ``TITLE_DK``,
+    ``VARIANT_ID``, ``VARIANT_TYPES``, ``EAN``, ``VARIANT_ITEMNUMBER``,
+    ``PRODUCER``, ``PRODUCER_ID``, ``ONLINE``.
+
+    Returns an empty DataFrame on error.
+    """
+    base = _normalize_base_url(backend_url)
+    url = f"{base}/catalog/products"
+    payload: dict = {
+        "api_username": api_username,
+        "api_password": api_password,
+        "site_id": site_id,
+        "include_offline": include_offline,
+        "include_variants": include_variants,
+    }
+    if brand_ids:
+        payload["brand_ids"] = brand_ids
+
+    try:
+        resp = requests.post(url, json=payload, timeout=_BACKEND_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data:
+            return pd.DataFrame()
+        return pd.DataFrame(data)
+    except requests.RequestException:
+        logger.error("Backend catalog request to %s failed", url, exc_info=True)
+        return pd.DataFrame()
+
+
 def _run_backend_optimization(
     backend_url: str,
     api_username: str,
@@ -443,6 +484,9 @@ def render(
                 # Clear stale data-editor edits from previous runs
                 for k in ("_ed_all", "_ed_adj", "_ed_imp"):
                     st.session_state.pop(k, None)
+                # Clear stale catalog cache so it is re-fetched with
+                # the same filters used for this optimisation run.
+                st.session_state.pop("_catalog_df", None)
 
     # --- Display cached results ---
     if "_opt_raw_df" in st.session_state:
@@ -1347,11 +1391,15 @@ def _render_analysis(
 
     # --- Supplier Match Tab ---
     with tab_supplier:
-        _render_supplier_match(work_df)
+        _render_supplier_match(_enrich_work_df_with_catalog(
+            work_df, backend_url, api_username, api_password, site_id,
+        ))
 
     # --- EAN Barcode Export Tab ---
     with tab_ean:
-        _render_ean_barcode_export(work_df)
+        _render_ean_barcode_export(_enrich_work_df_with_catalog(
+            work_df, backend_url, api_username, api_password, site_id,
+        ))
 
     # --- Downloads ---
     _render_downloads(final_df, import_df, adjusted_count, include_buy_price)
@@ -1369,6 +1417,84 @@ def _render_analysis(
             site_id,
             dry_run,
         )
+
+
+# ---------------------------------------------------------------------------
+# Catalog-enriched work_df helper
+# ---------------------------------------------------------------------------
+
+def _enrich_work_df_with_catalog(
+    work_df: pd.DataFrame,
+    backend_url: str,
+    api_username: str,
+    api_password: str,
+    site_id: int,
+) -> pd.DataFrame:
+    """Return *work_df* enriched with ``VARIANT_ITEMNUMBER`` from the catalog.
+
+    Lazily fetches ``POST /catalog/products`` from the backend (cached in
+    ``st.session_state["_catalog_df"]``) and merges the
+    ``VARIANT_ITEMNUMBER`` column into *work_df* by matching on
+    ``(NUMBER, VARIANT_ID)``.  Falls back gracefully: if the catalog
+    fetch fails or the column is already present and populated, the
+    original *work_df* is returned unchanged.
+    """
+    # Fast path: already enriched
+    if (
+        'VARIANT_ITEMNUMBER' in work_df.columns
+        and work_df['VARIANT_ITEMNUMBER'].astype(str).str.strip().ne('').any()
+    ):
+        return work_df
+
+    # Fetch catalog (cached in session state)
+    if "_catalog_df" not in st.session_state:
+        opt_params = st.session_state.get("_opt_params", {})
+        cat_df = _fetch_catalog_products(
+            backend_url=backend_url,
+            api_username=api_username,
+            api_password=api_password,
+            site_id=site_id,
+            include_offline=opt_params.get("include_offline", False),
+            include_variants=True,
+            brand_ids=opt_params.get("brand_ids"),
+        )
+        st.session_state["_catalog_df"] = cat_df
+
+    cat_df = st.session_state.get("_catalog_df", pd.DataFrame())
+    if cat_df.empty or 'VARIANT_ITEMNUMBER' not in cat_df.columns:
+        # Ensure column exists even if empty
+        if 'VARIANT_ITEMNUMBER' not in work_df.columns:
+            work_df = work_df.copy()
+            work_df['VARIANT_ITEMNUMBER'] = ''
+        return work_df
+
+    # Build a lookup from (NUMBER, VARIANT_ID) → VARIANT_ITEMNUMBER
+    vi_lookup: dict[tuple[str, str], str] = {}
+    for _, row in cat_df.iterrows():
+        num = str(row.get('NUMBER', '') or '').strip()
+        vid = str(row.get('VARIANT_ID', '') or '').strip()
+        vi = str(row.get('VARIANT_ITEMNUMBER', '') or '').strip()
+        if num and vi:
+            vi_lookup[(num, vid)] = vi
+
+    if not vi_lookup:
+        if 'VARIANT_ITEMNUMBER' not in work_df.columns:
+            work_df = work_df.copy()
+            work_df['VARIANT_ITEMNUMBER'] = ''
+        return work_df
+
+    enriched = work_df.copy()
+    if 'VARIANT_ITEMNUMBER' not in enriched.columns:
+        enriched['VARIANT_ITEMNUMBER'] = ''
+
+    for idx in enriched.index:
+        num = str(enriched.at[idx, 'NUMBER'] if 'NUMBER' in enriched.columns else '').strip()
+        vid = str(enriched.at[idx, 'VARIANT_ID'] if 'VARIANT_ID' in enriched.columns else '').strip()
+        existing = str(enriched.at[idx, 'VARIANT_ITEMNUMBER'] or '').strip()
+        if not existing:
+            enriched.at[idx, 'VARIANT_ITEMNUMBER'] = vi_lookup.get((num, vid), '')
+
+    return enriched
 
 
 # ---------------------------------------------------------------------------
