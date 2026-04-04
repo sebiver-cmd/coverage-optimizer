@@ -27,45 +27,77 @@ from rapidfuzz import fuzz, process as rfprocess
 from domain.supplier import (
     parse_supplier_file,
     detect_supplier_columns,
+    _guess_candidates,
 )
 
 
 # --- Quantity / amount column auto-detection ---
 
+# NOTE: _QTY_NAMES is kept here for backward-compatibility but the
+# canonical pattern list now lives in domain.supplier._QTY_NAMES and is
+# used by _guess_candidates().
 _QTY_NAMES = [
     'quantity', 'qty', 'antal', 'anzahl', 'amount', 'count',
     'mængde', 'stk', 'pcs', 'units', 'beløb', 'menge',
 ]
 
 
-def detect_invoice_columns(df: pd.DataFrame) -> dict[str, str | None]:
+def _heuristic_detect_invoice_columns(df: pd.DataFrame) -> dict[str, str | None]:
+    """Pure heuristic/regex column detection for invoice files.
+
+    Internal fallback used when the LLM path is unavailable or fails.
+    """
+    candidates = _guess_candidates(list(df.columns))
+    return {
+        'sku': candidates['sku'][0] if candidates['sku'] else None,
+        'qty': candidates['qty'][0] if candidates['qty'] else None,
+        'description': (candidates['description'][0]
+                        if candidates['description'] else None),
+    }
+
+
+def detect_invoice_columns(
+    df: pd.DataFrame,
+    *,
+    api_key: str | None = None,
+    model: str = 'gpt-4o-mini',
+    llm_call: 'LLMCallFn | None' = None,
+) -> dict[str, str | None]:
     """Auto-detect SKU, quantity, and description columns in an invoice.
+
+    Uses :func:`suggest_column_mapping` (LLM-based) as the primary
+    detection mechanism.  Falls back to pure heuristic matching when the
+    LLM is unavailable, fails, or returns an unusable mapping.
 
     Returns ``{'sku': ..., 'qty': ..., 'description': ...}`` where each
     value is the original column name or ``None``.
     """
-    base = detect_supplier_columns(df)
-    lower_map = {c.lower().strip(): c for c in df.columns}
+    # --- LLM-first path ---
+    try:
+        mapping = suggest_column_mapping(
+            df, api_key=api_key, model=model, llm_call=llm_call,
+        )
+    except Exception:
+        mapping = None
 
-    qty_col = None
-    for pat in _QTY_NAMES:
-        if pat in lower_map:
-            qty_col = lower_map[pat]
-            break
-    if qty_col is None:
-        for pat in _QTY_NAMES:
-            for lc, orig in lower_map.items():
-                if pat in lc:
-                    qty_col = orig
-                    break
-            if qty_col is not None:
-                break
+    if mapping and any(mapping.get(f) for f in ('sku', 'qty')):
+        # Fill in gaps from heuristics for unambiguous candidates
+        candidates = _guess_candidates(list(df.columns))
+        used_cols = set(mapping.values())
+        for field in ('sku', 'qty', 'description'):
+            if not mapping.get(field) and candidates[field]:
+                free = [c for c in candidates[field] if c not in used_cols]
+                if len(free) == 1:
+                    mapping[field] = free[0]
+                    used_cols.add(free[0])
+        return {
+            'sku': mapping.get('sku'),
+            'qty': mapping.get('qty'),
+            'description': mapping.get('description'),
+        }
 
-    return {
-        'sku': base['sku'],
-        'qty': qty_col,
-        'description': base['description'],
-    }
+    # --- Heuristic fallback ---
+    return _heuristic_detect_invoice_columns(df)
 
 
 # ---------------------------------------------------------------------------
@@ -860,7 +892,9 @@ def _build_mapping_prompt(df: pd.DataFrame) -> str:
     """Build a compact prompt for column-mapping from sample rows.
 
     Encodes the first 5 rows as a Markdown table together with the list
-    of target internal fields.
+    of target internal fields.  Includes heuristic candidate suggestions
+    from :func:`~domain.supplier._guess_candidates` so the LLM has
+    additional context about likely matches.
     """
     sample = df.head(5)
 
@@ -872,6 +906,21 @@ def _build_mapping_prompt(df: pd.DataFrame) -> str:
     for _, row in sample.iterrows():
         rows.append('| ' + ' | '.join(str(v) for v in row) + ' |')
     md_table = '\n'.join([header, sep] + rows)
+
+    # Include heuristic candidates as hints
+    candidates = _guess_candidates(cols)
+    hints_lines = []
+    for field in ('sku', 'qty', 'price', 'description', 'discount',
+                  'currency'):
+        if candidates.get(field):
+            hints_lines.append(
+                f"  {field}: suggested candidates = {candidates[field]}"
+            )
+    hints_block = '\n'.join(hints_lines)
+    hints_section = (
+        f"\nHeuristic suggestions (use as hints, not as final answer):\n"
+        f"{hints_block}\n"
+    ) if hints_lines else ''
 
     return (
         "You are a data-mapping assistant. "
@@ -885,7 +934,8 @@ def _build_mapping_prompt(df: pd.DataFrame) -> str:
         "- discount: Discount percentage\n"
         "- currency: Currency code\n\n"
         f"Columns: {list(df.columns)}\n\n"
-        f"Sample data:\n{md_table}\n\n"
+        f"Sample data:\n{md_table}\n"
+        f"{hints_section}\n"
         "Return ONLY a JSON object mapping each column name to its internal field "
         "(or null). Example: {\"Col1\": \"sku\", \"Col2\": \"price\", \"Col3\": null}\n"
         "Do not include any text outside the JSON object."
@@ -996,27 +1046,22 @@ def suggest_column_mapping(
     model: str = 'gpt-4o-mini',
     llm_call: LLMCallFn | None = None,
 ) -> dict[str, str | None] | None:
-    """Suggest column mappings using an LLM when standard rules fail.
+    """Primary column-mapping mechanism for supplier/invoice DataFrames.
+
+    This is the **canonical entry point** for mapping DataFrame columns to
+    internal field names (``sku``, ``qty``, ``price``, ``description``,
+    ``discount``, ``currency``).
 
     Strategy
     --------
-    1. **Trigger**: Call this *only* when :func:`detect_invoice_columns`
-       or :func:`~domain.supplier.detect_supplier_columns` returns
-       ``None`` for a required field (SKU, quantity, price).
-    2. **Prompt construction**: Send the LLM a compact prompt containing:
-
-       - The first 3–5 rows of the DataFrame as a markdown table.
-       - A list of target column roles: ``sku``, ``qty``, ``price``,
-         ``description``, ``discount``, ``currency``.
-       - Instruction to return a JSON object mapping each role to the
-         best matching column name (or ``null``).
-
-    3. **API call**: Use an injectable ``llm_call`` function (defaults to
-       an OpenAI-compatible ``/v1/chat/completions`` endpoint via
-       ``requests``).  Keep ``max_tokens`` ≤ 200 and ``temperature`` = 0
-       for deterministic output.
-    4. **Validation**: Parse the JSON response and verify each suggested
-       column actually exists in ``df.columns``.  Discard any that don't.
+    1. **LLM first**: Build a prompt with sample rows and heuristic hints,
+       then call the LLM to produce a JSON column mapping.
+    2. **Heuristic gap-fill**: If the LLM mapping is missing obviously
+       required fields, use :func:`~domain.supplier._guess_candidates` to
+       fill in safe, unambiguous gaps.
+    3. **Fallback**: When no API key is set, the LLM call fails, or the
+       parsed mapping is clearly unusable, the function returns ``None``
+       and callers should fall back to pure heuristic detection.
 
     Parameters
     ----------
@@ -1059,7 +1104,22 @@ def suggest_column_mapping(
     prompt = _build_mapping_prompt(df)
     caller = llm_call or _default_llm_call
     raw_response = caller(prompt, key, model)
-    return _parse_llm_mapping_response(raw_response, list(df.columns))
+    mapping = _parse_llm_mapping_response(raw_response, list(df.columns))
+
+    if mapping is None:
+        return None
+
+    # --- Heuristic gap-fill for missing required fields ---
+    candidates = _guess_candidates(list(df.columns))
+    used_cols = set(mapping.values())
+    for field in INTERNAL_FIELDS:
+        if field not in mapping and candidates.get(field):
+            free = [c for c in candidates[field] if c not in used_cols]
+            if len(free) == 1:
+                mapping[field] = free[0]
+                used_cols.add(free[0])
+
+    return mapping
 
 
 # ---------------------------------------------------------------------------
