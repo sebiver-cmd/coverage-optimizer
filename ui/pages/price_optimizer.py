@@ -1,12 +1,19 @@
 """Price Optimizer module — analysis, pricing pipeline, and push-to-shop.
 
 Uses the FastAPI backend ``/optimize`` endpoint for computing optimisation
-suggestions (read-only).  Push-to-shop behaviour is unchanged.
+suggestions (read-only).  Push-to-shop writes are routed through the
+backend ``/apply-prices/create-manifest`` + ``/apply-prices/apply``
+endpoints instead of calling DanDomain SOAP directly.
+
+Legacy direct SOAP writes can be re-enabled by setting the environment
+variable ``SB_OPTIMA_ALLOW_UI_DIRECT_PUSH=true``, but this path is
+deprecated and should not be used in production.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 import requests
@@ -14,9 +21,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-from dandomain_api import DanDomainClient, DanDomainAPIError
 from push_safety import build_push_updates
 from ui.backend_url import normalize_backend_url, normalize_base_url
+from ui.backend_client import create_manifest, apply_batch
 from domain.risk_analysis import (
     compute_largest_decreases,
     compute_near_cost_warnings,
@@ -53,6 +60,20 @@ from domain.invoice_ean import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Feature flags
+# ---------------------------------------------------------------------------
+
+#: When ``true``, the UI falls back to the legacy direct-SOAP write path.
+#: Deprecated — do not enable in production.
+_ALLOW_UI_DIRECT_PUSH: bool = (
+    os.environ.get("SB_OPTIMA_ALLOW_UI_DIRECT_PUSH", "").strip().lower() == "true"
+)
+
+if _ALLOW_UI_DIRECT_PUSH:
+    # Import only when the escape hatch is explicitly enabled.
+    from dandomain_api import DanDomainClient, DanDomainAPIError  # type: ignore[import]
 
 # Columns shown in the simplified (default) table view.
 _SIMPLE_COLUMNS = [
@@ -1416,6 +1437,7 @@ def _render_analysis(
             api_ready,
             site_id,
             dry_run,
+            backend_url=backend_url,
         )
 
 
@@ -2516,6 +2538,7 @@ def _render_push_to_shop(
     api_ready,
     site_id,
     dry_run,
+    backend_url: str = "http://127.0.0.1:8000",
 ):
     """Render the push-to-shop section with safety gates."""
     st.divider()
@@ -2642,19 +2665,9 @@ def _render_push_to_shop(
                 "Test Connection",
                 use_container_width=True,
             ):
-                try:
-                    with DanDomainClient(
-                        api_username, api_password,
-                    ) as client:
-                        info = client.test_connection()
-                    st.success(
-                        f"Connected! Product count: "
-                        f"{info.get('product_count', 'N/A')}"
-                    )
-                except (
-                    DanDomainAPIError, ValueError, AttributeError,
-                ) as exc:
-                    st.error(f"Connection failed: {exc}")
+                _test_connection_via_backend(
+                    backend_url, api_username, api_password, site_id,
+                )
 
         with push_col:
             push_clicked = st.button(
@@ -2678,7 +2691,7 @@ def _render_push_to_shop(
             and not st.session_state.get("_push_running")
         ):
             _handle_live_push_confirmation(
-                api_username, api_password, site_id,
+                api_username, api_password, site_id, backend_url,
             )
 
 
@@ -2711,7 +2724,9 @@ def _handle_dry_run(selected_updates, n_selected):
     )
 
 
-def _handle_live_push_confirmation(api_username, api_password, site_id):
+def _handle_live_push_confirmation(
+    api_username, api_password, site_id, backend_url: str = "http://127.0.0.1:8000",
+):
     """Handle the two-step live push confirmation."""
     pending_updates = st.session_state.get("_push_updates", [])
     n_pend = len(pending_updates)
@@ -2753,13 +2768,128 @@ def _handle_live_push_confirmation(api_username, api_password, site_id):
         st.info("Push cancelled.")
 
     if confirmed:
-        _execute_live_push(
-            pending_updates, api_username, api_password, site_id,
+        if _ALLOW_UI_DIRECT_PUSH:
+            _execute_legacy_direct_push(
+                pending_updates, api_username, api_password, site_id,
+            )
+        else:
+            _execute_backend_push(
+                pending_updates, api_username, api_password, site_id, backend_url,
+            )
+
+
+def _execute_backend_push(
+    pending_updates, api_username, api_password, site_id, backend_url,
+):
+    """Execute the live push via the backend apply endpoints.
+
+    Flow:
+    1. ``POST /apply-prices/create-manifest`` — persist the change set and
+       obtain a ``batch_id``.
+    2. ``POST /apply-prices/apply`` — apply the batch with credentials.
+
+    All writes go through the backend's guardrails (env gating, per-row
+    safety, audit log, idempotency marker).
+    """
+    st.session_state["_push_running"] = True
+    st.session_state.pop("_push_pending", None)
+
+    try:
+        # Step 1 — create manifest (read-only, no SOAP calls)
+        with st.spinner("Creating batch manifest…"):
+            manifest_result, manifest_err = create_manifest(backend_url, pending_updates)
+
+        if manifest_err:
+            st.error(f"Could not create manifest: {manifest_err}")
+            return
+
+        batch_id = manifest_result.get("batch_id", "")
+        if not batch_id:
+            st.error("Backend did not return a batch_id — cannot proceed.")
+            return
+
+        st.info(f"Manifest created (batch {batch_id}). Applying…")
+
+        # Step 2 — apply (writes to HostedShop via backend)
+        with st.spinner("Applying prices via backend…"):
+            apply_result, apply_err = apply_batch(
+                backend_url, batch_id, api_username, api_password, site_id,
+            )
+
+        if apply_err:
+            st.error(f"Apply failed: {apply_err}")
+            return
+
+        applied = apply_result.get("applied_count", 0)
+        skipped = apply_result.get("skipped", [])
+        failed = apply_result.get("failed", [])
+
+        res_c1, res_c2, res_c3 = st.columns(3)
+        res_c1.metric("Applied", applied)
+        res_c2.metric("Skipped", len(skipped))
+        res_c3.metric("Failed", len(failed))
+
+        if skipped:
+            with st.expander("Skipped rows (guardrail violations)", expanded=False):
+                st.dataframe(
+                    pd.DataFrame(skipped),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+        if failed:
+            with st.expander("Failed rows (SOAP errors)", expanded=True):
+                st.dataframe(
+                    pd.DataFrame(failed),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+        if not failed and not skipped:
+            st.success(f"All {applied} product(s) updated successfully.")
+
+    finally:
+        st.session_state.pop("_push_running", None)
+        st.session_state.pop("_push_updates", None)
+
+
+def _test_connection_via_backend(backend_url, api_username, api_password, site_id):
+    """Test DanDomain API connectivity via the backend /test-connection endpoint."""
+    from ui.backend_url import normalize_base_url as _norm  # local import to keep module-level clean
+
+    url = f"{_norm(backend_url)}/test-connection"
+    try:
+        resp = requests.post(
+            url,
+            json={"api_username": api_username, "api_password": api_password, "site_id": site_id},
+            timeout=_BACKEND_TIMEOUT,
         )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("status") == "error":
+            st.error(f"Connection failed: {data.get('error', 'Unknown error')}")
+        else:
+            st.success(
+                f"Connected! Product count: "
+                f"{data.get('product_count', 'N/A')}"
+            )
+    except requests.HTTPError as exc:
+        st.error(f"Connection test failed: {exc}")
+    except requests.RequestException as exc:
+        st.error(f"Backend unreachable: {exc}")
 
 
-def _execute_live_push(pending_updates, api_username, api_password, site_id):
-    """Execute the actual live push to the shop."""
+def _execute_legacy_direct_push(pending_updates, api_username, api_password, site_id):
+    """Legacy direct SOAP push — DEPRECATED.
+
+    Only available when ``SB_OPTIMA_ALLOW_UI_DIRECT_PUSH=true``.
+    Retained for emergency rollback only.  Do not use in production.
+    """
+    st.warning(
+        "⚠️ **Deprecated**: Using direct SOAP write path. "
+        "Set ``SB_OPTIMA_ALLOW_UI_DIRECT_PUSH=false`` (or unset) to use the "
+        "safe backend path."
+    )
     st.session_state["_push_running"] = True
     st.session_state.pop("_push_pending", None)
 

@@ -80,6 +80,48 @@ class DryRunResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Create-manifest models (used by the UI to submit pre-computed changes)
+# ---------------------------------------------------------------------------
+
+
+class ManifestChangeEntry(BaseModel):
+    """A single change entry submitted to ``POST /apply-prices/create-manifest``.
+
+    Mirrors the dict structure produced by the UI's push-updates helper
+    and extends ``DryRunChangeRow`` with optional variant/product identifiers
+    so that the backend apply endpoint can route to the correct SOAP method.
+    """
+
+    NUMBER: str = Field(..., description="Product SKU / item number.")
+    TITLE_DK: str = Field(default="", description="Product title (for display/audit).")
+    product_id: str = Field(default="", description="DanDomain internal product ID.")
+    variant_id: str = Field(default="", description="DanDomain variant ID, if this is a variant row.")
+    variant_types: str = Field(default="", description="Variant type string (e.g. 'Color/Size').")
+    old_price: float = Field(default=0.0, description="Current sell price in the shop.")
+    new_price: float = Field(default=0.0, description="New sell price to apply.")
+    change_pct: float = Field(default=0.0, description="Percentage price change.")
+    buy_price: float = Field(default=0.0, description="Cost/buy price.")
+    old_buy_price: float = Field(default=0.0, description="Previous cost/buy price (for audit).")
+
+
+class CreateManifestRequest(BaseModel):
+    """Parameters accepted by ``POST /apply-prices/create-manifest``."""
+
+    changes: list[ManifestChangeEntry] = Field(
+        ...,
+        description="Pre-computed list of price changes from the UI.",
+    )
+
+
+class CreateManifestResponse(BaseModel):
+    """Response from ``POST /apply-prices/create-manifest``."""
+
+    batch_id: str
+    changes: list[ManifestChangeEntry]
+    summary: DryRunSummary
+
+
+# ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
 
@@ -179,3 +221,55 @@ def get_batch(batch_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Batch not found.")
 
     return json.loads(manifest_path.read_text(encoding="utf-8"))
+
+
+@router.post("/apply-prices/create-manifest", response_model=CreateManifestResponse)
+def create_manifest(payload: CreateManifestRequest) -> CreateManifestResponse:
+    """Persist a pre-computed change set as a batch manifest.
+
+    Accepts the list of change entries already computed by the UI,
+    assigns a new ``batch_id``, writes a manifest to disk under
+    ``data/apply_batches/{batch_id}.json``, and returns the
+    ``batch_id`` so the caller can later invoke
+    ``POST /apply-prices/apply``.
+
+    This endpoint does **not** write to HostedShop — it is a read-only
+    persistence step that records what *would* be applied.  The manifest
+    intentionally preserves ``variant_id`` and ``product_id`` so that the
+    real-apply step can route to the correct SOAP method
+    (``Product_UpdateVariant`` vs ``Product_Update``).
+    """
+    changes = payload.changes
+
+    increases = sum(1 for c in changes if c.new_price > c.old_price)
+    decreases = sum(1 for c in changes if c.new_price < c.old_price)
+    unchanged = sum(1 for c in changes if c.new_price == c.old_price)
+
+    summary = DryRunSummary(
+        total=len(changes),
+        increases=increases,
+        decreases=decreases,
+        unchanged=unchanged,
+    )
+
+    batch_id = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    manifest = {
+        "batch_id": batch_id,
+        "created_at": created_at,
+        "source": "ui-create-manifest",
+        "changes": [c.model_dump() for c in changes],
+        "summary": summary.model_dump(),
+    }
+
+    BATCH_DIR.mkdir(parents=True, exist_ok=True)
+    manifest_path = BATCH_DIR / f"{batch_id}.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    logger.info("Persisted UI-created manifest: %s", manifest_path)
+
+    return CreateManifestResponse(
+        batch_id=batch_id,
+        changes=changes,
+        summary=summary,
+    )

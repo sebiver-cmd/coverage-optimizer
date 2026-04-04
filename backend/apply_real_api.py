@@ -234,8 +234,12 @@ def apply_prices(payload: ApplyRequest) -> ApplyResponse:
     if valid_rows:
         updates = [
             {
+                "product_id": row.get("product_id", ""),
                 "product_number": row["NUMBER"],
                 "new_price": row["new_price"],
+                "variant_id": row.get("variant_id", ""),
+                "variant_types": row.get("variant_types", ""),
+                **({"buy_price": row["buy_price"]} if row.get("buy_price") else {}),
             }
             for row in valid_rows
         ]
