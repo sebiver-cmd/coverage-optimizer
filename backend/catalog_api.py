@@ -22,6 +22,11 @@ from pydantic import BaseModel, Field
 
 from dandomain_api import DanDomainClient, DanDomainAPIError
 from domain.product_loader import fetch_products, filter_products, enrich_variants
+from backend.cache import (
+    build_caller_key,
+    get_cached_enriched_products,
+    set_cached_enriched_products,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,19 +97,63 @@ def get_catalog_products(payload: CatalogRequest) -> list[dict]:
     Credentials are never logged.
     """
     try:
-        with DanDomainClient(
-            username=payload.api_username,
-            password=payload.api_password,
-        ) as client:
-            df, _brand_id_map = fetch_products(
-                client,
-                include_variants=payload.include_variants,
-            )
+        # --- Product cache (Task 3.2) ---
+        caller_key = build_caller_key(payload.api_username, payload.site_id)
 
+        # Only use enriched-product cache when variants are included (default).
+        use_cache = payload.include_variants
+        cached_rows = get_cached_enriched_products(caller_key, payload.site_id) if use_cache else None
+
+        if cached_rows is not None:
+            # Cache hit — apply filters and return
+            import pandas as pd
+
+            df = pd.DataFrame(cached_rows)
+            df = filter_products(
+                df,
+                include_offline=payload.include_offline,
+                brand_ids=payload.brand_ids,
+            )
             if df.empty:
                 return []
+            logger.info("Enriched product cache HIT for site_id=%s", payload.site_id)
+        else:
+            # Cache miss — full SOAP fetch + enrichment pipeline
+            with DanDomainClient(
+                username=payload.api_username,
+                password=payload.api_password,
+            ) as client:
+                df, _brand_id_map = fetch_products(
+                    client,
+                    include_variants=payload.include_variants,
+                )
 
-            # Apply online/offline and brand filters
+                if df.empty:
+                    return []
+
+                # --- Variant enrichment (on full unfiltered set) ---
+                if payload.include_variants:
+                    try:
+                        df = enrich_variants(df, client)
+                    except Exception:
+                        logger.warning(
+                            "Variant enrichment encountered an error; "
+                            "returning best-effort data",
+                            exc_info=True,
+                        )
+
+            # Store enriched unfiltered DataFrame in cache
+            if use_cache and not df.empty:
+                try:
+                    set_cached_enriched_products(
+                        caller_key,
+                        payload.site_id,
+                        df.to_dict(orient="records"),
+                    )
+                except Exception:
+                    logger.debug("Failed to populate enriched product cache", exc_info=True)
+
+            # Apply filters after caching
             df = filter_products(
                 df,
                 include_offline=payload.include_offline,
@@ -114,22 +163,7 @@ def get_catalog_products(payload: CatalogRequest) -> list[dict]:
             if df.empty:
                 return []
 
-            # --- Variant enrichment ---
-            # Populate VARIANT_ITEMNUMBER where the bulk fetch left it empty.
-            # Uses Product_GetVariantsByItemNumber (read-only, per HostedShop
-            # docs: "Returns the ProductVariant(s) with the indicated
-            # ItemNumber", param: string $ItemNumber, returns
-            # ProductVariant[]).
-            # Partial failures are tolerated — best-effort enrichment.
-            if payload.include_variants:
-                try:
-                    df = enrich_variants(df, client)
-                except Exception:
-                    logger.warning(
-                        "Variant enrichment encountered an error; "
-                        "returning best-effort data",
-                        exc_info=True,
-                    )
+            logger.info("Enriched product cache MISS for site_id=%s", payload.site_id)
 
         # Ensure VARIANT_ITEMNUMBER column exists even if empty
         for col in ("VARIANT_ITEMNUMBER", "VARIANT_TITLE", "VARIANT_EAN"):

@@ -35,6 +35,7 @@ from pydantic import BaseModel, Field
 
 from dandomain_api import DanDomainClient
 from backend.apply_constants import BATCH_DIR, UUID_RE, AUDIT_LOG
+from backend.cache import build_caller_key, invalidate_products_cache
 from backend.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -286,6 +287,13 @@ def apply_prices(payload: ApplyRequest) -> ApplyResponse:
     # 8. Place .applied marker -----------------------------------------
     BATCH_DIR.mkdir(parents=True, exist_ok=True)
     applied_marker.write_text(finished_at, encoding="utf-8")
+
+    # 9. Invalidate product cache (best-effort) -------------------------
+    try:
+        caller_key = build_caller_key(payload.api_username, payload.site_id)
+        invalidate_products_cache(caller_key, payload.site_id)
+    except Exception:
+        logger.debug("Product cache invalidation failed (non-fatal)", exc_info=True)
 
     return ApplyResponse(
         batch_id=payload.batch_id,
