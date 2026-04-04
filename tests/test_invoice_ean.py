@@ -13,6 +13,8 @@ from domain.invoice_ean import (
     build_ean_export,
     match_invoice_to_products,
     build_export_from_matches,
+    build_matches_df,
+    export_from_matches_df,
     generate_barcode_pdf,
     normalize_sku,
     extract_sku_from_description,
@@ -20,6 +22,8 @@ from domain.invoice_ean import (
     _render_barcode_image,
     _variant_in_context,
     _parse_qty,
+    _extract_numeric_hints,
+    _has_variant_hint,
     _generate_barcode_pdf_zd421,
     _generate_barcode_pdf_fast_scan,
 )
@@ -2068,3 +2072,457 @@ class TestBarcodeFormatDispatcher:
         pdf_bytes = generate_barcode_pdf(_sample_export_df())
         assert isinstance(pdf_bytes, bytes)
         assert len(pdf_bytes) > 0
+
+
+# ---------------------------------------------------------------------------
+# _extract_numeric_hints
+# ---------------------------------------------------------------------------
+
+class TestExtractNumericHints:
+    """Tests for numeric hint extraction from invoice text."""
+
+    def test_european_decimal_comma(self):
+        assert 3.0 in _extract_numeric_hints('GTBL 3,0')
+
+    def test_standard_decimal_point(self):
+        assert 3.5 in _extract_numeric_hints('GTBL 3.5')
+
+    def test_integer(self):
+        assert 265.0 in _extract_numeric_hints('Belt 265 cm')
+
+    def test_multiple_numbers(self):
+        nums = _extract_numeric_hints('Belt 265 cm / 3.5')
+        assert 265.0 in nums
+        assert 3.5 in nums
+
+    def test_no_numbers(self):
+        assert _extract_numeric_hints('GTBL Blue') == set()
+
+    def test_number_embedded_in_sku(self):
+        """Numbers that are part of word boundaries should not be extracted."""
+        nums = _extract_numeric_hints('FB400')
+        # '400' is preceded by a letter, so not extracted
+        assert 400.0 not in nums
+
+    def test_number_after_space(self):
+        nums = _extract_numeric_hints('FB 400')
+        assert 400.0 in nums
+
+
+# ---------------------------------------------------------------------------
+# _has_variant_hint — numeric hint detection
+# ---------------------------------------------------------------------------
+
+class TestHasVariantHintNumeric:
+    """Tests for _has_variant_hint with numeric hints."""
+
+    def test_gtbl_30_detected(self):
+        """GTBL 3,0 has numeric hint 3.0 not in product number."""
+        assert _has_variant_hint('GTBL 3,0', 'TO-GTBL') is True
+
+    def test_same_number_no_hint(self):
+        """Same numbers in text and product number → no hint."""
+        assert _has_variant_hint('PSW 003', 'PSW 003') is False
+
+    def test_same_sku_no_hint(self):
+        """Identical text and number → no hint."""
+        assert _has_variant_hint('SKU-001', 'SKU-001') is False
+
+    def test_extra_number_detected(self):
+        """Extra number in text (190) triggers hint."""
+        assert _has_variant_hint('TBL-01 190 cm', 'TBL-01') is True
+
+    def test_size_alias_still_works(self):
+        """Size-alias detection still works alongside numeric."""
+        assert _has_variant_hint('PSW 003 XL', 'PSW 003') is True
+
+
+# ---------------------------------------------------------------------------
+# GTBL-style belt duplication regression test
+# ---------------------------------------------------------------------------
+
+class TestGTBLBeltDuplication:
+    """Regression tests for GTBL-style numeric variant mis-narrowing.
+
+    Invoice line ``GTBL 3,0`` qty=10 should NOT produce 4 rows for
+    all belt variants (265/275/285/295 cm) each with qty=10.
+    """
+
+    @staticmethod
+    def _belt_products():
+        """Product catalogue with belt variants."""
+        return _make_products(
+            NUMBER=['TO-GTBL', 'TO-GTBL', 'TO-GTBL', 'TO-GTBL'],
+            VARIANT_ID=['10', '11', '12', '13'],
+            VARIANT_TYPES=[
+                '265 cm / 3.5', '275 cm / 4.0',
+                '285 cm / 4.5', '295 cm / 5.0',
+            ],
+            EAN=['5700000000001', '5700000000002',
+                 '5700000000003', '5700000000004'],
+            TITLE_DK=['Bælte WKF - blå'] * 4,
+            BUY_PRICE=['50,00'] * 4,
+            PRICE=['100,00'] * 4,
+            BUY_PRICE_NUM=[50.0] * 4,
+            PRICE_NUM=[100.0] * 4,
+            PRODUCT_ID=['1'] * 4,
+            PRODUCER=['Brand'] * 4,
+            PRODUCER_ID=[1] * 4,
+            ONLINE=[True] * 4,
+        )
+
+    def test_gtbl_30_not_four_rows(self):
+        """GTBL 3,0 qty=10 must NOT produce 4 rows with qty=10 each."""
+        products = self._belt_products()
+        invoice = pd.DataFrame({
+            'Article': ['GTBL 3,0'],
+            'Quantity': ['10'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=50,
+        )
+        # Must produce at most 1 row (either the matching variant or
+        # an ambiguous single row), NOT 4 duplicated rows.
+        assert len(result) <= 1
+        if not result.empty:
+            assert result.iloc[0]['Amount'] == 10.0
+
+    def test_gtbl_35_narrows_to_specific_variant(self):
+        """GTBL 3,5 should narrow to the 265 cm / 3.5 variant."""
+        products = self._belt_products()
+        invoice = pd.DataFrame({
+            'Article': ['GTBL 3,5'],
+            'Quantity': ['5'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=50,
+        )
+        assert len(result) == 1
+        assert '3.5' in result.iloc[0]['Variant Name']
+        assert result.iloc[0]['Amount'] == 5.0
+
+    def test_gtbl_45_narrows_to_specific_variant(self):
+        """GTBL 4,5 should narrow to the 285 cm / 4.5 variant."""
+        products = self._belt_products()
+        invoice = pd.DataFrame({
+            'Article': ['GTBL 4,5'],
+            'Quantity': ['3'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=50,
+        )
+        assert len(result) == 1
+        assert '4.5' in result.iloc[0]['Variant Name']
+        assert result.iloc[0]['Amount'] == 3.0
+
+    def test_gtbl_base_without_hint_returns_one_row(self):
+        """Base GTBL without a numeric hint still limits to 1 row due
+        to numeric hint from the product number normalization."""
+        products = self._belt_products()
+        # Use match_data directly with no numeric hint
+        match_data = {
+            'matches': {
+                'GTBL': {
+                    'sku': 'TO-GTBL', 'score': 90, 'alternatives': [],
+                },
+            },
+            'composite_lookup': {
+                'TO-GTBL': ('TO-GTBL', ''),
+            },
+            'title_lookup': {'TO-GTBL': 'Bælte WKF - blå'},
+            'qty_map': {'GTBL': 10.0},
+            'desc_map': {},
+        }
+        result = build_export_from_matches(products, match_data)
+        # All 4 variants returned — base SKU with no hint
+        assert len(result) == 4
+
+
+# ---------------------------------------------------------------------------
+# EAN cross-check in matching
+# ---------------------------------------------------------------------------
+
+class TestEANCrossCheck:
+    """Tests for EAN-based cross-checking in match_invoice_to_products."""
+
+    @staticmethod
+    def _products_with_ean():
+        return _make_products(
+            NUMBER=['PROD-A', 'PROD-B'],
+            VARIANT_ID=['', ''],
+            VARIANT_TYPES=['', ''],
+            EAN=['5701234567890', '5709876543210'],
+            TITLE_DK=['Product Alpha', 'Product Beta'],
+            BUY_PRICE=['100,00', '200,00'],
+            PRICE=['200,00', '400,00'],
+            BUY_PRICE_NUM=[100.0, 200.0],
+            PRICE_NUM=[200.0, 400.0],
+            PRODUCT_ID=['1', '2'],
+            PRODUCER=['Brand A', 'Brand B'],
+            PRODUCER_ID=[1, 2],
+            ONLINE=[True, True],
+        )
+
+    def test_bare_ean_as_sku_matches_product(self):
+        """Invoice SKU that is a bare EAN gets matched via EAN lookup."""
+        products = self._products_with_ean()
+        invoice = pd.DataFrame({
+            'Article': ['5701234567890'],
+            'Quantity': ['3'],
+        })
+        mdata = match_invoice_to_products(
+            products, invoice, 'Article', 'Quantity', threshold=70,
+        )
+        result = mdata['matches'].get('5701234567890')
+        assert result is not None
+        assert result['sku'] is not None
+        assert result['score'] == 100
+
+    def test_ean_in_description_matches(self):
+        """EAN in description field is used for cross-check."""
+        products = self._products_with_ean()
+        invoice = pd.DataFrame({
+            'Article': ['UNKNOWN-SKU'],
+            'Quantity': ['2'],
+            'Description': ['Product Alpha EAN: 5701234567890'],
+        })
+        mdata = match_invoice_to_products(
+            products, invoice, 'Article', 'Quantity',
+            threshold=70, invoice_desc_col='Description',
+        )
+        result = mdata['matches'].get('UNKNOWN-SKU')
+        assert result is not None
+        assert result['sku'] is not None
+        assert result['score'] == 100
+
+    def test_sku_and_ean_agree(self):
+        """When both SKU and EAN match the same product, result is consistent."""
+        products = self._products_with_ean()
+        invoice = pd.DataFrame({
+            'Article': ['PROD-A'],
+            'Quantity': ['5'],
+        })
+        mdata = match_invoice_to_products(
+            products, invoice, 'Article', 'Quantity', threshold=70,
+        )
+        result = mdata['matches'].get('PROD-A')
+        assert result is not None
+        assert result['sku'] is not None
+        # Should resolve to PROD-A
+        number, _ = mdata['composite_lookup'].get(result['sku'], (result['sku'], ''))
+        assert number == 'PROD-A'
+
+
+# ---------------------------------------------------------------------------
+# build_matches_df
+# ---------------------------------------------------------------------------
+
+class TestBuildMatchesDf:
+    """Tests for the matches DataFrame builder."""
+
+    @staticmethod
+    def _simple_match_data():
+        """Simple match data with one match and one unmatched."""
+        return {
+            'matches': {
+                'INV-001': {
+                    'sku': 'PROD-A', 'score': 95, 'alternatives': [],
+                },
+                'INV-002': {
+                    'sku': None, 'score': 0,
+                    'alternatives': [('PROD-B', 40)],
+                },
+            },
+            'composite_lookup': {
+                'PROD-A': ('PROD-A', ''),
+                'PROD-B': ('PROD-B', ''),
+            },
+            'title_lookup': {
+                'PROD-A': 'Product Alpha',
+                'PROD-B': 'Product Beta',
+            },
+            'qty_map': {'INV-001': 5.0, 'INV-002': 3.0},
+            'desc_map': {'INV-001': 'Alpha desc', 'INV-002': 'Beta desc'},
+        }
+
+    @staticmethod
+    def _simple_products():
+        return _make_products(
+            NUMBER=['PROD-A', 'PROD-B'],
+            VARIANT_ID=['', ''],
+            VARIANT_TYPES=['', ''],
+            EAN=['5701234567890', '5709876543210'],
+            TITLE_DK=['Product Alpha', 'Product Beta'],
+            BUY_PRICE=['100,00', '200,00'],
+            PRICE=['200,00', '400,00'],
+            BUY_PRICE_NUM=[100.0, 200.0],
+            PRICE_NUM=[200.0, 400.0],
+            PRODUCT_ID=['1', '2'],
+            PRODUCER=['Brand A', 'Brand B'],
+            PRODUCER_ID=[1, 2],
+            ONLINE=[True, True],
+        )
+
+    def test_has_correct_columns(self):
+        """matches_df has all expected columns."""
+        products = self._simple_products()
+        mdata = self._simple_match_data()
+        mdf = build_matches_df(products, mdata)
+        expected_cols = [
+            'inv_row_id', 'inv_sku', 'inv_description', 'inv_qty',
+            'matched_number', 'matched_variant', 'matched_title',
+            'matched_ean', 'match_score', 'match_source', 'status',
+        ]
+        assert list(mdf.columns) == expected_cols
+
+    def test_auto_matched_rows(self):
+        """Automatically matched rows have source 'auto-sku'."""
+        products = self._simple_products()
+        mdata = self._simple_match_data()
+        mdf = build_matches_df(products, mdata)
+        auto = mdf.loc[mdf['match_source'] == 'auto-sku']
+        assert len(auto) >= 1
+        assert auto.iloc[0]['inv_sku'] == 'INV-001'
+        assert auto.iloc[0]['matched_number'] == 'PROD-A'
+        assert auto.iloc[0]['match_score'] == 95
+
+    def test_unmatched_rows(self):
+        """Unmatched rows have source 'unmatched' and status 'needs-manual'."""
+        products = self._simple_products()
+        mdata = self._simple_match_data()
+        mdf = build_matches_df(products, mdata)
+        unmatched = mdf.loc[mdf['match_source'] == 'unmatched']
+        assert len(unmatched) == 1
+        assert unmatched.iloc[0]['inv_sku'] == 'INV-002'
+        assert unmatched.iloc[0]['status'] == 'needs-manual'
+
+    def test_manual_override(self):
+        """Manual overrides produce rows with source 'manual'."""
+        products = self._simple_products()
+        mdata = self._simple_match_data()
+        mdf = build_matches_df(
+            products, mdata,
+            manual_overrides={'INV-002': 'PROD-B'},
+        )
+        manual = mdf.loc[mdf['match_source'] == 'manual']
+        assert len(manual) == 1
+        assert manual.iloc[0]['inv_sku'] == 'INV-002'
+        assert manual.iloc[0]['matched_number'] == 'PROD-B'
+        assert manual.iloc[0]['match_score'] == 100
+
+    def test_empty_matches(self):
+        """Empty match data returns empty DataFrame with correct columns."""
+        products = self._simple_products()
+        mdata = {
+            'matches': {},
+            'composite_lookup': {},
+            'title_lookup': {},
+            'qty_map': {},
+            'desc_map': {},
+        }
+        mdf = build_matches_df(products, mdata)
+        assert mdf.empty
+        assert 'inv_sku' in mdf.columns
+
+
+# ---------------------------------------------------------------------------
+# export_from_matches_df
+# ---------------------------------------------------------------------------
+
+class TestExportFromMatchesDf:
+    """Tests for converting matches_df to export format."""
+
+    def test_basic_export(self):
+        """Matched rows are exported with correct columns."""
+        mdf = pd.DataFrame({
+            'inv_row_id': [0, 1],
+            'inv_sku': ['INV-001', 'INV-002'],
+            'inv_description': ['Desc A', 'Desc B'],
+            'inv_qty': [5.0, 3.0],
+            'matched_number': ['PROD-A', ''],
+            'matched_variant': ['Red', ''],
+            'matched_title': ['Product A', ''],
+            'matched_ean': ['5701234567890', ''],
+            'match_score': [95, 0],
+            'match_source': ['auto-sku', 'unmatched'],
+            'status': ['ok', 'needs-manual'],
+        })
+        export = export_from_matches_df(mdf)
+        assert len(export) == 1  # only the matched row
+        assert export.iloc[0]['SKU'] == 'INV-001'
+        assert export.iloc[0]['Product Number'] == 'PROD-A'
+        assert export.iloc[0]['Variant Name'] == 'Red'
+        assert export.iloc[0]['Amount'] == 5.0
+        assert export.iloc[0]['EAN'] == '5701234567890'
+        assert export.iloc[0]['Match %'] == 95
+
+    def test_manual_rows_included(self):
+        """Manually overridden rows are included in export."""
+        mdf = pd.DataFrame({
+            'inv_row_id': [0, 1],
+            'inv_sku': ['INV-001', 'INV-002'],
+            'inv_description': ['', ''],
+            'inv_qty': [5.0, 3.0],
+            'matched_number': ['PROD-A', 'PROD-B'],
+            'matched_variant': ['', ''],
+            'matched_title': ['A', 'B'],
+            'matched_ean': ['123', '456'],
+            'match_score': [95, 100],
+            'match_source': ['auto-sku', 'manual'],
+            'status': ['ok', 'ok'],
+        })
+        export = export_from_matches_df(mdf)
+        assert len(export) == 2
+
+    def test_unmatched_rows_excluded(self):
+        """Unmatched rows are not in the export."""
+        mdf = pd.DataFrame({
+            'inv_row_id': [0],
+            'inv_sku': ['INV-001'],
+            'inv_description': [''],
+            'inv_qty': [5.0],
+            'matched_number': [''],
+            'matched_variant': [''],
+            'matched_title': [''],
+            'matched_ean': [''],
+            'match_score': [0],
+            'match_source': ['unmatched'],
+            'status': ['needs-manual'],
+        })
+        export = export_from_matches_df(mdf)
+        assert export.empty
+
+    def test_empty_matches_df(self):
+        """Empty matches_df produces empty export."""
+        mdf = pd.DataFrame(columns=[
+            'inv_row_id', 'inv_sku', 'inv_description', 'inv_qty',
+            'matched_number', 'matched_variant', 'matched_title',
+            'matched_ean', 'match_score', 'match_source', 'status',
+        ])
+        export = export_from_matches_df(mdf)
+        assert export.empty
+        assert list(export.columns) == [
+            'SKU', 'Product Number', 'Title', 'Variant Name',
+            'Amount', 'EAN', 'Match %',
+        ]
+
+    def test_export_column_order(self):
+        """Export has the canonical column order."""
+        mdf = pd.DataFrame({
+            'inv_row_id': [0],
+            'inv_sku': ['INV-001'],
+            'inv_description': [''],
+            'inv_qty': [5.0],
+            'matched_number': ['PROD-A'],
+            'matched_variant': [''],
+            'matched_title': ['Title'],
+            'matched_ean': ['123'],
+            'match_score': [90],
+            'match_source': ['auto-sku'],
+            'status': ['ok'],
+        })
+        export = export_from_matches_df(mdf)
+        assert list(export.columns) == [
+            'SKU', 'Product Number', 'Title', 'Variant Name',
+            'Amount', 'EAN', 'Match %',
+        ]
