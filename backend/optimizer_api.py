@@ -47,6 +47,11 @@ from domain.pricing import (
     calc_coverage_rate,
 )
 from domain.product_loader import load_products_for_optimization
+from backend.cache import (
+    build_caller_key,
+    get_cached_products,
+    set_cached_products,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -190,17 +195,57 @@ def run_optimization(payload: OptimizeRequest) -> OptimizeResponse:
     """
 
     try:
-        with DanDomainClient(
-            username=payload.api_username,
-            password=payload.api_password,
-        ) as client:
-            df = load_products_for_optimization(
-                client,
-                site_id=payload.site_id,
+        # --- Product cache (Task 3.2) ---
+        caller_key = build_caller_key(payload.api_username, payload.site_id)
+
+        # Cache is only used when include_variants=True (the default and
+        # overwhelmingly common case).  The include_variants=False path is
+        # rare and bypasses cache to avoid complexity.
+        use_cache = payload.include_variants
+        cached_records = get_cached_products(caller_key, payload.site_id) if use_cache else None
+
+        if cached_records is not None:
+            # Cache hit — rebuild DataFrame from cached records
+            import pandas as pd
+            from domain.product_loader import filter_products
+
+            df = pd.DataFrame(cached_records)
+            df = filter_products(
+                df,
                 include_offline=payload.include_offline,
-                include_variants=payload.include_variants,
                 brand_ids=payload.brand_ids,
             )
+            logger.info("Product cache HIT for site_id=%s", payload.site_id)
+        else:
+            # Cache miss — fetch via SOAP
+            from domain.product_loader import fetch_products, filter_products
+
+            with DanDomainClient(
+                username=payload.api_username,
+                password=payload.api_password,
+            ) as client:
+                unfiltered_df, _brand_id_map = fetch_products(
+                    client,
+                    include_variants=payload.include_variants,
+                )
+
+            # Store unfiltered DataFrame in cache when fetched with variants
+            if use_cache and not unfiltered_df.empty:
+                try:
+                    set_cached_products(
+                        caller_key,
+                        payload.site_id,
+                        unfiltered_df.to_dict(orient="records"),
+                    )
+                except Exception:
+                    logger.debug("Failed to populate product cache", exc_info=True)
+
+            df = filter_products(
+                unfiltered_df,
+                include_offline=payload.include_offline,
+                brand_ids=payload.brand_ids,
+            )
+            logger.info("Product cache MISS for site_id=%s", payload.site_id)
 
         if df.empty:
             raise HTTPException(

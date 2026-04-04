@@ -90,6 +90,20 @@ class Settings(BaseSettings):
         description="TTL in seconds for job result keys in Redis.",
     )
 
+    # -- Product cache (Task 3.2) -----------------------------------------
+    product_cache_ttl_s: int = Field(
+        default=900,
+        description="TTL in seconds for cached product data (default 15 min).",
+    )
+    cache_key_salt: str = Field(
+        default="change-me",
+        description="Server-side salt mixed into cache key hashes.",
+    )
+    cache_max_payload_kb: int = Field(
+        default=5120,
+        description="Maximum payload size in KB allowed for a single cache entry.",
+    )
+
     # -- Crypto / Auth (placeholders for future tasks) --------------------
     encryption_key: Optional[str] = Field(default=None)
     jwt_secret: Optional[str] = Field(default=None)
@@ -141,6 +155,7 @@ class Settings(BaseSettings):
             "postgres_password",
             "encryption_key",
             "jwt_secret",
+            "cache_key_salt",
         }
     )
 
