@@ -97,6 +97,14 @@ _PRICE_NAMES = [
     'net', 'net price', 'nettopris', 'nettopreis', 'amount',
     'beløb', 'betrag', 'prix', 'precio', 'prezzo',
 ]
+_QTY_NAMES = [
+    'quantity', 'qty', 'antal', 'anzahl', 'amount', 'count',
+    'mængde', 'stk', 'pcs', 'units', 'beløb', 'menge',
+    # NOTE: 'beløb' (Danish for 'amount') intentionally appears in both
+    # _QTY_NAMES and _PRICE_NAMES — it is contextually ambiguous and
+    # _guess_candidates will surface it as a candidate for both fields,
+    # letting the LLM or caller resolve the ambiguity.
+]
 _DISCOUNT_NAMES = [
     'discount', 'rabat', 'rabatt', 'remise', 'descuento',
     'sconto', 'korting',
@@ -106,6 +114,16 @@ _DESCRIPTION_NAMES = [
     'description', 'beskrivelse', 'beschreibung', 'name', 'navn',
     'titel', 'title', 'product', 'produkt', 'designation',
 ]
+
+#: Mapping from internal field name to the pattern list used by heuristics.
+_FIELD_PATTERNS: dict[str, list[str]] = {
+    'sku': _SKU_NAMES,
+    'price': _PRICE_NAMES,
+    'qty': _QTY_NAMES,
+    'discount': _DISCOUNT_NAMES,
+    'currency': _CURRENCY_NAMES,
+    'description': _DESCRIPTION_NAMES,
+}
 
 
 def _detect_column(df_columns, patterns):
@@ -119,6 +137,43 @@ def _detect_column(df_columns, patterns):
             if pat in lc:
                 return orig
     return None
+
+
+def _guess_candidates(headers: list[str]) -> dict[str, list[str]]:
+    """Return likely header candidates for each internal field based on
+    regex/name hints.
+
+    This is the single place where header-name heuristics live.  The
+    returned dict maps each internal field (``'sku'``, ``'qty'``,
+    ``'price'``, ``'description'``, ``'discount'``, ``'currency'``) to
+    a list of candidate column names from *headers* that look like a
+    plausible match, ordered best-first.
+    """
+    lower_map = {h.lower().strip(): h for h in headers}
+    result: dict[str, list[str]] = {}
+
+    for field, patterns in _FIELD_PATTERNS.items():
+        candidates: list[str] = []
+        seen: set[str] = set()
+
+        # Pass 1: exact match on lowercased header
+        for pat in patterns:
+            if pat in lower_map:
+                orig = lower_map[pat]
+                if orig not in seen:
+                    candidates.append(orig)
+                    seen.add(orig)
+
+        # Pass 2: substring match
+        for pat in patterns:
+            for lc, orig in lower_map.items():
+                if pat in lc and orig not in seen:
+                    candidates.append(orig)
+                    seen.add(orig)
+
+        result[field] = candidates
+
+    return result
 
 
 def _dedupe_columns(headers: list[str]) -> list[str]:
@@ -288,15 +343,61 @@ def parse_supplier_file(raw_bytes: bytes, filename: str, encoding: str = 'auto')
     )
 
 
-def detect_supplier_columns(df):
-    """Auto-detect SKU, price, discount, currency, and description columns."""
+def _heuristic_detect_supplier_columns(df):
+    """Pure heuristic/regex column detection for supplier files.
+
+    Returns ``{'sku': ..., 'price': ..., 'discount': ..., 'currency': ...,
+    'description': ...}`` where each value is the detected column name or
+    ``None``.  This is the internal fallback used when the LLM path is
+    unavailable or fails.
+    """
+    candidates = _guess_candidates(list(df.columns))
     return {
-        'sku': _detect_column(df.columns, _SKU_NAMES),
-        'price': _detect_column(df.columns, _PRICE_NAMES),
-        'discount': _detect_column(df.columns, _DISCOUNT_NAMES),
-        'currency': _detect_column(df.columns, _CURRENCY_NAMES),
-        'description': _detect_column(df.columns, _DESCRIPTION_NAMES),
+        field: (candidates[field][0] if candidates[field] else None)
+        for field in ('sku', 'price', 'discount', 'currency', 'description')
     }
+
+
+def detect_supplier_columns(df, *, api_key=None, model='gpt-4o-mini',
+                            llm_call=None):
+    """Auto-detect SKU, price, discount, currency, and description columns.
+
+    Uses :func:`~domain.invoice_ean.suggest_column_mapping` (LLM-based) as
+    the primary detection mechanism.  Falls back to pure heuristic matching
+    when the LLM is unavailable, fails, or returns an unusable mapping.
+
+    The optional keyword arguments are forwarded to
+    ``suggest_column_mapping``.
+    """
+    # --- LLM-first path ---
+    try:
+        import domain.invoice_ean as _ean
+        mapping = _ean.suggest_column_mapping(
+            df, api_key=api_key, model=model, llm_call=llm_call,
+        )
+    except Exception:
+        mapping = None
+
+    if mapping and any(mapping.get(f) for f in ('sku', 'price')):
+        # Fill in any gaps from heuristics
+        candidates = _guess_candidates(list(df.columns))
+        used_cols = set(mapping.values())
+        for field in ('sku', 'price', 'discount', 'currency', 'description'):
+            if not mapping.get(field) and candidates[field]:
+                # Only fill unambiguous gaps (single candidate not already
+                # used by another field)
+                free = [c for c in candidates[field] if c not in used_cols]
+                if len(free) == 1:
+                    mapping[field] = free[0]
+                    used_cols.add(free[0])
+        return {
+            field: mapping.get(field)
+            for field in ('sku', 'price', 'discount', 'currency',
+                          'description')
+        }
+
+    # --- Heuristic fallback ---
+    return _heuristic_detect_supplier_columns(df)
 
 
 def detect_discount_lines(df, discount_col=None):

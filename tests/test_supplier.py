@@ -12,11 +12,15 @@ from domain.supplier import (
     parse_supplier_file,
     detect_encoding,
     detect_supplier_columns,
+    _heuristic_detect_supplier_columns,
+    _guess_candidates,
     normalize_sku,
     match_supplier_to_products,
     _dedupe_columns,
 )
 from domain.invoice_ean import (
+    detect_invoice_columns,
+    _heuristic_detect_invoice_columns,
     suggest_column_mapping,
     _build_mapping_prompt,
     _parse_llm_mapping_response,
@@ -450,6 +454,20 @@ class TestBuildMappingPrompt(unittest.TestCase):
         # header + separator + 5 data rows
         self.assertEqual(len(table_lines), 7)
 
+    def test_includes_heuristic_hints(self):
+        """Prompt should include heuristic candidate suggestions."""
+        df = pd.DataFrame({'SKU': ['X1'], 'Price': [99]})
+        prompt = _build_mapping_prompt(df)
+        self.assertIn('Heuristic suggestions', prompt)
+        self.assertIn('suggested candidates', prompt)
+        self.assertIn('SKU', prompt)
+
+    def test_no_hints_for_unknown_columns(self):
+        """No hints section when no heuristic candidates are found."""
+        df = pd.DataFrame({'Foo': ['X1'], 'Bar': [99]})
+        prompt = _build_mapping_prompt(df)
+        self.assertNotIn('Heuristic suggestions', prompt)
+
 
 class TestParseLLMMappingResponse(unittest.TestCase):
     """Tests for _parse_llm_mapping_response validation."""
@@ -624,6 +642,244 @@ class TestSuggestColumnMappingIntegration(unittest.TestCase):
         """suggest_column_mapping should be accessible from domain.supplier."""
         from domain.supplier import suggest_column_mapping as sup_scm
         self.assertIs(sup_scm, suggest_column_mapping)
+
+    def test_heuristic_gap_fill_after_llm(self):
+        """LLM maps sku only; heuristic fills unambiguous price."""
+        df = pd.DataFrame({
+            'Art': ['X1', 'X2'],
+            'Pris': [100, 200],
+            'Notes': ['a', 'b'],
+        })
+
+        def partial_llm(prompt, key, model):
+            return '{"Art": "sku"}'
+
+        result = suggest_column_mapping(
+            df, api_key='test', llm_call=partial_llm,
+        )
+        self.assertEqual(result['sku'], 'Art')
+        # 'Pris' is an unambiguous price candidate — should be gap-filled
+        self.assertEqual(result.get('price'), 'Pris')
+
+    def test_heuristic_gap_fill_ambiguous_not_filled(self):
+        """When multiple candidates exist for a field, gap-fill skips it."""
+        df = pd.DataFrame({
+            'Art': ['X1'],
+            'Price': [100],
+            'Cost Price': [80],
+        })
+
+        def sku_only_llm(prompt, key, model):
+            return '{"Art": "sku"}'
+
+        result = suggest_column_mapping(
+            df, api_key='test', llm_call=sku_only_llm,
+        )
+        self.assertEqual(result['sku'], 'Art')
+        # Both 'Price' and 'Cost Price' match → ambiguous → not gap-filled
+        self.assertNotIn('price', result)
+
+
+# ===================================================================
+# _guess_candidates — unified heuristic helper
+# ===================================================================
+
+class TestGuessCandidates(unittest.TestCase):
+    """Tests for domain.supplier._guess_candidates."""
+
+    def test_returns_all_fields(self):
+        candidates = _guess_candidates(['A', 'B'])
+        for field in INTERNAL_FIELDS:
+            self.assertIn(field, candidates)
+            self.assertIsInstance(candidates[field], list)
+
+    def test_exact_match(self):
+        candidates = _guess_candidates(['SKU', 'Price', 'Qty'])
+        self.assertIn('SKU', candidates['sku'])
+        self.assertIn('Price', candidates['price'])
+        self.assertIn('Qty', candidates['qty'])
+
+    def test_substring_match(self):
+        candidates = _guess_candidates(['Unit Price', 'ArticleNumber'])
+        self.assertIn('Unit Price', candidates['price'])
+        self.assertIn('ArticleNumber', candidates['sku'])
+
+    def test_danish_headers(self):
+        candidates = _guess_candidates(['Varenr', 'Pris', 'Rabat', 'Valuta', 'Beskrivelse'])
+        self.assertEqual(candidates['sku'], ['Varenr'])
+        self.assertEqual(candidates['price'], ['Pris'])
+        self.assertEqual(candidates['discount'], ['Rabat'])
+        self.assertEqual(candidates['currency'], ['Valuta'])
+        self.assertEqual(candidates['description'], ['Beskrivelse'])
+
+    def test_no_match_returns_empty_list(self):
+        candidates = _guess_candidates(['Foo', 'Bar', 'Baz'])
+        for field in INTERNAL_FIELDS:
+            self.assertEqual(candidates[field], [])
+
+    def test_multiple_candidates_ordered(self):
+        """Multiple columns matching the same field are listed best-first."""
+        candidates = _guess_candidates(['SKU', 'Article', 'Item Number'])
+        self.assertGreater(len(candidates['sku']), 1)
+        # 'SKU' is an exact match — should come first
+        self.assertEqual(candidates['sku'][0], 'SKU')
+
+
+# ===================================================================
+# detect_supplier_columns — LLM-first with heuristic fallback
+# ===================================================================
+
+class TestDetectSupplierColumnsLLMFirst(unittest.TestCase):
+    """Tests for the LLM-first flow in detect_supplier_columns."""
+
+    def test_llm_mapping_used_when_available(self):
+        df = pd.DataFrame({
+            'Col A': ['X1'], 'Col B': [100], 'Col C': ['Widget'],
+        })
+
+        def fake_llm(prompt, key, model):
+            return '{"Col A": "sku", "Col B": "price", "Col C": "description"}'
+
+        result = detect_supplier_columns(
+            df, api_key='test', llm_call=fake_llm,
+        )
+        self.assertEqual(result['sku'], 'Col A')
+        self.assertEqual(result['price'], 'Col B')
+        self.assertEqual(result['description'], 'Col C')
+
+    def test_heuristic_fallback_when_no_api_key(self):
+        """Without API key, falls back to pure heuristic detection."""
+        df = pd.DataFrame(columns=['SKU', 'Price', 'Description'])
+        result = detect_supplier_columns(df)
+        self.assertEqual(result['sku'], 'SKU')
+        self.assertEqual(result['price'], 'Price')
+        self.assertEqual(result['description'], 'Description')
+
+    def test_heuristic_fallback_when_llm_fails(self):
+        df = pd.DataFrame(columns=['SKU', 'Price'])
+
+        def failing_llm(prompt, key, model):
+            return None
+
+        result = detect_supplier_columns(
+            df, api_key='test', llm_call=failing_llm,
+        )
+        self.assertEqual(result['sku'], 'SKU')
+        self.assertEqual(result['price'], 'Price')
+
+    def test_heuristic_fallback_when_llm_unusable(self):
+        """LLM returns garbage → heuristic fallback kicks in."""
+        df = pd.DataFrame(columns=['SKU', 'Price'])
+
+        def garbage_llm(prompt, key, model):
+            return 'I cannot process this'
+
+        result = detect_supplier_columns(
+            df, api_key='test', llm_call=garbage_llm,
+        )
+        self.assertEqual(result['sku'], 'SKU')
+        self.assertEqual(result['price'], 'Price')
+
+    def test_returns_all_five_fields(self):
+        """Result dict always has sku, price, discount, currency, description."""
+        df = pd.DataFrame(columns=['X', 'Y'])
+        result = detect_supplier_columns(df)
+        for field in ('sku', 'price', 'discount', 'currency', 'description'):
+            self.assertIn(field, result)
+
+
+# ===================================================================
+# detect_invoice_columns — LLM-first with heuristic fallback
+# ===================================================================
+
+class TestDetectInvoiceColumnsLLMFirst(unittest.TestCase):
+    """Tests for the LLM-first flow in detect_invoice_columns."""
+
+    def test_llm_mapping_used_when_available(self):
+        df = pd.DataFrame({
+            'Col A': ['X1'], 'Col B': [5], 'Col C': ['Widget'],
+        })
+
+        def fake_llm(prompt, key, model):
+            return '{"Col A": "sku", "Col B": "qty", "Col C": "description"}'
+
+        result = detect_invoice_columns(
+            df, api_key='test', llm_call=fake_llm,
+        )
+        self.assertEqual(result['sku'], 'Col A')
+        self.assertEqual(result['qty'], 'Col B')
+        self.assertEqual(result['description'], 'Col C')
+
+    def test_heuristic_fallback_when_no_api_key(self):
+        df = pd.DataFrame(columns=['Varenr', 'Antal', 'Beskrivelse'])
+        result = detect_invoice_columns(df)
+        self.assertEqual(result['sku'], 'Varenr')
+        self.assertEqual(result['qty'], 'Antal')
+        self.assertEqual(result['description'], 'Beskrivelse')
+
+    def test_heuristic_fallback_when_llm_fails(self):
+        df = pd.DataFrame(columns=['SKU', 'Qty', 'Name'])
+
+        def failing_llm(prompt, key, model):
+            return None
+
+        result = detect_invoice_columns(
+            df, api_key='test', llm_call=failing_llm,
+        )
+        self.assertEqual(result['sku'], 'SKU')
+        self.assertEqual(result['qty'], 'Qty')
+
+    def test_returns_three_fields(self):
+        """Result dict always has sku, qty, description."""
+        df = pd.DataFrame(columns=['X', 'Y'])
+        result = detect_invoice_columns(df)
+        for field in ('sku', 'qty', 'description'):
+            self.assertIn(field, result)
+
+    def test_no_separate_regex_only_entry_point(self):
+        """Confirm detect_invoice_columns tries LLM before heuristics.
+
+        When an llm_call is provided and returns a valid mapping,
+        the result should come from the LLM, not the heuristic path.
+        """
+        df = pd.DataFrame({
+            'Alpha': ['X1'], 'Beta': [5],
+        })
+
+        def fake_llm(prompt, key, model):
+            return '{"Alpha": "sku", "Beta": "qty"}'
+
+        result = detect_invoice_columns(
+            df, api_key='test', llm_call=fake_llm,
+        )
+        # LLM-provided mapping should be used
+        self.assertEqual(result['sku'], 'Alpha')
+        self.assertEqual(result['qty'], 'Beta')
+
+
+# ===================================================================
+# _heuristic helpers — direct tests
+# ===================================================================
+
+class TestHeuristicHelpers(unittest.TestCase):
+    """Direct tests for _heuristic_detect_supplier_columns and
+    _heuristic_detect_invoice_columns."""
+
+    def test_heuristic_supplier_detects_known_patterns(self):
+        df = pd.DataFrame(columns=['Artikelnr', 'Pris', 'Rabat', 'Valuta', 'Navn'])
+        result = _heuristic_detect_supplier_columns(df)
+        self.assertEqual(result['sku'], 'Artikelnr')
+        self.assertEqual(result['price'], 'Pris')
+        self.assertEqual(result['discount'], 'Rabat')
+        self.assertEqual(result['currency'], 'Valuta')
+        self.assertEqual(result['description'], 'Navn')
+
+    def test_heuristic_invoice_detects_known_patterns(self):
+        df = pd.DataFrame(columns=['SKU', 'Qty', 'Description'])
+        result = _heuristic_detect_invoice_columns(df)
+        self.assertEqual(result['sku'], 'SKU')
+        self.assertEqual(result['qty'], 'Qty')
+        self.assertEqual(result['description'], 'Description')
 
 
 if __name__ == '__main__':
