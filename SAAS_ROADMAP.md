@@ -241,7 +241,7 @@ external-provider alternative.
 ## Phase 1 — Safety Prerequisites (consolidate write paths)
 
 ### Task 1.1 — Retire Streamlit direct SOAP writes
-- [ ] Task 1.1
+- [x] Task 1.1
 
 **Objective**: Remove the direct `DanDomainClient.update_prices_batch()` call
 from `ui/pages/price_optimizer.py` and route all writes through the backend
