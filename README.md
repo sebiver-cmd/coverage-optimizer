@@ -33,3 +33,48 @@ is active.
 1. Clone this repository.
 2. Install the requirements: `pip install -r requirements.txt`
 3. Run the app: `streamlit run app.py`
+
+## Local dev with Docker
+
+A Docker Compose stack is provided under `infra/` that starts the FastAPI
+backend, Postgres 16, and Redis 7 with a single command.
+
+### Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) and
+  [Docker Compose](https://docs.docker.com/compose/) (v2+).
+
+### Quick start
+
+```bash
+# 1. Create your local env file (edit as needed)
+cp .env.example .env
+
+# 2. Start all services (FastAPI + Postgres + Redis)
+docker compose -f infra/docker-compose.yml up --build
+
+# 3. Verify the backend is running
+curl http://localhost:8000/health
+# → {"status":"ok"}
+
+# 4. In a separate terminal, run Streamlit locally
+SB_OPTIMA_BACKEND_URL=http://localhost:8000 streamlit run app.py
+```
+
+### Stopping / cleaning up
+
+```bash
+# Stop and remove containers
+docker compose -f infra/docker-compose.yml down
+
+# Also remove persistent volumes (Postgres data, Redis data)
+docker compose -f infra/docker-compose.yml down -v
+```
+
+### Notes
+
+- **Streamlit is not containerized** — run it on your host so hot-reload works
+  normally. Point it at the dockerized backend via `SB_OPTIMA_BACKEND_URL`.
+- **No secrets are baked into images** — credentials are passed via `.env`
+  (git-ignored) or environment variables.
+- **Existing tests do not require Docker** — `python -m pytest` works as before.

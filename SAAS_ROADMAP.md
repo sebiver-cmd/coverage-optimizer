@@ -297,7 +297,7 @@ already exists in `backend/main.py`.
 ## Phase 2 — Foundations (Docker + DB + config)
 
 ### Task 2.1 — Docker Compose for local dev
-- [ ] Task 2.1
+- [x] Task 2.1
 
 **Objective**: One-command local dev environment with FastAPI, Postgres, and
 Redis.

@@ -1,0 +1,64 @@
+# ---------------------------------------------------------------------------
+# Docker Compose — SB-Optima local development
+# ---------------------------------------------------------------------------
+# Usage:
+#   docker compose -f infra/docker-compose.yml up --build
+#
+# Streamlit is *not* containerized; run it locally with:
+#   SB_OPTIMA_BACKEND_URL=http://localhost:8000 streamlit run app.py
+# ---------------------------------------------------------------------------
+
+services:
+  # ---- FastAPI backend ----
+  api:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../.env
+    environment:
+      # Defaults — .env file values take precedence
+      - SB_OPTIMA_ENABLE_APPLY=false
+      - DATABASE_URL=postgresql+psycopg2://sboptima:sboptima@postgres:5432/sboptima
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ---- Postgres 16 ----
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: sboptima
+      POSTGRES_PASSWORD: sboptima
+      POSTGRES_DB: sboptima
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sboptima"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ---- Redis 7 ----
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:
+  redisdata:
