@@ -1915,9 +1915,8 @@ class TestGenerateBarcodePdfZd421:
         assert isinstance(pdf_bytes, bytes)
         assert pdf_bytes[:5] == b'%PDF-'
 
-    def test_page_size_50x100mm(self):
-        """Each page should be 50 mm × 100 mm."""
-        from fpdf import FPDF
+    def test_page_size_100x50mm_landscape(self):
+        """Each page should be 100 mm × 50 mm (landscape)."""
         pdf_bytes = _generate_barcode_pdf_zd421(_sample_export_df(1))
         # Parse raw PDF to check MediaBox dimensions
         text = pdf_bytes.decode('latin-1')
@@ -1928,8 +1927,8 @@ class TestGenerateBarcodePdfZd421:
         h_pt = float(boxes[0][3])
         w_mm = w_pt / 2.8346
         h_mm = h_pt / 2.8346
-        assert abs(w_mm - 50) < 1, f"Width {w_mm:.1f} mm != 50 mm"
-        assert abs(h_mm - 100) < 1, f"Height {h_mm:.1f} mm != 100 mm"
+        assert abs(w_mm - 100) < 1, f"Width {w_mm:.1f} mm != 100 mm"
+        assert abs(h_mm - 50) < 1, f"Height {h_mm:.1f} mm != 50 mm"
 
     def test_one_barcode_per_page(self):
         """N rows must produce exactly N pages."""
@@ -2055,7 +2054,7 @@ class TestBarcodeFormatDispatcher:
         text = pdf_bytes.decode('latin-1')
         boxes = re.findall(r'/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\]', text)
         w_mm = float(boxes[0][2]) / 2.8346
-        assert abs(w_mm - 50) < 1
+        assert abs(w_mm - 100) < 1
 
     def test_fast_scan_format(self):
         """Passing 'fast_scan' uses the compact grid layout."""
