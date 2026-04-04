@@ -152,10 +152,9 @@ class TestCacheGetSetJson:
         assert result is None
 
     @patch("backend.cache.get_redis")
-    def test_cache_set_then_get(self, mock_get_redis, monkeypatch):
+    def test_cache_set_then_get(self, mock_get_redis):
         from backend.cache import cache_get_json, cache_set_json
 
-        monkeypatch.setenv("CACHE_MAX_PAYLOAD_KB", "5120")
         store = {}
         mock_r, store = self._make_mock_redis(store)
         mock_get_redis.return_value = mock_r
@@ -178,6 +177,19 @@ class TestCacheGetSetJson:
         data = [{"NUMBER": "SKU-001"}]
         ok = cache_set_json("test:key", data, ttl_s=60)
         assert ok is False
+
+    @patch("backend.cache.get_redis")
+    def test_set_accepts_payload_under_limit(self, mock_get_redis, monkeypatch):
+        from backend.cache import cache_set_json
+
+        monkeypatch.setenv("CACHE_MAX_PAYLOAD_KB", "1")  # 1 KB limit
+        mock_r, _ = self._make_mock_redis()
+        mock_get_redis.return_value = mock_r
+
+        # Small payload should fit within 1 KB
+        data = {"key": "val"}
+        ok = cache_set_json("test:key", data, ttl_s=60)
+        assert ok is True
 
     def test_get_returns_none_when_redis_unavailable(self, monkeypatch):
         monkeypatch.delenv("REDIS_URL", raising=False)
