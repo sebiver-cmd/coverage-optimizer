@@ -397,7 +397,7 @@ blocking HTTP.
 adds worker service.
 
 ### Task 3.2 — Per-tenant product cache (Redis)
-- [ ] Task 3.2
+- [x] Task 3.2
 
 **Objective**: Cache product data in Redis to avoid re-fetching from SOAP on
 every optimisation call.
