@@ -3,17 +3,13 @@
 Uses the FastAPI backend ``/optimize`` endpoint for computing optimisation
 suggestions (read-only).  Push-to-shop writes are routed through the
 backend ``/apply-prices/create-manifest`` + ``/apply-prices/apply``
-endpoints instead of calling DanDomain SOAP directly.
-
-Legacy direct SOAP writes can be re-enabled by setting the environment
-variable ``SB_OPTIMA_ALLOW_UI_DIRECT_PUSH=true``, but this path is
-deprecated and should not be used in production.
+endpoints.  All HostedShop interactions go through the backend — the UI
+never calls SOAP directly.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 import time
 
 import requests
@@ -60,20 +56,6 @@ from domain.invoice_ean import (
 )
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Feature flags
-# ---------------------------------------------------------------------------
-
-#: When ``true``, the UI falls back to the legacy direct-SOAP write path.
-#: Deprecated — do not enable in production.
-_ALLOW_UI_DIRECT_PUSH: bool = (
-    os.environ.get("SB_OPTIMA_ALLOW_UI_DIRECT_PUSH", "").strip().lower() == "true"
-)
-
-if _ALLOW_UI_DIRECT_PUSH:
-    # Import only when the escape hatch is explicitly enabled.
-    from dandomain_api import DanDomainClient, DanDomainAPIError  # type: ignore[import]
 
 # Columns shown in the simplified (default) table view.
 _SIMPLE_COLUMNS = [
@@ -2768,14 +2750,9 @@ def _handle_live_push_confirmation(
         st.info("Push cancelled.")
 
     if confirmed:
-        if _ALLOW_UI_DIRECT_PUSH:
-            _execute_legacy_direct_push(
-                pending_updates, api_username, api_password, site_id,
-            )
-        else:
-            _execute_backend_push(
-                pending_updates, api_username, api_password, site_id, backend_url,
-            )
+        _execute_backend_push(
+            pending_updates, api_username, api_password, site_id, backend_url,
+        )
 
 
 def _execute_backend_push(
@@ -2878,76 +2855,3 @@ def _test_connection_via_backend(backend_url, api_username, api_password, site_i
     except requests.RequestException as exc:
         st.error(f"Backend unreachable: {exc}")
 
-
-def _execute_legacy_direct_push(pending_updates, api_username, api_password, site_id):
-    """Legacy direct SOAP push — DEPRECATED.
-
-    Only available when ``SB_OPTIMA_ALLOW_UI_DIRECT_PUSH=true``.
-    Retained for emergency rollback only.  Do not use in production.
-    """
-    st.warning(
-        "⚠️ **Deprecated**: Using direct SOAP write path. "
-        "Set ``SB_OPTIMA_ALLOW_UI_DIRECT_PUSH=false`` (or unset) to use the "
-        "safe backend path."
-    )
-    st.session_state["_push_running"] = True
-    st.session_state.pop("_push_pending", None)
-
-    progress_bar = st.progress(0, text="Pushing prices…")
-    log_entries: list[dict] = []
-
-    def on_progress(idx, total, pnum, ok, err):
-        progress_bar.progress(
-            idx / total,
-            text=f"Updating {idx}/{total}: {pnum}",
-        )
-        entry = {
-            "product_number": pnum,
-            "status": "OK" if ok else "FAILED",
-            "error": err,
-            "timestamp": time.strftime("%H:%M:%S"),
-        }
-        if idx - 1 < len(pending_updates):
-            u = pending_updates[idx - 1]
-            entry["product_id"] = u.get("product_id", "")
-            entry["variant_id"] = u.get("variant_id", "")
-            entry["variant_types"] = u.get("variant_types", "")
-        log_entries.append(entry)
-
-    try:
-        with DanDomainClient(api_username, api_password) as client:
-            results = client.update_prices_batch(
-                pending_updates,
-                site_id=site_id,
-                progress_callback=on_progress,
-            )
-
-        progress_bar.progress(1.0, text="Done!")
-
-        res_c1, res_c2 = st.columns(2)
-        res_c1.metric("Succeeded", results["success"])
-        res_c2.metric("Failed", results["failed"])
-
-        if results["errors"]:
-            with st.expander("Errors", expanded=True):
-                st.dataframe(
-                    pd.DataFrame(results["errors"]),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-
-    except (DanDomainAPIError, ValueError, AttributeError) as exc:
-        st.error(f"Push failed: {exc}")
-    finally:
-        st.session_state.pop("_push_running", None)
-        st.session_state.pop("_push_updates", None)
-
-    if log_entries:
-        log_df = pd.DataFrame(log_entries)
-        log_csv = log_df.to_csv(index=False)
-        st.download_button(
-            label="Download Audit Log",
-            data=log_csv.encode("utf-8"),
-            file_name="api_push_log.csv",
-            mime="text/csv",
-        )

@@ -67,19 +67,20 @@ for DanDomain price optimisation.
 ```
 Streamlit UI (app.py)
   Sidebar: credentials, backend URL, dry-run toggle, site_id
-     |                          |
-     | HTTP                     | direct SOAP  <-- RISK
-     v                          v
-  FastAPI Backend             DanDomainClient
-  (/optimize, /brands,        .update_prices_batch()
-   /apply-prices/*, ...)
+     |
+     | HTTP (all interactions)
+     v
+  FastAPI Backend
+  (/optimize, /brands, /test-connection,
+   /catalog/products, /apply-prices/*, ...)
      |
      v
   domain/ (pricing, product_loader, ...)
      |
      v
-  DanDomainClient (read path: Product_GetAll,
-   get_all_brands, GetVariantsByItemNumber)
+  DanDomainClient (read + write via backend only:
+   Product_GetAll, get_all_brands,
+   GetVariantsByItemNumber, update_prices_batch)
      |                  |
      v                  v
   HostedShop SOAP    data/apply_batches/
@@ -97,15 +98,9 @@ Streamlit UI (app.py)
 | `POST /apply-prices/dry-run` | Read (persists manifest file) | `backend/apply_prices_api.py` |
 | `GET /apply-prices/batch/{id}` | Read | `backend/apply_prices_api.py` |
 | `POST /apply-prices/apply` | **Write** (guarded) | `backend/apply_real_api.py` |
-| Streamlit "Push Prices Now" | **Write** (direct SOAP) WARNING | `ui/pages/price_optimizer.py` lines 2787-2793 via `DanDomainClient.update_prices_batch` |
 
-### WARNING: Two-write-path risk
-
-The Streamlit UI can write to HostedShop **directly** via `DanDomainClient` (line 2788
-of `price_optimizer.py`), bypassing all backend guardrails (batch-level max rows,
-per-row margin/cost checks, idempotency, audit log, environment gating).
-
-**This must be consolidated before SaaS migration.**
+> **Resolved (Task 1.1 + 1.2)**: The two-write-path risk is eliminated.
+> All reads and writes go through backend endpoints.
 
 ## Safety guardrails (already implemented)
 
@@ -276,7 +271,7 @@ from `ui/pages/price_optimizer.py` and route all writes through the backend
   existing `/apply-prices/dry-run` endpoint.
 
 ### Task 1.2 — Backend becomes sole product fetcher for UI
-- [ ] Task 1.2
+- [x] Task 1.2
 
 **Objective**: Remove direct `DanDomainClient` read calls from the Streamlit UI
 where feasible (product fetch, brand fetch already use backend; ensure no

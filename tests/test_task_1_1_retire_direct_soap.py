@@ -322,43 +322,21 @@ class TestApplyVariantRouting:
 
 
 class TestUINoDirectSoap:
-    """UI must not directly import DanDomainClient at module level.
-
-    With ``SB_OPTIMA_ALLOW_UI_DIRECT_PUSH`` unset / false (default), the
-    ``from dandomain_api import DanDomainClient`` must NOT appear as a
-    top-level import — it is only imported conditionally under the flag.
-    """
+    """UI must not directly import DanDomainClient at module level."""
 
     def test_no_module_level_dandomain_import(self):
         """price_optimizer.py must not unconditionally import DanDomainClient."""
         import ui.pages.price_optimizer as mod
-        source = inspect.getsource(mod)
-
-        # The import should only be inside the conditional block, not at top-level.
-        # We verify by checking the module's actual __dict__ doesn't have it
-        # (since SB_OPTIMA_ALLOW_UI_DIRECT_PUSH is not set in test env).
         assert "DanDomainClient" not in mod.__dict__, (
-            "DanDomainClient must not be present in module namespace "
-            "when SB_OPTIMA_ALLOW_UI_DIRECT_PUSH is not set."
+            "DanDomainClient must not be present in module namespace."
         )
 
-    def test_no_direct_soap_write_when_flag_false(self, monkeypatch):
-        """When flag is false, _execute_legacy_direct_push is not called by default."""
-        monkeypatch.setenv("SB_OPTIMA_ALLOW_UI_DIRECT_PUSH", "false")
-
-        # The module-level _ALLOW_UI_DIRECT_PUSH should be False.
+    def test_no_dandomain_api_in_source(self):
+        """The UI module must not reference dandomain_api at all."""
         import ui.pages.price_optimizer as mod
-        # _ALLOW_UI_DIRECT_PUSH is evaluated at import; we check via source
-        # that the conditional guard exists.
         source = inspect.getsource(mod)
-        assert "_ALLOW_UI_DIRECT_PUSH" in source, (
-            "Feature flag _ALLOW_UI_DIRECT_PUSH must be defined."
-        )
-        assert "_execute_backend_push" in source, (
-            "_execute_backend_push must be defined as the default write path."
-        )
-        assert "_execute_legacy_direct_push" in source, (
-            "_execute_legacy_direct_push must exist as the escape-hatch path."
+        assert "dandomain_api" not in source, (
+            "dandomain_api must not appear in price_optimizer.py source."
         )
 
     def test_backend_client_module_imported(self):
