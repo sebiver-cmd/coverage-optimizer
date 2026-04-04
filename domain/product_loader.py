@@ -264,7 +264,11 @@ def enrich_variants(
             }
         variant_cache[base_num] = by_id
 
-        time.sleep(BATCH_DELAY)
+        # Delay between SOAP calls.  When the client has a caller_key
+        # the delay is enforced by the SOAP limiter (Task 3.3);
+        # otherwise fall back to the legacy BATCH_DELAY sleep.
+        if not getattr(client, "caller_key", None):
+            time.sleep(BATCH_DELAY)
 
     # Merge enrichment data into the DataFrame
     df = df.copy()

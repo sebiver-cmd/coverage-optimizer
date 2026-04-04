@@ -159,7 +159,7 @@ class DanDomainClient:
         Password for the API employee.
     """
 
-    def __init__(self, username: str, password: str):
+    def __init__(self, username: str, password: str, *, caller_key: str | None = None):
         # --- validate inputs ------------------------------------------------
         if not username or not isinstance(username, str):
             raise ValueError("API username is required")
@@ -168,6 +168,11 @@ class DanDomainClient:
 
         self._username = username.strip()
         self._password = password
+
+        #: Optional caller key for SOAP rate limiting (Task 3.3).
+        #: When set, every ``_call`` invocation is throttled via
+        #: :func:`backend.soap_limiter.soap_limit`.
+        self.caller_key: str | None = caller_key
 
         # Register credentials with the log-scrub filter so that even
         # debug / third-party logging can never leak them.
@@ -283,7 +288,21 @@ class DanDomainClient:
             logger.warning("Could not set extended variant output fields")
 
     def _call(self, operation: str, **kwargs) -> Any:
-        """Execute a SOAP operation with retry / back-off."""
+        """Execute a SOAP operation with retry / back-off.
+
+        When :attr:`caller_key` is set, the entire retry loop is wrapped
+        by :func:`backend.soap_limiter.soap_limit` to enforce per-caller
+        concurrency and delay limits (Task 3.3).
+        """
+        if self.caller_key:
+            from backend.soap_limiter import soap_limit
+
+            with soap_limit(self.caller_key):
+                return self._call_inner(operation, **kwargs)
+        return self._call_inner(operation, **kwargs)
+
+    def _call_inner(self, operation: str, **kwargs) -> Any:
+        """Retry loop for a single SOAP operation."""
         last_error: Optional[str] = None
 
         for attempt in range(MAX_RETRIES):

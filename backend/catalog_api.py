@@ -122,6 +122,7 @@ def get_catalog_products(payload: CatalogRequest) -> list[dict]:
             with DanDomainClient(
                 username=payload.api_username,
                 password=payload.api_password,
+                caller_key=caller_key,
             ) as client:
                 df, _brand_id_map = fetch_products(
                     client,

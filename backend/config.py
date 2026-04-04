@@ -104,6 +104,20 @@ class Settings(BaseSettings):
         description="Maximum payload size in KB allowed for a single cache entry.",
     )
 
+    # -- SOAP rate limiting (Task 3.3) ------------------------------------
+    soap_max_concurrent: int = Field(
+        default=3,
+        description="Max concurrent SOAP calls per caller key.",
+    )
+    soap_call_delay_s: float = Field(
+        default=0.2,
+        description="Minimum delay in seconds between successive SOAP calls per caller.",
+    )
+    soap_rate_limit_per_s: float = Field(
+        default=5.0,
+        description="Max SOAP calls per second per caller (token-bucket rate).",
+    )
+
     # -- Crypto / Auth (placeholders for future tasks) --------------------
     encryption_key: Optional[str] = Field(default=None)
     jwt_secret: Optional[str] = Field(default=None)

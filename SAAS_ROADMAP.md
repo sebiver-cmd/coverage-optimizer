@@ -426,7 +426,7 @@ every optimisation call.
 **Mitigation**: short TTL + manual invalidation endpoint `POST /cache/invalidate`.
 
 ### Task 3.3 — SOAP rate limiting + variant-enrichment batching
-- [ ] Task 3.3
+- [x] Task 3.3
 
 **Objective**: Prevent N+1 variant enrichment from overwhelming HostedShop;
 add per-caller rate limiting.
