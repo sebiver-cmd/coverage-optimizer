@@ -97,3 +97,19 @@ docker compose -f infra/docker-compose.yml down -v
 - **No secrets are baked into images** — credentials are passed via `.env`
   (git-ignored) or environment variables.
 - **Existing tests do not require Docker** — `python -m pytest` works as before.
+
+## SOAP rate limiting
+
+All SOAP calls routed through `DanDomainClient` are rate-limited when a
+`caller_key` is set on the client (the backend endpoints do this
+automatically).  The limiter is per-caller (keyed by a hashed
+username+site combination) so that one tenant cannot starve another.
+
+| Env var | Default | Description |
+|---|---|---|
+| `SOAP_MAX_CONCURRENT` | `3` | Maximum concurrent SOAP calls per caller. |
+| `SOAP_CALL_DELAY_S` | `0.2` | Minimum seconds between successive SOAP calls per caller. |
+| `SOAP_RATE_LIMIT_PER_S` | `5.0` | Reserved for future token-bucket rate (currently unused). |
+
+The limiter lives in `backend/soap_limiter.py` and uses in-process
+`threading.Semaphore` / `threading.Lock` — no Redis required.

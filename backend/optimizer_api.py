@@ -223,6 +223,7 @@ def run_optimization(payload: OptimizeRequest) -> OptimizeResponse:
             with DanDomainClient(
                 username=payload.api_username,
                 password=payload.api_password,
+                caller_key=caller_key,
             ) as client:
                 unfiltered_df, _brand_id_map = fetch_products(
                     client,
