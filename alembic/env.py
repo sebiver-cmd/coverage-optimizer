@@ -15,6 +15,9 @@ from sqlalchemy import engine_from_config, pool
 # Import the shared declarative base so autogenerate can detect models.
 from backend.db import Base  # noqa: F401 - side-effect: registers metadata
 
+# Import models so their tables are registered on Base.metadata.
+import backend.models  # noqa: F401
+
 # Alembic Config object — gives access to alembic.ini values.
 config = context.config
 

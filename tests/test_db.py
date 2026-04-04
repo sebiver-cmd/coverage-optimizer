@@ -110,10 +110,11 @@ def test_check_db_ok_with_sqlite():
 
 
 def test_base_metadata_exists():
-    """Base.metadata should be importable and empty (no tables yet)."""
+    """Base.metadata should be importable and contain registered models."""
     assert db_mod.Base.metadata is not None
-    # No models defined yet — tables should be empty
-    assert len(db_mod.Base.metadata.tables) == 0
+    # After Task 4.1, tenants + users tables are registered
+    assert "tenants" in db_mod.Base.metadata.tables
+    assert "users" in db_mod.Base.metadata.tables
 
 
 # ---------------------------------------------------------------------------
