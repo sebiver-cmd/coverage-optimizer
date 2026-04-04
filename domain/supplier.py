@@ -100,6 +100,10 @@ _PRICE_NAMES = [
 _QTY_NAMES = [
     'quantity', 'qty', 'antal', 'anzahl', 'amount', 'count',
     'mængde', 'stk', 'pcs', 'units', 'beløb', 'menge',
+    # NOTE: 'beløb' (Danish for 'amount') intentionally appears in both
+    # _QTY_NAMES and _PRICE_NAMES — it is contextually ambiguous and
+    # _guess_candidates will surface it as a candidate for both fields,
+    # letting the LLM or caller resolve the ambiguity.
 ]
 _DISCOUNT_NAMES = [
     'discount', 'rabat', 'rabatt', 'remise', 'descuento',

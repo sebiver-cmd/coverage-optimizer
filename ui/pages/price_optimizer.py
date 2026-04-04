@@ -1401,7 +1401,7 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
             sup_df = None
 
         if sup_df is not None and not sup_df.empty:
-            _cache_key = f"_ai_map_sup_{sup_file.name}"
+            _cache_key = f"_col_map_sup_{sup_file.name}"
             if _cache_key in st.session_state:
                 detected = st.session_state[_cache_key]
             else:
@@ -1929,7 +1929,7 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
             inv_df = None
 
         if inv_df is not None and not inv_df.empty:
-            _cache_key = f"_ai_map_inv_{inv_file.name}"
+            _cache_key = f"_col_map_inv_{inv_file.name}"
             if _cache_key in st.session_state:
                 detected = st.session_state[_cache_key]
             else:

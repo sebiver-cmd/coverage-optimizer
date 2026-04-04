@@ -916,11 +916,13 @@ def _build_mapping_prompt(df: pd.DataFrame) -> str:
             hints_lines.append(
                 f"  {field}: suggested candidates = {candidates[field]}"
             )
-    hints_block = '\n'.join(hints_lines)
-    hints_section = (
-        f"\nHeuristic suggestions (use as hints, not as final answer):\n"
-        f"{hints_block}\n"
-    ) if hints_lines else ''
+    if hints_lines:
+        hints_section = (
+            "\nHeuristic suggestions (use as hints, not as final answer):\n"
+            + '\n'.join(hints_lines) + '\n'
+        )
+    else:
+        hints_section = ''
 
     return (
         "You are a data-mapping assistant. "
