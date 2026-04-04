@@ -134,12 +134,12 @@ def is_apply_enabled() -> bool:
     enable writes.  Any other value — including absent — means disabled.
 
     .. note::
-        A fresh :class:`~backend.config.Settings` object is constructed on
-        each call so that ``monkeypatch.setenv`` in tests takes effect
-        immediately.
+        Tests rely on the ``_clear_settings_cache`` autouse fixture in
+        ``tests/conftest.py`` so that ``monkeypatch.setenv`` changes are
+        picked up by the next ``get_settings()`` call.
     """
-    from backend.config import Settings  # local import to avoid circular
-    return Settings().enable_apply
+    from backend.config import get_settings  # local import to avoid circular
+    return get_settings().enable_apply
 
 
 # ---------------------------------------------------------------------------
