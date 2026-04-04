@@ -2886,7 +2886,7 @@ class TestCraftSkuMatching:
         assert m['sku'] is not None
         assert m['score'] == 100
         # The matched SKU should be the XL variant
-        assert 'XL' in m['sku']
+        assert m['sku'] == '1910163-999000-XL'
 
     def test_multiple_craft_skus_match_correctly(self):
         """Multiple Craft invoice SKUs each match the correct catalogue entry."""
@@ -2903,9 +2903,9 @@ class TestCraftSkuMatching:
         assert mdata['matches']['1910163-999000-6']['score'] == 100
         assert mdata['matches']['1910163-999000-5']['score'] == 100
         # Each should match the corresponding size
-        assert 'XL' in mdata['matches']['1910163-999000-7']['sku']
-        assert '999000-L' in mdata['matches']['1910163-999000-6']['sku']
-        assert '999000-M' in mdata['matches']['1910163-999000-5']['sku']
+        assert mdata['matches']['1910163-999000-7']['sku'] == '1910163-999000-XL'
+        assert mdata['matches']['1910163-999000-6']['sku'] == '1910163-999000-L'
+        assert mdata['matches']['1910163-999000-5']['sku'] == '1910163-999000-M'
 
     def test_build_matches_df_has_craft_normalized_column(self):
         """build_matches_df populates src_sku_craft_normalized for Craft SKUs."""
