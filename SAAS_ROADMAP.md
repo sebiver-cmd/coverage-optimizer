@@ -217,7 +217,7 @@ When configuring:
 ## Phase 0 — Planning & ADR
 
 ### Task 0.1 — Architecture Decision Record
-- [ ] Task 0.1
+- [x] Task 0.1
 
 **Objective**: Write `docs/adr/0001-saas-architecture.md` locking the stack
 choices listed above, with component diagram, data flow, security model, tenant
