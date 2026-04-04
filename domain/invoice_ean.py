@@ -555,7 +555,7 @@ def match_invoice_to_products(
     }
 
 
-# Canonical output column order for export DataFrames.
+# Canonical output column names *and* order for export DataFrames.
 _EXPORT_COLUMNS = [
     'SKU', 'Product Number', 'Title', 'Variant Name',
     'Amount', 'EAN', 'Match %',
