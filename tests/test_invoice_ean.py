@@ -28,7 +28,9 @@ from domain.invoice_ean import (
     _generate_barcode_pdf_zd421,
     _generate_barcode_pdf_fast_scan,
     _normalize_craft_sku,
+    _craft_sku_candidates,
     _CRAFT_SIZE_INDEX_TO_LABEL,
+    _CRAFT_WOMEN_SIZE_INDEX_TO_LABEL,
     _extract_eu_size,
 )
 
@@ -55,6 +57,10 @@ def _make_products(**overrides) -> pd.DataFrame:
         'ONLINE': [True, True, False],
     }
     defaults.update(overrides)
+    # Auto-add VARIANT_ITEMNUMBER (empty) if not provided, matching row count
+    if 'VARIANT_ITEMNUMBER' not in defaults:
+        n = len(next(iter(defaults.values())))
+        defaults['VARIANT_ITEMNUMBER'] = [''] * n
     return pd.DataFrame(defaults)
 
 
@@ -3201,3 +3207,375 @@ class TestCraftWomenEuSizeNarrowing:
         mdf = build_matches_df(catalogue, mdata)
         # Should still produce a result (existing logic picks one row)
         assert len(mdf) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Craft women size-index mapping
+# ---------------------------------------------------------------------------
+
+class TestCraftWomenSizeMapping:
+    """Tests for _CRAFT_WOMEN_SIZE_INDEX_TO_LABEL and _craft_sku_candidates."""
+
+    def test_women_mapping_complete(self):
+        """All standard women EU sizes are present."""
+        for idx, label in [
+            ("2", "XXS/32"), ("3", "XS/34"), ("4", "S/36"), ("5", "M/38"),
+            ("6", "L/40"), ("7", "XL/42"), ("8", "2XL/44"), ("9", "3XL/46"),
+            ("10", "4XL/48"),
+        ]:
+            assert _CRAFT_WOMEN_SIZE_INDEX_TO_LABEL[idx] == label
+
+    def test_craft_sku_candidates_returns_both_forms(self):
+        """Both unisex and women candidates are returned."""
+        candidates = _craft_sku_candidates('1910155-430000-6')
+        assert '1910155-430000-L' in candidates
+        assert '1910155-430000-L/40' in candidates
+
+    def test_craft_sku_candidates_non_craft(self):
+        """Non-Craft SKU returns empty list."""
+        assert _craft_sku_candidates('ABC-123') == []
+
+    def test_craft_sku_candidates_empty(self):
+        assert _craft_sku_candidates('') == []
+
+    def test_craft_sku_candidates_all_indices(self):
+        """Every valid index produces two candidates."""
+        for idx in _CRAFT_SIZE_INDEX_TO_LABEL:
+            candidates = _craft_sku_candidates(f'12345-67890-{idx}')
+            assert len(candidates) == 2
+            assert _CRAFT_SIZE_INDEX_TO_LABEL[idx] in candidates[0]
+            assert '/' in candidates[1]  # women form has a slash
+
+
+# ---------------------------------------------------------------------------
+# Matching priority tests
+# ---------------------------------------------------------------------------
+
+class TestMatchingPriority:
+    """Prove EAN > variant-itemnumber > fuzzy priority chain."""
+
+    @staticmethod
+    def _priority_catalogue():
+        """Catalogue with EAN and VARIANT_ITEMNUMBER for priority testing."""
+        return _make_products(
+            NUMBER=['PROD-A', 'PROD-A', 'PROD-B'],
+            TITLE_DK=['Alpha', 'Alpha', 'Beta'],
+            VARIANT_ID=['v1', 'v2', ''],
+            VARIANT_TYPES=['Small', 'Large', ''],
+            VARIANT_ITEMNUMBER=['PROD-A-SM', 'PROD-A-LG', ''],
+            EAN=['1234567890128', '9876543210128', ''],
+            BUY_PRICE=['100', '100', '100'],
+            PRICE=['200', '200', '200'],
+            BUY_PRICE_NUM=[100.0, 100.0, 100.0],
+            PRICE_NUM=[200.0, 200.0, 200.0],
+            PRODUCT_ID=['1', '2', '3'],
+            PRODUCER=['Brand', 'Brand', 'Brand'],
+            PRODUCER_ID=[1, 1, 1],
+            ONLINE=[True, True, True],
+        )
+
+    def test_ean_exact_wins_over_fuzzy(self):
+        """EAN match overrides fuzzy: score=100, method='ean-exact'."""
+        catalogue = self._priority_catalogue()
+        invoice_df = pd.DataFrame({
+            'SKU': ['1234567890128'],
+            'Qty': ['1'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty', threshold=70,
+        )
+        mdf = build_matches_df(catalogue, mdata)
+        assert len(mdf) == 1
+        row = mdf.iloc[0]
+        assert row['match_score'] == 100
+        assert row['match_method_detail'] == 'ean-exact'
+        assert row['matched_ean'] == '1234567890128'
+
+    def test_variant_itemnumber_exact_wins_over_fuzzy(self):
+        """VARIANT_ITEMNUMBER match: score=100, method='variant-itemnumber-exact'."""
+        catalogue = self._priority_catalogue()
+        invoice_df = pd.DataFrame({
+            'SKU': ['PROD-A-LG'],
+            'Qty': ['1'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty', threshold=70,
+        )
+        mdf = build_matches_df(catalogue, mdata)
+        assert len(mdf) == 1
+        row = mdf.iloc[0]
+        assert row['match_score'] == 100
+        assert row['match_method_detail'] == 'variant-itemnumber-exact'
+        assert row['matched_number'] == 'PROD-A'
+
+    def test_ean_overrides_itemnumber(self):
+        """When invoice SKU is an EAN, it wins over itemnumber match."""
+        catalogue = self._priority_catalogue()
+        # SKU is the EAN for the Small variant
+        invoice_df = pd.DataFrame({
+            'SKU': ['1234567890128'],
+            'Qty': ['1'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty', threshold=70,
+        )
+        mdf = build_matches_df(catalogue, mdata)
+        row = mdf.iloc[0]
+        assert row['match_method_detail'] == 'ean-exact'
+        assert row['matched_ean'] == '1234567890128'
+
+
+# ---------------------------------------------------------------------------
+# Craft "misleading title" regression test
+# ---------------------------------------------------------------------------
+
+class TestCraftMisleadingTitle:
+    """Craft variant itemnumber must win over misleading VARIANT_TYPES."""
+
+    @staticmethod
+    def _craft_misleading_catalogue():
+        """Craft product where variant title contains wrong size.
+
+        Variant A: VARIANT_ITEMNUMBER = 1910155-430000-L/40
+                   VARIANT_TYPES = 'rød//Small / 36' (misleading!)
+        Variant B: VARIANT_ITEMNUMBER = 1910155-430000-S/36
+                   VARIANT_TYPES = 'rød//Small / 40'
+        """
+        return _make_products(
+            NUMBER=['1910155', '1910155'],
+            TITLE_DK=['EVOLVE FULL ZIP W', 'EVOLVE FULL ZIP W'],
+            VARIANT_ID=['v1', 'v2'],
+            VARIANT_TYPES=['rød//Small / 36', 'rød//Small / 40'],
+            VARIANT_ITEMNUMBER=['1910155-430000-L/40', '1910155-430000-S/36'],
+            EAN=['7318573531856', '7318573531900'],
+            BUY_PRICE=['200', '200'],
+            PRICE=['400', '400'],
+            BUY_PRICE_NUM=[200.0, 200.0],
+            PRICE_NUM=[400.0, 400.0],
+            PRODUCT_ID=['50', '51'],
+            PRODUCER=['Craft', 'Craft'],
+            PRODUCER_ID=[5, 5],
+            ONLINE=[True, True],
+        )
+
+    def test_craft_6_selects_L40_not_misleading_36(self):
+        """Invoice '1910155-430000-6' → VARIANT_ITEMNUMBER '1910155-430000-L/40'.
+
+        Even though variant title contains '/ 36', the itemnumber-based
+        match to L/40 (via women Craft normalization) must win.
+        """
+        catalogue = self._craft_misleading_catalogue()
+        invoice_df = pd.DataFrame({
+            'SKU': ['1910155-430000-6'],
+            'Qty': ['1'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty', threshold=70,
+        )
+        mdf = build_matches_df(catalogue, mdata)
+        assert len(mdf) == 1
+        row = mdf.iloc[0]
+        # Must resolve to Variant A (the one with itemnumber L/40)
+        assert row['matched_ean'] == '7318573531856'
+        assert row['match_score'] == 100
+        assert 'itemnumber' in row['match_method_detail']
+
+    def test_craft_4_selects_S36(self):
+        """Invoice '1910155-430000-4' → VARIANT_ITEMNUMBER '1910155-430000-S/36'."""
+        catalogue = self._craft_misleading_catalogue()
+        invoice_df = pd.DataFrame({
+            'SKU': ['1910155-430000-4'],
+            'Qty': ['1'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty', threshold=70,
+        )
+        mdf = build_matches_df(catalogue, mdata)
+        assert len(mdf) == 1
+        row = mdf.iloc[0]
+        # Must resolve to Variant B (the one with itemnumber S/36)
+        assert row['matched_ean'] == '7318573531900'
+        assert row['match_score'] == 100
+        assert 'itemnumber' in row['match_method_detail']
+
+    def test_variant_title_does_not_override_itemnumber(self):
+        """Variant title containing '36' must NOT pull match to wrong variant."""
+        catalogue = self._craft_misleading_catalogue()
+        invoice_df = pd.DataFrame({
+            'SKU': ['1910155-430000-6'],
+            'Qty': ['1'],
+            'Desc': ['EVOLVE FULL ZIP W Red L rød//Small / 36'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty', threshold=70,
+            invoice_desc_col='Desc',
+        )
+        mdf = build_matches_df(catalogue, mdata)
+        assert len(mdf) == 1
+        row = mdf.iloc[0]
+        # Even with misleading description, itemnumber wins
+        assert row['matched_ean'] == '7318573531856'
+
+
+# ---------------------------------------------------------------------------
+# Fallback preservation tests
+# ---------------------------------------------------------------------------
+
+class TestFallbackWhenVariantItemNumberMissing:
+    """When VARIANT_ITEMNUMBER is empty, old behavior must still work."""
+
+    @staticmethod
+    def _catalogue_without_itemnumber():
+        """Catalogue with no VARIANT_ITEMNUMBER populated."""
+        return _make_products(
+            NUMBER=['FB-400', 'FB-400', 'FB-400'],
+            TITLE_DK=['Fighter Belt', 'Fighter Belt', 'Fighter Belt'],
+            VARIANT_ID=['v1', 'v2', 'v3'],
+            VARIANT_TYPES=['Small', 'Medium', 'Large'],
+            VARIANT_ITEMNUMBER=['', '', ''],
+            EAN=['', '', ''],
+            BUY_PRICE=['100', '100', '100'],
+            PRICE=['200', '200', '200'],
+            BUY_PRICE_NUM=[100.0, 100.0, 100.0],
+            PRICE_NUM=[200.0, 200.0, 200.0],
+            PRODUCT_ID=['10', '11', '12'],
+            PRODUCER=['Brand X', 'Brand X', 'Brand X'],
+            PRODUCER_ID=[2, 2, 2],
+            ONLINE=[True, True, True],
+        )
+
+    def test_fuzzy_match_still_works(self):
+        """Fuzzy matching works when VARIANT_ITEMNUMBER is empty."""
+        catalogue = self._catalogue_without_itemnumber()
+        invoice_df = pd.DataFrame({
+            'SKU': ['FB-400'],
+            'Qty': ['2'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty', threshold=70,
+        )
+        mdf = build_matches_df(catalogue, mdata)
+        # Should produce a result (all variants expanded, or narrowed)
+        assert len(mdf) >= 1
+        assert mdf.iloc[0]['match_score'] == 100
+
+    def test_variant_types_used_as_fallback(self):
+        """VARIANT_TYPES narrows variants when itemnumber is empty."""
+        catalogue = self._catalogue_without_itemnumber()
+        invoice_df = pd.DataFrame({
+            'SKU': ['FB-400 Large'],
+            'Qty': ['1'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty', threshold=70,
+        )
+        mdf = build_matches_df(catalogue, mdata)
+        # Should narrow to the Large variant
+        assert len(mdf) == 1
+        assert mdf.iloc[0]['matched_variant'] == 'Large'
+
+    def test_no_crash_without_variant_itemnumber_column(self):
+        """No crash when VARIANT_ITEMNUMBER column is entirely absent."""
+        catalogue = _make_products(
+            NUMBER=['SKU-X'],
+            TITLE_DK=['Product X'],
+            VARIANT_ID=[''],
+            VARIANT_TYPES=[''],
+            EAN=[''],
+            BUY_PRICE=['100'],
+            PRICE=['200'],
+            BUY_PRICE_NUM=[100.0],
+            PRICE_NUM=[200.0],
+            PRODUCT_ID=['1'],
+            PRODUCER=['Brand'],
+            PRODUCER_ID=[1],
+            ONLINE=[True],
+        )
+        # Remove VARIANT_ITEMNUMBER column entirely
+        if 'VARIANT_ITEMNUMBER' in catalogue.columns:
+            catalogue = catalogue.drop(columns=['VARIANT_ITEMNUMBER'])
+        invoice_df = pd.DataFrame({
+            'SKU': ['SKU-X'],
+            'Qty': ['1'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty', threshold=70,
+        )
+        mdf = build_matches_df(catalogue, mdata)
+        assert len(mdf) == 1
+        assert mdf.iloc[0]['matched_number'] == 'SKU-X'
+
+    def test_export_from_matches_no_crash(self):
+        """export_from_matches_df works when VARIANT_ITEMNUMBER is empty."""
+        catalogue = self._catalogue_without_itemnumber()
+        invoice_df = pd.DataFrame({
+            'SKU': ['FB-400'],
+            'Qty': ['2'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty', threshold=70,
+        )
+        mdf = build_matches_df(catalogue, mdata)
+        export = export_from_matches_df(mdf)
+        assert not export.empty
+
+
+# ---------------------------------------------------------------------------
+# Variant itemnumber narrowing tests
+# ---------------------------------------------------------------------------
+
+class TestVariantItemNumberNarrowing:
+    """Narrowing within a base group uses VARIANT_ITEMNUMBER when present."""
+
+    @staticmethod
+    def _catalogue_with_itemnumber():
+        """Product with two variants: each with distinct VARIANT_ITEMNUMBER."""
+        return _make_products(
+            NUMBER=['PROD-X', 'PROD-X'],
+            TITLE_DK=['Product X', 'Product X'],
+            VARIANT_ID=['v1', 'v2'],
+            VARIANT_TYPES=['Size A', 'Size B'],
+            VARIANT_ITEMNUMBER=['PROD-X-A', 'PROD-X-B'],
+            EAN=['', ''],
+            BUY_PRICE=['100', '100'],
+            PRICE=['200', '200'],
+            BUY_PRICE_NUM=[100.0, 100.0],
+            PRICE_NUM=[200.0, 200.0],
+            PRODUCT_ID=['1', '2'],
+            PRODUCER=['Brand', 'Brand'],
+            PRODUCER_ID=[1, 1],
+            ONLINE=[True, True],
+        )
+
+    def test_itemnumber_narrows_to_specific_variant(self):
+        """Invoice SKU matching a VARIANT_ITEMNUMBER selects that variant."""
+        catalogue = self._catalogue_with_itemnumber()
+        invoice_df = pd.DataFrame({
+            'SKU': ['PROD-X-B'],
+            'Qty': ['1'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty', threshold=70,
+        )
+        mdf = build_matches_df(catalogue, mdata)
+        assert len(mdf) == 1
+        assert mdf.iloc[0]['matched_variant'] == 'Size B'
+        assert mdf.iloc[0]['match_method_detail'] == 'variant-itemnumber-exact'
+
+    def test_itemnumber_overrides_variant_types(self):
+        """VARIANT_ITEMNUMBER match takes priority over VARIANT_TYPES."""
+        catalogue = self._catalogue_with_itemnumber()
+        # Add misleading description containing "Size A"
+        invoice_df = pd.DataFrame({
+            'SKU': ['PROD-X-B'],
+            'Qty': ['1'],
+            'Desc': ['Product X Size A variant'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty', threshold=70,
+            invoice_desc_col='Desc',
+        )
+        mdf = build_matches_df(catalogue, mdata)
+        assert len(mdf) == 1
+        # Even though description says "Size A", itemnumber match to B wins
+        assert mdf.iloc[0]['matched_variant'] == 'Size B'
