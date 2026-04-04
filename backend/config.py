@@ -115,7 +115,11 @@ class Settings(BaseSettings):
     )
     soap_rate_limit_per_s: float = Field(
         default=5.0,
-        description="Max SOAP calls per second per caller (token-bucket rate).",
+        description=(
+            "Max SOAP calls per second per caller (token-bucket rate). "
+            "Reserved for future use; currently only concurrency + delay "
+            "are enforced."
+        ),
     )
 
     # -- Crypto / Auth (placeholders for future tasks) --------------------
