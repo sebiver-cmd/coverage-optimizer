@@ -321,7 +321,7 @@ Redis.
 **Mitigation**: document that Docker network needs outbound access; tests mock SOAP.
 
 ### Task 2.2 — Postgres + Alembic scaffolding
-- [ ] Task 2.2
+- [x] Task 2.2
 
 **Objective**: Database connection and migration framework, ready for models.
 

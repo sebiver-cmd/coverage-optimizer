@@ -61,6 +61,25 @@ curl http://localhost:8000/health
 SB_OPTIMA_BACKEND_URL=http://localhost:8000 streamlit run app.py
 ```
 
+### Database migrations (Alembic)
+
+The project uses [Alembic](https://alembic.sqlalchemy.org/) for database
+schema migrations.  `DATABASE_URL` is already set in `.env.example` for the
+Docker Compose Postgres instance.
+
+```bash
+# Apply all pending migrations (run from repo root)
+DATABASE_URL=postgresql+psycopg2://sboptima:sboptima@localhost:5432/sboptima \
+  alembic upgrade head
+
+# Create a new auto-generated migration after adding/changing models
+DATABASE_URL=postgresql+psycopg2://sboptima:sboptima@localhost:5432/sboptima \
+  alembic revision --autogenerate -m "describe your change"
+```
+
+> **Tip:** If Docker Compose is running, Postgres is reachable at
+> `localhost:5432` with the credentials from `.env`.
+
 ### Stopping / cleaning up
 
 ```bash

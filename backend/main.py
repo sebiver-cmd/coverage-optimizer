@@ -12,6 +12,7 @@ Start with::
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -22,6 +23,7 @@ from backend.brands_api import router as brands_router
 from backend.apply_prices_api import router as apply_prices_router
 from backend.apply_real_api import router as apply_real_router
 from backend.catalog_api import router as catalog_router
+from backend.db import check_db, init_engine
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +49,22 @@ class ConnectionResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Lifespan — lazy DB initialisation
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Initialise the database engine from ``DATABASE_URL`` (if set)."""
+    engine = init_engine()
+    if engine is not None:
+        logger.info("Database engine initialised (pool_pre_ping=True)")
+    else:
+        logger.info("DATABASE_URL not set — running without a database")
+    yield
+
+
+# ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
 
@@ -54,6 +72,7 @@ app = FastAPI(
     title="SB-Optima API",
     description="REST gateway for the SB-Optima price-optimisation platform.",
     version="0.1.0",
+    lifespan=_lifespan,
 )
 
 app.include_router(optimizer_router)
@@ -70,8 +89,16 @@ app.include_router(catalog_router)
 
 @app.get("/health")
 def health_check() -> dict[str, str]:
-    """Liveness probe — returns immediately, no external calls."""
-    return {"status": "ok"}
+    """Liveness probe — returns basic status plus optional DB ping.
+
+    * ``db: skipped`` when ``DATABASE_URL`` is not configured.
+    * ``db: ok`` when the database responds to ``SELECT 1``.
+    * ``db: error: <msg>`` on connection failure.
+
+    The endpoint **never** returns a non-200 status due to DB state so that
+    container orchestrators can always reach the liveness check.
+    """
+    return {"status": "ok", "db": check_db()}
 
 
 @app.post("/test-connection", response_model=ConnectionResponse)
