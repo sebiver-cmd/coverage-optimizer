@@ -202,7 +202,7 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
     df['BUY_PRICE_NUM'] = df['BUY_PRICE'].apply(clean_price)
     df['PRICE_NUM'] = df['PRICE'].apply(clean_price)
 
-    for col in ('VARIANT_TYPES', 'VARIANT_ID', 'PRODUCT_ID'):
+    for col in ('VARIANT_ID', 'PRODUCT_ID'):
         if col in df.columns:
             df[col] = df[col].apply(format_int_col)
 

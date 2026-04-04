@@ -642,6 +642,9 @@ def match_invoice_to_products(
     # "1910163 999000 // XL" normalizes identically to "1910163-999000-XL".
     # We therefore compare normalized invoice SKUs against normalized
     # variant item numbers (rather than the raw matched_key).
+    # We also check if the *matched key* itself is a variant item number
+    # (covers Craft-normalised SKUs whose invoice form differs from the
+    # catalogue variant item number).
     if variant_itemnumber_lookup:
         norm_variant_keys: dict[str, tuple[str, str]] = {}
         for _vinum in variant_itemnumber_lookup:
@@ -651,10 +654,13 @@ def match_invoice_to_products(
         for inv_sku, mentry in matches.items():
             if mentry.get('sku') is None:
                 continue
+            if mentry.get('method') not in ('sku-exact', 'craft-exact'):
+                continue
             norm_inv_sku = normalize_sku(inv_sku)
-            if norm_inv_sku and norm_inv_sku in norm_variant_keys:
-                if mentry.get('method') in ('sku-exact', 'craft-exact'):
-                    mentry['method'] = 'variant-itemnumber-exact'
+            norm_matched = normalize_sku(mentry['sku'])
+            if (norm_inv_sku and norm_inv_sku in norm_variant_keys) or \
+               (norm_matched and norm_matched in norm_variant_keys):
+                mentry['method'] = 'variant-itemnumber-exact'
 
     # --- EAN cross-check: use EAN as a strong signal ---
     # If the product catalogue has EAN values, build a reverse lookup

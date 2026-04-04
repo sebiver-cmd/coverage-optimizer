@@ -530,3 +530,177 @@ class TestGetVariantsByItemNumber:
         client = DanDomainClient('user@example.com', 'secret')
         variants = client.get_variants_by_item_number('1910163')
         assert variants == []
+
+
+# ---------------------------------------------------------------------------
+# 6. VARIANT_TYPES must NOT be corrupted by format_int_col
+# ---------------------------------------------------------------------------
+
+class TestVariantTypesNotCorrupted:
+    """Ensure VARIANT_TYPES retains human-readable text after DataFrame creation."""
+
+    def test_variant_types_preserved_for_text_values(self):
+        """Text like 'X-Large / 42' must not be mangled by format_int_col."""
+        products = [{
+            'Id': 1,
+            'Title': 'Jacket',
+            'ItemNumber': 'J-100',
+            'Price': 400,
+            'BuyingPrice': 200,
+            'Ean': '',
+            'Status': True,
+            'Producer': '',
+            'ProducerId': None,
+            'VariantTypes': 'Size',
+            'Variants': [
+                {
+                    'Id': 10,
+                    'ItemNumber': 'J-100-XL',
+                    'Title': 'X-Large / 42',
+                    'Price': 400,
+                    'BuyingPrice': 200,
+                    'Ean': '',
+                },
+                {
+                    'Id': 11,
+                    'ItemNumber': 'J-100-S',
+                    'Title': 'Small',
+                    'Price': 400,
+                    'BuyingPrice': 200,
+                    'Ean': '',
+                },
+            ],
+        }]
+        df = api_products_to_dataframe(products)
+        assert df.iloc[0]['VARIANT_TYPES'] == 'X-Large / 42'
+        assert df.iloc[1]['VARIANT_TYPES'] == 'Small'
+
+    def test_variant_types_preserved_for_craft_composite(self):
+        """Craft-style '999000 // XL' stays unchanged."""
+        products = [{
+            'Id': 2,
+            'Title': 'Craft Jacket',
+            'ItemNumber': '1910163',
+            'Price': 400,
+            'BuyingPrice': 200,
+            'Ean': '',
+            'Status': True,
+            'Producer': 'Craft',
+            'ProducerId': 10,
+            'VariantTypes': 'Color, Size',
+            'Variants': [
+                {
+                    'Id': 101,
+                    'ItemNumber': '1910163-999000-XL',
+                    'Title': '999000 // XL',
+                    'Price': 400,
+                    'BuyingPrice': 200,
+                    'Ean': '',
+                },
+            ],
+        }]
+        df = api_products_to_dataframe(products)
+        assert df.iloc[0]['VARIANT_TYPES'] == '999000 // XL'
+
+    def test_variant_types_empty_string_for_non_variant_product(self):
+        """Non-variant products have empty-string VARIANT_TYPES."""
+        products = [{
+            'Id': 3,
+            'Title': 'Basic Tee',
+            'ItemNumber': 'BT-001',
+            'Price': 100,
+            'BuyingPrice': 50,
+            'Ean': '',
+            'Status': True,
+            'Producer': '',
+            'ProducerId': None,
+            'Variants': [],
+        }]
+        df = api_products_to_dataframe(products)
+        assert df.iloc[0]['VARIANT_TYPES'] == ''
+
+
+# ---------------------------------------------------------------------------
+# 7. Craft end-to-end: invoice SKU 1910163-999000-7 → variant XL
+# ---------------------------------------------------------------------------
+
+class TestCraftEndToEnd:
+    """Full flow: Craft invoice SKU maps to variant item number via size index."""
+
+    def test_craft_sku_resolves_to_variant_itemnumber(self):
+        """Invoice '1910163-999000-7' must match variant '1910163-999000-XL'.
+
+        Products catalogue has base NUMBER 1910163 with a variant row whose
+        VARIANT_ITEMNUMBER is '1910163-999000-XL'.  Invoice SKU is
+        '1910163-999000-7' (Craft size index 7 → XL).  The match must
+        resolve to that variant with method 'variant-itemnumber-exact'.
+        """
+        products_df = _make_products_with_variant_itemnumber()
+        invoice_df = pd.DataFrame({
+            'sku': ['1910163-999000-7'],
+            'qty': [3],
+        })
+        result = match_invoice_to_products(
+            products_df, invoice_df,
+            invoice_sku_col='sku',
+            invoice_qty_col='qty',
+        )
+        entry = result['matches']['1910163-999000-7']
+        assert entry['score'] == 100
+        assert entry['method'] == 'variant-itemnumber-exact'
+
+        # Verify it resolves to the XL variant, not the base product
+        num, vtype = result['composite_lookup'][entry['sku']]
+        assert num == '1910163'
+        assert 'XL' in vtype
+
+    def test_craft_sku_build_matches_df_output(self):
+        """build_matches_df correctly represents the Craft → variant match."""
+        products_df = _make_products_with_variant_itemnumber()
+        invoice_df = pd.DataFrame({
+            'sku': ['1910163-999000-7'],
+            'qty': [3],
+        })
+        match_data = match_invoice_to_products(
+            products_df, invoice_df,
+            invoice_sku_col='sku',
+            invoice_qty_col='qty',
+        )
+        mdf = build_matches_df(products_df, match_data)
+        assert not mdf.empty
+        row = mdf.iloc[0]
+        assert row['matched_number'] == '1910163'
+        assert 'XL' in row['matched_variant']
+        assert row['match_method_detail'] == 'variant-itemnumber-exact'
+        assert row['match_score'] == 100
+        assert row['status'] == 'ok'
+
+    def test_multiple_craft_sizes_each_resolve_correctly(self):
+        """Multiple Craft size-index SKUs each resolve to their correct variant."""
+        products_df = _make_products_with_variant_itemnumber()
+        invoice_df = pd.DataFrame({
+            'sku': ['1910163-999000-7', '1910163-999000-6', '1910163-999000-5'],
+            'qty': [1, 2, 3],
+        })
+        result = match_invoice_to_products(
+            products_df, invoice_df,
+            invoice_sku_col='sku',
+            invoice_qty_col='qty',
+        )
+        # 7 → XL
+        entry_xl = result['matches']['1910163-999000-7']
+        assert entry_xl['score'] == 100
+        num_xl, vtype_xl = result['composite_lookup'][entry_xl['sku']]
+        assert 'XL' in vtype_xl
+
+        # 6 → L
+        entry_l = result['matches']['1910163-999000-6']
+        assert entry_l['score'] == 100
+        num_l, vtype_l = result['composite_lookup'][entry_l['sku']]
+        assert 'L' in vtype_l
+
+        # 5 → M
+        entry_m = result['matches']['1910163-999000-5']
+        assert entry_m['score'] == 100
+        num_m, vtype_m = result['composite_lookup'][entry_m['sku']]
+        assert 'M' in vtype_m

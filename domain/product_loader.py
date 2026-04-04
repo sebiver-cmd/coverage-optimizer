@@ -40,6 +40,48 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Debug helper — VARIANT_ITEMNUMBER proof
+# ---------------------------------------------------------------------------
+
+def _debug_variant_itemnumber(df: pd.DataFrame) -> None:
+    """Log diagnostic info about the VARIANT_ITEMNUMBER column.
+
+    This is a *safe, temporary* debug section that proves whether the
+    column exists and is populated at runtime.  It writes to the module
+    logger at INFO level so it appears in both Streamlit console output
+    and backend logs.
+
+    **Removal criteria**: remove this function (and its call site in
+    ``fetch_products``) once runtime output has confirmed that
+    VARIANT_ITEMNUMBER is correctly populated for live shop data.
+    Alternatively, keep it as a permanent DEBUG-level diagnostic by
+    changing the ``logger.info`` calls to ``logger.debug``.
+    """
+    cols = list(df.columns)
+    logger.info("[DEBUG-VARIANT] DataFrame columns: %s", cols)
+
+    if 'VARIANT_ITEMNUMBER' not in df.columns:
+        logger.warning(
+            "[DEBUG-VARIANT] VARIANT_ITEMNUMBER column is MISSING from DataFrame"
+        )
+        return
+
+    non_empty = df['VARIANT_ITEMNUMBER'].astype(str).str.strip().ne('').sum()
+    total = len(df)
+    logger.info(
+        "[DEBUG-VARIANT] VARIANT_ITEMNUMBER non-empty: %d / %d rows", non_empty, total
+    )
+
+    sample_cols = [
+        c for c in ('NUMBER', 'VARIANT_ID', 'VARIANT_TYPES',
+                     'VARIANT_ITEMNUMBER', 'EAN', 'TITLE_DK')
+        if c in df.columns
+    ]
+    sample = df[sample_cols].head(10)
+    logger.info("[DEBUG-VARIANT] Sample rows:\n%s", sample.to_string(index=False))
+
+
+# ---------------------------------------------------------------------------
 # Fetch
 # ---------------------------------------------------------------------------
 
@@ -120,6 +162,9 @@ def fetch_products(
     df = df.sort_values(
         "PRODUCER", key=lambda s: s.str.lower(),
     ).reset_index(drop=True)
+
+    # --- DEBUG: VARIANT_ITEMNUMBER availability proof ---
+    _debug_variant_itemnumber(df)
 
     # Build brand_id_map from both raw product data and API-resolved brands
     brand_id_map = _build_brand_id_map(raw_products)
