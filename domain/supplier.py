@@ -28,6 +28,7 @@ except ImportError:
 # introducing a circular import.
 _REEXPORTED = frozenset({
     'normalize_sku', 'match_supplier_to_products', 'search_products',
+    'suggest_column_mapping',
 })
 
 

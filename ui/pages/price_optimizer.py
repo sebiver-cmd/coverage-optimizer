@@ -48,6 +48,7 @@ from domain.invoice_ean import (
     build_export_from_matches,
     generate_barcode_pdf,
     search_products,
+    suggest_column_mapping,
 )
 
 logger = logging.getLogger(__name__)
@@ -1403,6 +1404,31 @@ def _render_supplier_match(work_df: pd.DataFrame) -> None:
         if sup_df is not None and not sup_df.empty:
             detected = detect_supplier_columns(sup_df)
 
+            # --- AI fallback when heuristic detection misses key fields ---
+            _required_sup = ('sku', 'price')
+            if any(detected.get(f) is None for f in _required_sup):
+                _cache_key = f"_ai_map_sup_{sup_file.name}"
+                if _cache_key in st.session_state:
+                    ai_map = st.session_state[_cache_key]
+                else:
+                    with st.spinner("AI is suggesting column mappings…"):
+                        ai_map = suggest_column_mapping(sup_df)
+                    st.session_state[_cache_key] = ai_map
+                if ai_map:
+                    for field in ('sku', 'price', 'discount',
+                                  'currency', 'description'):
+                        if detected.get(field) is None and field in ai_map:
+                            detected[field] = ai_map[field]
+                    st.info("🤖 AI-assisted column mapping applied for "
+                            "undetected fields.")
+                elif ai_map is None and any(
+                    detected.get(f) is None for f in _required_sup
+                ):
+                    st.warning(
+                        "Could not auto-detect some columns and no AI "
+                        "mapping available. Please select columns manually."
+                    )
+
             col_names = ['(none)'] + list(sup_df.columns)
             scol1, scol2, scol3, scol4 = st.columns(4)
             with scol1:
@@ -1917,6 +1943,30 @@ def _render_ean_barcode_export(work_df: pd.DataFrame) -> None:
 
         if inv_df is not None and not inv_df.empty:
             detected = detect_invoice_columns(inv_df)
+
+            # --- AI fallback when heuristic detection misses key fields ---
+            _required_inv = ('sku', 'qty')
+            if any(detected.get(f) is None for f in _required_inv):
+                _cache_key = f"_ai_map_inv_{inv_file.name}"
+                if _cache_key in st.session_state:
+                    ai_map = st.session_state[_cache_key]
+                else:
+                    with st.spinner("AI is suggesting column mappings…"):
+                        ai_map = suggest_column_mapping(inv_df)
+                    st.session_state[_cache_key] = ai_map
+                if ai_map:
+                    for field in ('sku', 'qty', 'description'):
+                        if detected.get(field) is None and field in ai_map:
+                            detected[field] = ai_map[field]
+                    st.info("🤖 AI-assisted column mapping applied for "
+                            "undetected fields.")
+                elif ai_map is None and any(
+                    detected.get(f) is None for f in _required_inv
+                ):
+                    st.warning(
+                        "Could not auto-detect some columns and no AI "
+                        "mapping available. Please select columns manually."
+                    )
 
             col_names = ['(none)'] + list(inv_df.columns)
             ecol1, ecol2, ecol3, ecol4 = st.columns(4)
