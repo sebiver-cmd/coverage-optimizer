@@ -153,6 +153,33 @@ def _normalize_craft_sku(s: str) -> str | None:
     return f"{base}-{color}-{label}"
 
 
+# ---------------------------------------------------------------------------
+# Craft women EU numeric sizes (used as authoritative disambiguator)
+# ---------------------------------------------------------------------------
+_EU_WOMEN_SIZES = frozenset({'34', '36', '38', '40', '42', '44', '46', '48'})
+
+_EU_SIZE_RE = re.compile(
+    r'(?<![0-9])'          # not preceded by a digit
+    r'(34|36|38|40|42|44|46|48)'
+    r'(?![0-9])'           # not followed by a digit
+)
+
+
+def _extract_eu_size(text: str) -> str | None:
+    """Extract a women EU numeric size from *text* if present.
+
+    Looks for whole-token occurrences of ``34, 36, 38, 40, 42, 44, 46, 48``
+    — typical EU women sizes seen on Craft invoices (e.g. ``"/ 36"``,
+    ``"Size 36"``).
+
+    Returns the matched size string (e.g. ``"36"``) or ``None``.
+    """
+    if not text:
+        return None
+    m = _EU_SIZE_RE.search(text)
+    return m.group(1) if m else None
+
+
 def normalize_sku(sku: str) -> str:
     """Normalise a SKU for fuzzy comparison.
 
@@ -1225,6 +1252,25 @@ def _narrow_group_variants(group: pd.DataFrame) -> pd.DataFrame:
     number_nums = _extract_numeric_hints(number)
     # Only consider hints NOT already in the product number
     extra_nums = context_nums - number_nums
+
+    # ---- Craft-only: EU women numeric size as authoritative filter ----
+    # For Craft composite SKUs (digits-digits-digits), check whether the
+    # invoice context contains an EU numeric size (34-48) and use it to
+    # disambiguate among catalogue variant rows.
+    is_craft = bool(_CRAFT_SKU_RE.match(inv_sku.strip()))
+    if is_craft:
+        eu = _extract_eu_size(context_text)
+        if eu is not None:
+            eu_pat = re.compile(r'(?<![0-9])' + re.escape(eu) + r'(?![0-9])')
+            eu_mask = vt_col.apply(lambda v: bool(eu_pat.search(v)))
+            vi_col = group.get('VARIANT_ITEMNUMBER')
+            if vi_col is not None:
+                vi_str = vi_col.fillna('').astype(str).str.strip()
+                eu_mask = eu_mask | vi_str.apply(lambda v: bool(eu_pat.search(v)))
+            eu_hits = group.loc[eu_mask]
+            if len(eu_hits) == 1:
+                return _dedupe_product_rows(eu_hits)
+            # >1 or 0 hits: fall through to existing logic
 
     if vtype:
         # ---- Composite key specified a variant type ----

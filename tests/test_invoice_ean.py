@@ -29,6 +29,7 @@ from domain.invoice_ean import (
     _generate_barcode_pdf_fast_scan,
     _normalize_craft_sku,
     _CRAFT_SIZE_INDEX_TO_LABEL,
+    _extract_eu_size,
 )
 
 
@@ -3114,3 +3115,89 @@ class TestCraftSkuMatching:
         assert 'match_method_detail' in mdf.columns
         row = mdf.iloc[0]
         assert row['match_method_detail'] == 'craft-exact'
+
+
+# ---------------------------------------------------------------------------
+# Craft women EU numeric size narrowing
+# ---------------------------------------------------------------------------
+
+class TestExtractEuSize:
+    """Unit tests for _extract_eu_size helper."""
+
+    def test_slash_space_36(self):
+        assert _extract_eu_size('rød//Small / 36') == '36'
+
+    def test_standalone_38(self):
+        assert _extract_eu_size('Size 38') == '38'
+
+    def test_no_eu_size(self):
+        assert _extract_eu_size('Red / XL') is None
+
+    def test_embedded_in_larger_number(self):
+        # 136 should NOT match as EU 36
+        assert _extract_eu_size('item 136') is None
+
+    def test_all_valid_sizes(self):
+        for sz in ('34', '36', '38', '40', '42', '44', '46', '48'):
+            assert _extract_eu_size(f'/ {sz}') == sz
+
+    def test_empty_and_none(self):
+        assert _extract_eu_size('') is None
+        assert _extract_eu_size(None) is None
+
+
+class TestCraftWomenEuSizeNarrowing:
+    """Integration: Craft EU numeric size disambiguates variant selection."""
+
+    @staticmethod
+    def _craft_women_catalogue():
+        """Craft product with two variant rows distinguished by EU size."""
+        return _make_products(
+            NUMBER=['1910155-430000-L', '1910155-430000-L'],
+            TITLE_DK=['EVOLVE FULL ZIP W Red L', 'EVOLVE FULL ZIP W Red L'],
+            VARIANT_ID=['v1', 'v2'],
+            VARIANT_TYPES=['rød//Small / 36', 'rød//Small / 40'],
+            EAN=['7318573531856', '7318573531900'],
+            BUY_PRICE=['200', '200'],
+            PRICE=['400', '400'],
+            BUY_PRICE_NUM=[200.0, 200.0],
+            PRICE_NUM=[400.0, 400.0],
+            PRODUCT_ID=['50', '51'],
+            PRODUCER=['Craft', 'Craft'],
+            PRODUCER_ID=[5, 5],
+            ONLINE=[True, True],
+        )
+
+    def test_eu_size_36_selects_correct_variant(self):
+        """Invoice with '/ 36' in description narrows to the 36 variant."""
+        catalogue = self._craft_women_catalogue()
+        invoice_df = pd.DataFrame({
+            'SKU': ['1910155-430000-6'],
+            'Qty': ['1'],
+            'Desc': ['EVOLVE FULL ZIP W Red L rød//Small / 36'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty', threshold=70,
+            invoice_desc_col='Desc',
+        )
+        mdf = build_matches_df(catalogue, mdata)
+        assert len(mdf) == 1
+        assert mdf.iloc[0]['matched_ean'] == '7318573531856'
+        assert '36' in mdf.iloc[0]['matched_variant']
+
+    def test_no_eu_size_falls_back_to_existing_logic(self):
+        """When invoice has no EU numeric size, existing logic is unchanged."""
+        catalogue = self._craft_women_catalogue()
+        # Invoice description has no EU size — just the alpha size
+        invoice_df = pd.DataFrame({
+            'SKU': ['1910155-430000-6'],
+            'Qty': ['1'],
+            'Desc': ['EVOLVE FULL ZIP W Red L'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty', threshold=70,
+            invoice_desc_col='Desc',
+        )
+        mdf = build_matches_df(catalogue, mdata)
+        # Should still produce a result (existing logic picks one row)
+        assert len(mdf) >= 1
