@@ -93,7 +93,7 @@ def check_db() -> str:
 
     Returns
     -------
-    ``"ok"`` on success, ``"error: <message>"`` on failure, or
+    ``"ok"`` on success, ``"error"`` on failure, or
     ``"skipped"`` when no engine has been initialised.
     """
     if _engine is None:
@@ -102,5 +102,5 @@ def check_db() -> str:
         with _engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         return "ok"
-    except Exception as exc:  # noqa: BLE001
-        return f"error: {exc}"
+    except Exception:  # noqa: BLE001
+        return "error"

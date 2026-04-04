@@ -93,7 +93,7 @@ def health_check() -> dict[str, str]:
 
     * ``db: skipped`` when ``DATABASE_URL`` is not configured.
     * ``db: ok`` when the database responds to ``SELECT 1``.
-    * ``db: error: <msg>`` on connection failure.
+    * ``db: error`` on connection failure.
 
     The endpoint **never** returns a non-200 status due to DB state so that
     container orchestrators can always reach the liveness check.
