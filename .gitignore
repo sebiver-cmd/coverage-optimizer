@@ -14,5 +14,8 @@ venv/
 # Streamlit specific
 .streamlit/secrets.toml
 
+# Environment variables (never commit real secrets)
+.env
+
 # Batch manifests (runtime data)
 data/apply_batches/

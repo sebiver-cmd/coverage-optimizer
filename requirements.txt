@@ -8,3 +8,8 @@ pdfplumber
 python-barcode
 Pillow
 fpdf2
+psycopg2-binary
+redis
+sqlalchemy
+alembic
+arq
