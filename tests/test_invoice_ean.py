@@ -960,6 +960,194 @@ class TestStricterSKUMatching:
 
 
 # ---------------------------------------------------------------------------
+# Regression test: FB 400 XXS duplication bug
+# ---------------------------------------------------------------------------
+
+class TestFB400XXSDuplication:
+    """Regression test for the FB 400 XXS spurious-duplication bug.
+
+    When an invoice line like "FB 400 XXS qty=2" matches a product with
+    multiple size variants (2X-Small, X-Small, Small, Medium), the export
+    pipeline previously emitted **one row per variant**, each carrying the
+    full qty=2.  This was wrong — the invoice specified a single size
+    ("XXS") so the export should have only one row.
+
+    The root cause was:
+    1. Fuzzy matching returned the plain product NUMBER (no composite
+       variant type), so ``vtype`` was empty.
+    2. ``_narrow_variants`` could not match "XXS" to "2X-Small" because
+       "2x-small" was missing from the size-alias table.
+    3. With narrowing returning all rows, the loop blindly created one
+       export row per variant with the same ``Amount``.
+
+    The fix:
+    - Added "2x-small" / "2xs" to the XXS size-alias group.
+    - Redesigned the export pipeline to be DataFrame-native with a
+      per-group variant-narrowing step that detects unresolved variant
+      hints and limits output to one row when appropriate.
+    """
+
+    @staticmethod
+    def _fb400_products():
+        """Products mimicking the FB 400 catalogue with size variants."""
+        return _make_products(
+            NUMBER=['TO-FB400', 'TO-FB400', 'TO-FB400', 'TO-FB400'],
+            VARIANT_ID=['10', '11', '12', '13'],
+            VARIANT_TYPES=['2X-Small', 'X-Small', 'Small', 'Medium'],
+            EAN=['5700000000001', '5700000000002', '5700000000003', '5700000000004'],
+            TITLE_DK=[
+                'Brystbeskytter og sportstop WKF - hvid',
+                'Brystbeskytter og sportstop WKF - hvid',
+                'Brystbeskytter og sportstop WKF - hvid',
+                'Brystbeskytter og sportstop WKF - hvid',
+            ],
+            BUY_PRICE=['100,00'] * 4,
+            PRICE=['200,00'] * 4,
+            BUY_PRICE_NUM=[100.0] * 4,
+            PRICE_NUM=[200.0] * 4,
+            PRODUCT_ID=['1'] * 4,
+            PRODUCER=['Tokaido'] * 4,
+            PRODUCER_ID=[1] * 4,
+            ONLINE=[True] * 4,
+        )
+
+    def test_fb400_xxs_via_composite_vtype(self):
+        """Composite vtype "XXS" narrows to "2X-Small" via size alias."""
+        products = self._fb400_products()
+        match_data = {
+            'matches': {
+                'FB 400 XXS': {
+                    'sku': 'TO-FB400 XXS',
+                    'score': 85,
+                    'alternatives': [],
+                },
+            },
+            'composite_lookup': {
+                'TO-FB400': ('TO-FB400', ''),
+                'TO-FB400 XXS': ('TO-FB400', 'XXS'),
+            },
+            'title_lookup': {'TO-FB400': 'Brystbeskytter og sportstop WKF'},
+            'qty_map': {'FB 400 XXS': 2.0},
+            'desc_map': {},
+        }
+        result = build_export_from_matches(products, match_data)
+
+        # Must produce exactly ONE row — not one per variant
+        assert len(result) == 1, (
+            f"Expected 1 row for FB 400 XXS, got {len(result)}:\n{result}"
+        )
+        assert result.iloc[0]['SKU'] == 'FB 400 XXS'
+        assert result.iloc[0]['Variant Name'] == '2X-Small'
+        assert result.iloc[0]['Amount'] == 2.0
+        assert result.iloc[0]['EAN'] == '5700000000001'
+
+    def test_fb400_xxs_via_narrowing_no_vtype(self):
+        """When vtype is empty but inv_sku contains 'XXS', narrow to 2X-Small."""
+        products = self._fb400_products()
+        match_data = {
+            'matches': {
+                'FB 400 XXS': {
+                    'sku': 'TO-FB400',
+                    'score': 80,
+                    'alternatives': [],
+                },
+            },
+            'composite_lookup': {
+                'TO-FB400': ('TO-FB400', ''),
+            },
+            'title_lookup': {'TO-FB400': 'Brystbeskytter og sportstop WKF'},
+            'qty_map': {'FB 400 XXS': 2.0},
+            'desc_map': {},
+        }
+        result = build_export_from_matches(products, match_data)
+
+        # Even without composite vtype, "XXS" in the invoice SKU should
+        # narrow via _variant_in_context (size alias 2x-small ↔ xxs)
+        # to the single 2X-Small variant.
+        assert len(result) == 1, (
+            f"Expected 1 row for FB 400 XXS, got {len(result)}:\n{result}"
+        )
+        assert result.iloc[0]['SKU'] == 'FB 400 XXS'
+        assert result.iloc[0]['Variant Name'] == '2X-Small'
+        assert result.iloc[0]['Amount'] == 2.0
+
+    def test_fb400_base_sku_returns_all_variants(self):
+        """Base SKU 'TO-FB400' without size hint returns all 4 variants."""
+        products = self._fb400_products()
+        match_data = {
+            'matches': {
+                'TO-FB400': {
+                    'sku': 'TO-FB400',
+                    'score': 100,
+                    'alternatives': [],
+                },
+            },
+            'composite_lookup': {
+                'TO-FB400': ('TO-FB400', ''),
+            },
+            'title_lookup': {'TO-FB400': 'Brystbeskytter og sportstop WKF'},
+            'qty_map': {'TO-FB400': 5.0},
+            'desc_map': {},
+        }
+        result = build_export_from_matches(products, match_data)
+
+        # No variant hint in the SKU text → all 4 variants should appear
+        assert len(result) == 4, (
+            f"Expected 4 rows for base TO-FB400, got {len(result)}:\n{result}"
+        )
+        # All rows should have the same quantity
+        assert (result['Amount'] == 5.0).all()
+
+    def test_fb400_xxs_quantity_not_replicated(self):
+        """Quantity must not be replicated across multiple variants."""
+        products = self._fb400_products()
+        match_data = {
+            'matches': {
+                'FB 400 XXS': {
+                    'sku': 'TO-FB400',
+                    'score': 80,
+                    'alternatives': [],
+                },
+            },
+            'composite_lookup': {
+                'TO-FB400': ('TO-FB400', ''),
+            },
+            'title_lookup': {},
+            'qty_map': {'FB 400 XXS': 2.0},
+            'desc_map': {},
+        }
+        result = build_export_from_matches(products, match_data)
+
+        # Total exported amount must equal the invoice qty (2),
+        # not qty × number_of_variants (2 × 4 = 8).
+        total_amount = result['Amount'].sum()
+        assert total_amount == 2.0, (
+            f"Total amount {total_amount} != 2.0 — "
+            f"quantity was replicated across {len(result)} rows"
+        )
+
+    def test_fb400_end_to_end_via_build_ean_export(self):
+        """End-to-end test: build_ean_export with FB 400 XXS invoice line."""
+        products = self._fb400_products()
+        invoice = pd.DataFrame({
+            'Article': ['FB 400 XXS'],
+            'Quantity': ['2'],
+        })
+        result = build_ean_export(
+            products, invoice, 'Article', 'Quantity', threshold=50,
+        )
+        # The fuzzy match should find TO-FB400; the pipeline should
+        # narrow to 2X-Small (or at most a single variant).
+        fb400_rows = result.loc[result['Product Number'] == 'TO-FB400']
+        assert len(fb400_rows) <= 1, (
+            f"Expected at most 1 row for FB 400 XXS, got {len(fb400_rows)}:\n"
+            f"{fb400_rows}"
+        )
+        if not fb400_rows.empty:
+            assert fb400_rows.iloc[0]['Amount'] == 2.0
+
+
+# ---------------------------------------------------------------------------
 # Manual overrides and match_invoice_to_products
 # ---------------------------------------------------------------------------
 

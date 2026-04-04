@@ -555,17 +555,28 @@ def match_invoice_to_products(
     }
 
 
+# Canonical output column order for export DataFrames.
+_EXPORT_COLUMNS = [
+    'SKU', 'Product Number', 'Title', 'Variant Name',
+    'Amount', 'EAN', 'Match %',
+]
+
+
 def _dedupe_product_rows(matched_products: pd.DataFrame) -> pd.DataFrame:
-    """Deduplicate product rows that share the same (NUMBER, VARIANT_TYPES).
+    """Safety-net dedup for catalogue rows sharing the same (NUMBER, VARIANT_TYPES).
 
-    When a product has multiple catalogue rows for the same variant text
-    (e.g. different VARIANT_IDs both labelled ``"XXS"``), this helper
-    keeps a single representative row per unique ``(NUMBER, VARIANT_TYPES)``
-    combination — preferring the row with a non-empty EAN code.
+    Keeps one representative row per unique ``(NUMBER, VARIANT_TYPES)``
+    pair — preferring the row with a non-empty EAN.  This handles the
+    edge-case where the product catalogue itself contains duplicate rows
+    for the same variant (e.g. different VARIANT_IDs both labelled
+    ``"XXS"``).
 
-    This prevents accidental row duplication in the export DataFrame
-    where the same invoice line item would otherwise appear once per
-    catalogue duplicate.
+    .. note::
+
+        This is a *safety net*, not the primary deduplication mechanism.
+        The main pipeline in :func:`build_export_from_matches` prevents
+        spurious duplication at the structural level by narrowing variant
+        groups and limiting row cardinality per invoice line.
     """
     if len(matched_products) <= 1:
         return matched_products
@@ -579,7 +590,6 @@ def _dedupe_product_rows(matched_products: pd.DataFrame) -> pd.DataFrame:
     if group_key.nunique() == len(matched_products):
         return matched_products  # already unique
 
-    # Within each group prefer a row with a non-empty EAN
     ean_col = matched_products['EAN'].fillna('').astype(str).str.strip()
     has_ean = ean_col.ne('')
 
@@ -597,6 +607,119 @@ def _dedupe_product_rows(matched_products: pd.DataFrame) -> pd.DataFrame:
     return matched_products.loc[keep_idxs]
 
 
+def _has_variant_hint(text: str, product_number: str) -> bool:
+    """Detect whether *text* contains a size token absent from *product_number*.
+
+    Used as a defensive check after variant narrowing fails: if the invoice
+    SKU text contains a recognised size abbreviation (e.g. ``"XXS"``,
+    ``"XL"``, ``"M"``) that is **not** part of the product NUMBER itself,
+    we treat the SKU as carrying an unresolved variant hint and limit the
+    export to a single row instead of emitting all catalogue variants with
+    duplicated quantity.
+
+    This prevents the "FB 400 XXS" duplication bug where the invoice
+    intends a specific size but the narrowing logic cannot resolve it
+    (e.g. because the variant name uses an unfamiliar alias).
+    """
+    text_lower = text.lower().strip()
+    num_lower = product_number.lower().strip()
+    for key in _SIZE_ALIAS_MAP:
+        if len(key) < 1:
+            continue
+        if _boundary_pattern(key).search(text_lower):
+            if not _boundary_pattern(key).search(num_lower):
+                return True
+    return False
+
+
+def _narrow_group_variants(group: pd.DataFrame) -> pd.DataFrame:
+    """Narrow product variant rows for one invoice-SKU match group.
+
+    Given the merged rows (match info joined with product catalogue) for a
+    single invoice SKU, apply variant narrowing to select the correct
+    variant(s).
+
+    .. rubric:: Root-cause fix for the "FB 400 XXS" duplication bug
+
+    Previously, ``build_export_from_matches`` iterated every catalogue
+    variant row for a matched NUMBER and appended one export row per
+    variant, each carrying the full invoice quantity.  This meant an
+    invoice line ``FB 400 XXS  qty=2`` produced::
+
+        FB 400 XXS  2X-Small   2
+        FB 400 XXS  X-Small    2
+        FB 400 XXS  Small      2
+        FB 400 XXS  Medium     2
+
+    The duplication arose because:
+
+    1. **Composite key resolution** — the fuzzy matcher returned the plain
+       product NUMBER (e.g. ``"TO-FB400"``), so ``vtype`` was empty.
+    2. **Variant narrowing failure** — ``_narrow_variants`` could not
+       match ``"XXS"`` to any catalogue variant name because ``"2X-Small"``
+       was missing from the size-alias table.
+    3. **Blind row expansion** — with narrowing returning all rows
+       unchanged, every catalogue variant was emitted with the same
+       ``Amount``.
+
+    The fix in this function:
+
+    * When ``vtype`` is specified (from a composite match) but cannot be
+      resolved via exact or alias lookup, emit **one** row only.
+    * When ``vtype`` is empty but the invoice SKU text contains a
+      recognised size token not present in the product number (detected
+      by :func:`_has_variant_hint`), emit **one** row only.
+    * Multiple variant rows are only returned when the invoice line
+      genuinely has no variant specificity (e.g. a base SKU like
+      ``"PSW 003"`` matching all S / M / L / XL variants).
+    """
+    if len(group) <= 1:
+        return group
+
+    vtype = str(group.iloc[0].get('_matched_vtype', '') or '')
+    inv_sku = str(group.iloc[0]['_inv_sku'])
+    inv_desc = str(group.iloc[0].get('_inv_desc', '') or '')
+    number = str(group.iloc[0]['_matched_number'])
+
+    vt_col = group['VARIANT_TYPES'].fillna('').astype(str).str.strip()
+    original_count = len(group)
+
+    if vtype:
+        # ---- Composite key specified a variant type ----
+        # Try exact match on VARIANT_TYPES
+        specific = group.loc[vt_col == vtype]
+        if specific.empty:
+            # Try size-alias match (e.g. "L" ↔ "Large")
+            aliases = _size_aliases(vtype)
+            if aliases:
+                specific = group.loc[vt_col.str.lower().isin(aliases)]
+        if not specific.empty:
+            return _dedupe_product_rows(specific)
+
+        # Exact/alias match failed — try description-based narrowing
+        narrowed = _narrow_variants(group, inv_sku, inv_desc)
+        if len(narrowed) < original_count:
+            return _dedupe_product_rows(narrowed)
+
+        # Variant hint existed (vtype was set) but unresolvable.
+        # Emit ONE row to prevent duplicated quantity across variants.
+        return _dedupe_product_rows(group).head(1)
+
+    # ---- No composite variant type — try description-based narrowing ----
+    narrowed = _narrow_variants(group, inv_sku, inv_desc)
+    if len(narrowed) < original_count:
+        return _dedupe_product_rows(narrowed)
+
+    # Check if the invoice SKU text carries an unresolved variant hint
+    # (e.g. "FB 400 XXS" has size token "XXS" not in product number
+    # "TO-FB400") — limit to 1 row if so.
+    if _has_variant_hint(inv_sku, number):
+        return _dedupe_product_rows(group).head(1)
+
+    # Genuinely no variant info — return all catalogue variants
+    return _dedupe_product_rows(group)
+
+
 def build_export_from_matches(
     products_df: pd.DataFrame,
     match_data: dict,
@@ -605,39 +728,34 @@ def build_export_from_matches(
 ) -> pd.DataFrame:
     """Build the EAN export DataFrame from pre-computed match results.
 
-    .. rubric:: Pipeline overview
+    .. rubric:: DataFrame-native pipeline
 
-    The matching + export pipeline flows as follows:
+    The export is constructed in five phases, each expressed as a
+    DataFrame operation rather than a parallel Python list:
 
-    1. **Column detection** — :func:`detect_invoice_columns` (LLM-first,
-       heuristic fallback) identifies which columns hold SKU, quantity,
-       and description.
-    2. **SKU matching** — :func:`match_invoice_to_products` fuzzy-matches
-       each invoice SKU to the product catalogue's augmented SKU pool
-       (plain NUMBERs + ``NUMBER + VARIANT_TYPES`` composites).
-    3. **Export construction** (this function) — for each matched invoice
-       line:
-       a. Resolve the matched key to a product ``NUMBER`` and optional
-          variant type.
-       b. Filter the catalogue to rows with that NUMBER.
-       c. Narrow to the specific variant using exact match, size aliases,
-          or description-based narrowing.
-       d. **Deduplicate** catalogue rows that share the same
-          ``(NUMBER, VARIANT_TYPES)`` — this prevents the same SKU from
-          appearing multiple times with identical variant info and
-          duplicated quantity (root cause of the "FB 400 XXS" duplication
-          bug).
-       e. Emit one export row per unique product/variant combination.
+    1. **Match-level DataFrame** — one row per successfully matched
+       invoice SKU, carrying the resolved product NUMBER, composite
+       variant type, invoice quantity, description, and match score.
+    2. **Catalogue join** — an inner merge with the product catalogue
+       on NUMBER expands each match row to include all catalogue
+       variants for that product.
+    3. **Per-group variant narrowing** — a ``groupby('_inv_sku')``
+       with :func:`_narrow_group_variants` selects the correct
+       variant(s) for each invoice line:
 
-    .. rubric:: Duplication guard
-
-    Accidental duplication of SKUs/quantities was historically caused by:
-    - Multiple catalogue rows sharing the same (NUMBER, VARIANT_TYPES)
-      with different VARIANT_IDs.
-    - Variant narrowing returning more than one row when variant text
-      appeared as a substring in a different variant.
-    Both are now handled by :func:`_dedupe_product_rows` and the
-    final ``_normalize_export_df`` deduplication step.
+       - If a composite variant type (``vtype``) was resolved, narrow
+         to that variant via exact match or size aliases.
+       - Otherwise, use ``_narrow_variants`` (description-based).
+       - If narrowing fails but the invoice SKU contains a variant
+         hint (detected by :func:`_has_variant_hint`), emit **one**
+         row only — preventing spurious duplication.
+       - If the invoice line genuinely has no variant specificity,
+         keep all variants (business requirement).
+    4. **Final deduplication** — a safety-net groupby on
+       ``(SKU, Product Number, Variant Name)`` ensures no exact
+       duplicate rows remain (handles rare catalogue-level duplication).
+    5. **Column formatting** — select and rename to the canonical
+       export column order.
 
     Parameters
     ----------
@@ -671,115 +789,100 @@ def build_export_from_matches(
                 'alternatives': [],
             }
 
-    rows: list[dict] = []
+    # ---- Phase 1: Build match-level intermediate DataFrame ----
+    # One row per matched invoice SKU with resolved product NUMBER,
+    # composite variant type, invoice quantity/description, and score.
+    match_records: list[dict] = []
     for inv_sku, mentry in matches.items():
         matched_key = mentry['sku']
-        score = mentry['score']
         if matched_key is None:
             continue
-        qty_val = qty_map.get(inv_sku, 1.0)
-
-        # Resolve the matched key to a product NUMBER and optional variant
         number, vtype = composite_lookup.get(matched_key, (matched_key, ''))
+        match_records.append({
+            '_inv_sku': inv_sku,
+            '_inv_qty': qty_map.get(inv_sku, 1.0),
+            '_inv_desc': desc_map.get(inv_sku, ''),
+            '_matched_number': number,
+            '_matched_vtype': vtype,
+            '_score': mentry['score'],
+        })
 
-        prod_mask = (
-            products_df['NUMBER'].astype(str).str.strip() == number
-        )
-        matched_products = products_df.loc[prod_mask]
+    if not match_records:
+        return pd.DataFrame(columns=_EXPORT_COLUMNS)
 
-        if matched_products.empty:
-            continue
+    match_df = pd.DataFrame(match_records)
 
-        # If the match resolved to a specific variant, narrow to that
-        if vtype:
-            vt_col = (
-                matched_products['VARIANT_TYPES']
-                .fillna('').astype(str).str.strip()
-            )
-            # Exact match
-            specific = matched_products.loc[vt_col == vtype]
-            if specific.empty:
-                # Size-alias match (e.g. "L" ↔ "Large")
-                aliases = _size_aliases(vtype)
-                if aliases:
-                    specific = matched_products.loc[
-                        vt_col.str.lower().isin(aliases)
-                    ]
-            if not specific.empty:
-                matched_products = specific
-            elif len(matched_products) > 1:
-                # vtype didn't match exactly; fall back to narrowing
-                inv_desc = desc_map.get(inv_sku, '')
-                matched_products = _narrow_variants(
-                    matched_products, inv_sku, inv_desc,
-                )
-        elif len(matched_products) > 1:
-            # Fall back to description-based narrowing using SKU text,
-            # the optional description column, and product titles.
-            inv_desc = desc_map.get(inv_sku, '')
-            matched_products = _narrow_variants(
-                matched_products, inv_sku, inv_desc,
-            )
+    # ---- Phase 2: Join with product catalogue on NUMBER ----
+    prods = products_df[['NUMBER', 'VARIANT_TYPES', 'EAN', 'TITLE_DK']].copy()
+    prods['_num_key'] = prods['NUMBER'].astype(str).str.strip()
 
-        # Deduplicate catalogue rows that share the same
-        # (NUMBER, VARIANT_TYPES) to prevent duplicated export rows
-        # with identical SKU + variant info and replicated quantity.
-        matched_products = _dedupe_product_rows(matched_products)
+    merged = match_df.merge(
+        prods,
+        left_on='_matched_number',
+        right_on='_num_key',
+        how='inner',
+    )
 
-        for _, prod_row in matched_products.iterrows():
-            rows.append({
-                'SKU': inv_sku,
-                'Product Number': prod_row.get('NUMBER', ''),
-                'Title': prod_row.get('TITLE_DK', ''),
-                'Variant Name': prod_row.get('VARIANT_TYPES', ''),
-                'Amount': qty_val,
-                'EAN': prod_row.get('EAN', ''),
-                'Match %': score,
-            })
+    if merged.empty:
+        return pd.DataFrame(columns=_EXPORT_COLUMNS)
 
-    if not rows:
-        return pd.DataFrame(
-            columns=[
-                'SKU', 'Product Number', 'Title', 'Variant Name',
-                'Amount', 'EAN', 'Match %',
-            ]
-        )
+    # ---- Phase 3: Narrow variants per invoice SKU group ----
+    narrowed_parts: list[pd.DataFrame] = []
+    for _inv_sku, group in merged.groupby('_inv_sku', sort=False):
+        narrowed_parts.append(_narrow_group_variants(group))
 
-    return _normalize_export_df(pd.DataFrame(rows))
+    result = pd.concat(narrowed_parts, ignore_index=True)
+
+    # ---- Phase 4: Final safety-net deduplication ----
+    result = _normalize_export_df(result)
+
+    # ---- Phase 5: Format output columns ----
+    export = pd.DataFrame({
+        'SKU': result['_inv_sku'],
+        'Product Number': result['NUMBER'].fillna(''),
+        'Title': result['TITLE_DK'].fillna(''),
+        'Variant Name': result['VARIANT_TYPES'].fillna(''),
+        'Amount': result['_inv_qty'],
+        'EAN': result['EAN'].fillna(''),
+        'Match %': result['_score'],
+    })
+
+    return export
 
 
 def _normalize_export_df(df: pd.DataFrame) -> pd.DataFrame:
-    """Final deduplication of the export DataFrame.
+    """Safety-net dedup on the merged result before final column formatting.
 
-    Ensures one row per unique ``(SKU, Product Number, Variant Name)``
-    combination.  When duplicates exist (e.g. from multiple catalogue
-    entries mapping to the same key), keeps the row with a non-empty EAN
-    and sums quantities only when the duplicates come from distinct
-    invoice lines (same SKU text).
+    Ensures one row per unique ``(_inv_sku, NUMBER, VARIANT_TYPES)``
+    combination.  When duplicates exist (e.g. from catalogue-level duplication
+    that survived earlier phases), keeps the row with a non-empty EAN.
 
-    This is the single, DataFrame-native guard against accidental row
-    duplication in the export pipeline.
+    .. note::
+
+        This is a lightweight safety net.  The primary correctness guarantee
+        comes from the DataFrame-native pipeline in
+        :func:`build_export_from_matches` and per-group narrowing in
+        :func:`_narrow_group_variants`.
     """
     if df.empty or len(df) <= 1:
         return df
 
-    key_cols = ['SKU', 'Product Number', 'Variant Name']
+    key_cols = ['_inv_sku', 'NUMBER', 'VARIANT_TYPES']
     if not df.duplicated(subset=key_cols, keep=False).any():
         return df
 
-    # Group duplicates and keep the best representative row
-    deduped_rows: list[dict] = []
+    deduped_parts: list[pd.DataFrame] = []
     for _, grp in df.groupby(key_cols, sort=False):
         if len(grp) == 1:
-            deduped_rows.append(grp.iloc[0].to_dict())
+            deduped_parts.append(grp)
         else:
-            # Prefer the row with a non-empty EAN
             ean_vals = grp['EAN'].fillna('').astype(str).str.strip()
             with_ean = grp.loc[ean_vals.ne('')]
-            best = with_ean.iloc[0] if not with_ean.empty else grp.iloc[0]
-            deduped_rows.append(best.to_dict())
+            deduped_parts.append(
+                with_ean.head(1) if not with_ean.empty else grp.head(1)
+            )
 
-    return pd.DataFrame(deduped_rows)
+    return pd.concat(deduped_parts, ignore_index=True)
 
 
 _BOUNDARY_CACHE: dict[str, re.Pattern[str]] = {}
@@ -792,7 +895,7 @@ _BOUNDARY_CACHE: dict[str, re.Pattern[str]] = {}
 # Simple sizes like "small" or "large" need no concatenated form.
 
 _SIZE_GROUPS: list[tuple[str, ...]] = [
-    ('xxs', 'xx-small', 'xxsmall'),
+    ('xxs', 'xx-small', 'xxsmall', '2x-small', '2xs'),
     ('xs', 'x-small', 'xsmall'),
     ('s', 'small'),
     ('m', 'medium', 'med'),
