@@ -26,6 +26,8 @@ from domain.invoice_ean import (
     _has_variant_hint,
     _generate_barcode_pdf_zd421,
     _generate_barcode_pdf_fast_scan,
+    _normalize_craft_sku,
+    _CRAFT_SIZE_INDEX_TO_LABEL,
 )
 
 
@@ -2368,7 +2370,8 @@ class TestBuildMatchesDf:
         mdata = self._simple_match_data()
         mdf = build_matches_df(products, mdata)
         expected_cols = [
-            'src_row_id', 'src_type', 'src_sku', 'src_description',
+            'src_row_id', 'src_type', 'src_sku',
+            'src_sku_craft_normalized', 'src_description',
             'src_qty', 'matched_number', 'matched_variant',
             'matched_title', 'matched_ean', 'match_score',
             'match_source', 'status',
@@ -2498,7 +2501,8 @@ class TestExportFromMatchesDf:
     def test_empty_matches_df(self):
         """Empty matches_df produces empty export."""
         mdf = pd.DataFrame(columns=[
-            'src_row_id', 'src_type', 'src_sku', 'src_description',
+            'src_row_id', 'src_type', 'src_sku',
+            'src_sku_craft_normalized', 'src_description',
             'src_qty', 'matched_number', 'matched_variant',
             'matched_title', 'matched_ean', 'match_score',
             'match_source', 'status',
@@ -2781,3 +2785,196 @@ class TestManualOverridesInMatchesDf:
         assert export.iloc[0]['Product Number'] == 'CORRECT-PROD'
         assert export.iloc[0]['Variant Name'] == 'Blue'
         assert export.iloc[0]['Match %'] == 100
+
+
+# ---------------------------------------------------------------------------
+# Craft-style SKU normalization (size index → size label)
+# ---------------------------------------------------------------------------
+
+class TestNormalizeCraftSku:
+    """Unit tests for _normalize_craft_sku."""
+
+    def test_basic_xl(self):
+        assert _normalize_craft_sku('1910163-999000-7') == '1910163-999000-XL'
+
+    def test_basic_2xl(self):
+        assert _normalize_craft_sku('1910163-999000-8') == '1910163-999000-2XL'
+
+    def test_basic_m(self):
+        assert _normalize_craft_sku('1910163-999000-5') == '1910163-999000-M'
+
+    def test_basic_l(self):
+        assert _normalize_craft_sku('1910163-999000-6') == '1910163-999000-L'
+
+    def test_basic_s(self):
+        assert _normalize_craft_sku('1910163-999000-4') == '1910163-999000-S'
+
+    def test_basic_xs(self):
+        assert _normalize_craft_sku('1910163-999000-3') == '1910163-999000-XS'
+
+    def test_basic_xxs(self):
+        assert _normalize_craft_sku('1910163-999000-2') == '1910163-999000-XXS'
+
+    def test_basic_3xl(self):
+        assert _normalize_craft_sku('1910163-999000-9') == '1910163-999000-3XL'
+
+    def test_basic_4xl(self):
+        assert _normalize_craft_sku('1910163-999000-10') == '1910163-999000-4XL'
+
+    def test_non_matching_string_returns_none(self):
+        assert _normalize_craft_sku('AFK-110') is None
+
+    def test_non_craft_sku_returns_none(self):
+        assert _normalize_craft_sku('PROD-A') is None
+
+    def test_empty_string_returns_none(self):
+        assert _normalize_craft_sku('') is None
+
+    def test_unknown_index_returns_none(self):
+        # Index "1" is not in the mapping
+        assert _normalize_craft_sku('1910163-999000-1') is None
+
+    def test_too_short_base_returns_none(self):
+        # Base must be at least 5 digits
+        assert _normalize_craft_sku('1234-999-7') is None
+
+    def test_leading_trailing_whitespace(self):
+        assert _normalize_craft_sku('  1910163-999000-7  ') == '1910163-999000-XL'
+
+    def test_all_mapping_entries_round_trip(self):
+        """Every entry in _CRAFT_SIZE_INDEX_TO_LABEL produces a result."""
+        for idx, label in _CRAFT_SIZE_INDEX_TO_LABEL.items():
+            result = _normalize_craft_sku(f'12345-678-{idx}')
+            assert result == f'12345-678-{label}', f'idx={idx}'
+
+
+class TestCraftSkuMatching:
+    """Integration tests: Craft SKU matching without EAN."""
+
+    @staticmethod
+    def _craft_catalogue():
+        """Product catalogue with Craft-style SKUs as NUMBER."""
+        return _make_products(
+            NUMBER=['1910163-999000-XL', '1910163-999000-L',
+                    '1910163-999000-M'],
+            TITLE_DK=['Craft Jacket XL', 'Craft Jacket L',
+                       'Craft Jacket M'],
+            VARIANT_ID=['', '', ''],
+            VARIANT_TYPES=['', '', ''],
+            EAN=['', '', ''],
+            BUY_PRICE=['100', '100', '100'],
+            PRICE=['200', '200', '200'],
+            BUY_PRICE_NUM=[100.0, 100.0, 100.0],
+            PRICE_NUM=[200.0, 200.0, 200.0],
+            PRODUCT_ID=['10', '11', '12'],
+            PRODUCER=['Craft', 'Craft', 'Craft'],
+            PRODUCER_ID=[5, 5, 5],
+            ONLINE=[True, True, True],
+        )
+
+    def test_invoice_size_index_matches_catalogue_label(self):
+        """Invoice SKU '1910163-999000-7' matches catalogue '1910163-999000-XL'."""
+        catalogue = self._craft_catalogue()
+        invoice_df = pd.DataFrame({
+            'SKU': ['1910163-999000-7'],
+            'Qty': ['2'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty', threshold=70,
+        )
+        m = mdata['matches']['1910163-999000-7']
+        assert m['sku'] is not None
+        assert m['score'] == 100
+        # The matched SKU should be the XL variant
+        assert m['sku'] == '1910163-999000-XL'
+
+    def test_multiple_craft_skus_match_correctly(self):
+        """Multiple Craft invoice SKUs each match the correct catalogue entry."""
+        catalogue = self._craft_catalogue()
+        invoice_df = pd.DataFrame({
+            'SKU': ['1910163-999000-7', '1910163-999000-6',
+                    '1910163-999000-5'],
+            'Qty': ['1', '1', '1'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty', threshold=70,
+        )
+        assert mdata['matches']['1910163-999000-7']['score'] == 100
+        assert mdata['matches']['1910163-999000-6']['score'] == 100
+        assert mdata['matches']['1910163-999000-5']['score'] == 100
+        # Each should match the corresponding size
+        assert mdata['matches']['1910163-999000-7']['sku'] == '1910163-999000-XL'
+        assert mdata['matches']['1910163-999000-6']['sku'] == '1910163-999000-L'
+        assert mdata['matches']['1910163-999000-5']['sku'] == '1910163-999000-M'
+
+    def test_build_matches_df_has_craft_normalized_column(self):
+        """build_matches_df populates src_sku_craft_normalized for Craft SKUs."""
+        catalogue = self._craft_catalogue()
+        invoice_df = pd.DataFrame({
+            'SKU': ['1910163-999000-7'],
+            'Qty': ['1'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty', threshold=70,
+        )
+        mdf = build_matches_df(catalogue, mdata)
+        assert 'src_sku_craft_normalized' in mdf.columns
+        row = mdf.iloc[0]
+        assert row['src_sku_craft_normalized'] == '1910163-999000-XL'
+
+    def test_non_craft_sku_has_empty_craft_normalized(self):
+        """Non-Craft SKUs have empty src_sku_craft_normalized."""
+        catalogue = _make_products()
+        invoice_df = pd.DataFrame({
+            'SKU': ['SKU-001'],
+            'Qty': ['1'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty', threshold=70,
+        )
+        mdf = build_matches_df(catalogue, mdata)
+        assert 'src_sku_craft_normalized' in mdf.columns
+        assert mdf.iloc[0]['src_sku_craft_normalized'] == ''
+
+    def test_ean_still_wins_over_craft(self):
+        """EAN cross-match (score=100) still wins when both EAN and Craft apply."""
+        catalogue = _make_products(
+            NUMBER=['1910163-999000-XL'],
+            TITLE_DK=['Craft Jacket XL'],
+            VARIANT_ID=[''],
+            VARIANT_TYPES=[''],
+            EAN=['5701234567890'],
+            BUY_PRICE=['100'],
+            PRICE=['200'],
+            BUY_PRICE_NUM=[100.0],
+            PRICE_NUM=[200.0],
+            PRODUCT_ID=['10'],
+            PRODUCER=['Craft'],
+            PRODUCER_ID=[5],
+            ONLINE=[True],
+        )
+        # Invoice SKU is a bare EAN
+        invoice_df = pd.DataFrame({
+            'SKU': ['5701234567890'],
+            'Qty': ['1'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, invoice_df, 'SKU', 'Qty', threshold=70,
+        )
+        m = mdata['matches']['5701234567890']
+        assert m['score'] == 100
+
+    def test_supplier_flow_also_uses_craft_normalization(self):
+        """Supplier matching (via same pipeline) also benefits from Craft norm."""
+        catalogue = self._craft_catalogue()
+        supplier_df = pd.DataFrame({
+            'SKU': ['1910163-999000-7'],
+            'Qty': ['3'],
+        })
+        mdata = match_invoice_to_products(
+            catalogue, supplier_df, 'SKU', 'Qty', threshold=70,
+        )
+        mdf = build_matches_df(catalogue, mdata, src_type='supplier')
+        assert mdf.iloc[0]['match_score'] == 100
+        assert mdf.iloc[0]['src_type'] == 'supplier'
+        assert mdf.iloc[0]['src_sku_craft_normalized'] == '1910163-999000-XL'

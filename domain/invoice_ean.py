@@ -109,6 +109,50 @@ def detect_invoice_columns(
 # SKU normalisation & fuzzy matching (single source of truth)
 # ---------------------------------------------------------------------------
 
+# Craft / Danish-style size-index → size-label mapping.
+# Invoice SKUs use a trailing numeric index (e.g. ``-7`` for XL),
+# while the catalogue uses the label (e.g. ``-XL``).
+_CRAFT_SIZE_INDEX_TO_LABEL: dict[str, str] = {
+    "2": "XXS",
+    "3": "XS",
+    "4": "S",
+    "5": "M",
+    "6": "L",
+    "7": "XL",
+    "8": "2XL",
+    "9": "3XL",
+    "10": "4XL",
+}
+
+# Pattern: <base>-<color>-<size_idx>  where base and color are digit groups.
+_CRAFT_SKU_RE = re.compile(
+    r'^(\d{5,})-(\d{3,})-(\d{1,2})$'
+)
+
+
+def _normalize_craft_sku(s: str) -> str | None:
+    """Translate a Craft-style numeric size-index SKU to size-label form.
+
+    Example::
+
+        >>> _normalize_craft_sku('1910163-999000-7')
+        '1910163-999000-XL'
+
+    Returns ``None`` when *s* does not match the expected pattern or the
+    trailing index is not in :data:`_CRAFT_SIZE_INDEX_TO_LABEL`.
+    """
+    if not s:
+        return None
+    m = _CRAFT_SKU_RE.match(s.strip())
+    if not m:
+        return None
+    base, color, idx = m.group(1), m.group(2), m.group(3)
+    label = _CRAFT_SIZE_INDEX_TO_LABEL.get(idx)
+    if label is None:
+        return None
+    return f"{base}-{color}-{label}"
+
+
 def normalize_sku(sku: str) -> str:
     """Normalise a SKU for fuzzy comparison.
 
@@ -198,6 +242,20 @@ def match_supplier_to_products(
                 'alternatives': [],
             }
             continue
+
+        # Craft-style size-index → size-label normalisation.
+        # E.g. invoice "1910163-999000-7" → "1910163-999000-XL" which
+        # should match the catalogue entry directly.
+        craft_norm = _normalize_craft_sku(sup_sku)
+        if craft_norm is not None:
+            craft_key = normalize_sku(craft_norm)
+            if craft_key and craft_key in norm_to_orig:
+                matches[sup_sku] = {
+                    'sku': norm_to_orig[craft_key],
+                    'score': 100,
+                    'alternatives': [],
+                }
+                continue
 
         # Fuzzy SKU match — read through ALL candidates above cutoff
         results = rfprocess.extract(
@@ -622,7 +680,8 @@ _EXPORT_COLUMNS = [
 
 # Canonical column names for the matches DataFrame.
 _MATCHES_COLUMNS = [
-    'src_row_id', 'src_type', 'src_sku', 'src_description', 'src_qty',
+    'src_row_id', 'src_type', 'src_sku', 'src_sku_craft_normalized',
+    'src_description', 'src_qty',
     'matched_number', 'matched_variant', 'matched_title',
     'matched_ean', 'match_score', 'match_source', 'status',
 ]
@@ -710,6 +769,7 @@ def build_matches_df(
         score = mentry['score']
         src_qty = qty_map.get(src_sku, 1.0)
         src_desc = desc_map.get(src_sku, '')
+        craft_norm = _normalize_craft_sku(src_sku) or ''
 
         if matched_key is None:
             # Unmatched
@@ -717,6 +777,7 @@ def build_matches_df(
                 'src_row_id': row_id,
                 'src_type': src_type,
                 'src_sku': src_sku,
+                'src_sku_craft_normalized': craft_norm,
                 'src_description': src_desc,
                 'src_qty': src_qty,
                 'matched_number': '',
@@ -743,6 +804,7 @@ def build_matches_df(
                 'src_row_id': row_id,
                 'src_type': src_type,
                 'src_sku': src_sku,
+                'src_sku_craft_normalized': craft_norm,
                 'src_description': src_desc,
                 'src_qty': src_qty,
                 'matched_number': number,
@@ -788,6 +850,7 @@ def build_matches_df(
                     'src_row_id': row_id,
                     'src_type': src_type,
                     'src_sku': src_sku,
+                    'src_sku_craft_normalized': craft_norm,
                     'src_description': src_desc,
                     'src_qty': src_qty,
                     'matched_number': number,
@@ -809,6 +872,7 @@ def build_matches_df(
             'src_row_id': row_id,
             'src_type': src_type,
             'src_sku': src_sku,
+            'src_sku_craft_normalized': craft_norm,
             'src_description': src_desc,
             'src_qty': src_qty,
             'matched_number': number,
