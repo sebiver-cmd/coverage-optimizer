@@ -454,7 +454,7 @@ add per-caller rate limiting.
 ## Phase 4 — Multi-Tenancy + Auth + RBAC
 
 ### Task 4.1 — Tenant + User models
-- [ ] Task 4.1
+- [x] Task 4.1
 
 **Objective**: Core DB models for multi-tenancy.
 
