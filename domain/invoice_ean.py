@@ -124,6 +124,20 @@ _CRAFT_SIZE_INDEX_TO_LABEL: dict[str, str] = {
     "10": "4XL",
 }
 
+# Craft women EU-size variant: index → ``<alpha>/<EU>`` label.
+# Used to produce variant itemnumber candidates like ``1910155-430000-L/40``.
+_CRAFT_WOMEN_SIZE_INDEX_TO_LABEL: dict[str, str] = {
+    "2": "XXS/32",
+    "3": "XS/34",
+    "4": "S/36",
+    "5": "M/38",
+    "6": "L/40",
+    "7": "XL/42",
+    "8": "2XL/44",
+    "9": "3XL/46",
+    "10": "4XL/48",
+}
+
 # Pattern: <base>-<color>-<size_idx>  where base and color are digit groups.
 _CRAFT_SKU_RE = re.compile(
     r'^(\d{5,})-(\d{3,})-(\d{1,2})$'
@@ -151,6 +165,31 @@ def _normalize_craft_sku(s: str) -> str | None:
     if label is None:
         return None
     return f"{base}-{color}-{label}"
+
+
+def _craft_sku_candidates(s: str) -> list[str]:
+    """Return all possible Craft-normalized forms for SKU *s*.
+
+    Produces both the unisex form (e.g. ``1910163-999000-XL``) and the
+    women/EU form (e.g. ``1910163-999000-XL/42``) so that the matching
+    pipeline can try each against the variant itemnumber lookup.
+
+    Returns an empty list when *s* does not match the Craft SKU pattern.
+    """
+    if not s:
+        return []
+    m = _CRAFT_SKU_RE.match(s.strip())
+    if not m:
+        return []
+    base, color, idx = m.group(1), m.group(2), m.group(3)
+    candidates: list[str] = []
+    label = _CRAFT_SIZE_INDEX_TO_LABEL.get(idx)
+    if label is not None:
+        candidates.append(f"{base}-{color}-{label}")
+    women_label = _CRAFT_WOMEN_SIZE_INDEX_TO_LABEL.get(idx)
+    if women_label is not None:
+        candidates.append(f"{base}-{color}-{women_label}")
+    return candidates
 
 
 # ---------------------------------------------------------------------------
@@ -287,10 +326,13 @@ def match_supplier_to_products(
         # Craft-style size-index → size-label normalisation.
         # E.g. invoice "1910163-999000-7" → "1910163-999000-XL" which
         # should match the catalogue entry directly.
+        # Tries both unisex (e.g. "-XL") and women/EU (e.g. "-XL/42")
+        # forms so that variant itemnumber keys are matched first.
         # Try raw case-insensitive match first (preserves hyphens),
         # then fall back to normalize_sku comparison.
-        craft_norm = _normalize_craft_sku(sup_sku)
-        if craft_norm is not None:
+        craft_candidates = _craft_sku_candidates(sup_sku)
+        craft_matched = False
+        for craft_norm in craft_candidates:
             craft_upper = craft_norm.upper().strip()
             if craft_upper in raw_upper_to_orig:
                 matches[sup_sku] = {
@@ -299,7 +341,8 @@ def match_supplier_to_products(
                     'alternatives': [],
                     'method': 'craft-exact',
                 }
-                continue
+                craft_matched = True
+                break
             craft_key = normalize_sku(craft_norm)
             if craft_key and craft_key in norm_to_orig:
                 matches[sup_sku] = {
@@ -308,7 +351,10 @@ def match_supplier_to_products(
                     'alternatives': [],
                     'method': 'craft-exact',
                 }
-                continue
+                craft_matched = True
+                break
+        if craft_matched:
+            continue
 
         # Fuzzy SKU match — read through ALL candidates above cutoff
         results = rfprocess.extract(
@@ -683,11 +729,17 @@ def match_invoice_to_products(
                 continue
             if mentry.get('method') not in ('sku-exact', 'craft-exact'):
                 continue
+            orig_method = mentry['method']
             norm_inv_sku = normalize_sku(inv_sku)
             norm_matched = normalize_sku(mentry['sku'])
             if (norm_inv_sku and norm_inv_sku in norm_variant_keys) or \
                (norm_matched and norm_matched in norm_variant_keys):
-                mentry['method'] = 'variant-itemnumber-exact'
+                # Distinguish Craft-normalised itemnumber matches from
+                # direct itemnumber matches for diagnostic clarity.
+                if orig_method == 'craft-exact':
+                    mentry['method'] = 'craft-variant-itemnumber-exact'
+                else:
+                    mentry['method'] = 'variant-itemnumber-exact'
 
     # --- EAN cross-check: use EAN as a strong signal ---
     # If the product catalogue has EAN values, build a reverse lookup
@@ -867,7 +919,10 @@ def build_matches_df(
     # Build a lookup from product NUMBER → best (title, variant, ean)
     # by doing the same expansion + narrowing as build_export_from_matches
     # but collecting per-SKU results.
-    prods = products_df[['NUMBER', 'VARIANT_TYPES', 'EAN', 'TITLE_DK']].copy()
+    prods_cols = ['NUMBER', 'VARIANT_TYPES', 'EAN', 'TITLE_DK']
+    if 'VARIANT_ITEMNUMBER' in products_df.columns:
+        prods_cols.append('VARIANT_ITEMNUMBER')
+    prods = products_df[prods_cols].copy()
     prods['_num_key'] = prods['NUMBER'].astype(str).str.strip()
 
     records: list[dict] = []
@@ -1243,6 +1298,26 @@ def _narrow_group_variants(group: pd.DataFrame) -> pd.DataFrame:
     vt_col = group['VARIANT_TYPES'].fillna('').astype(str).str.strip()
     original_count = len(group)
 
+    # ---- VARIANT_ITEMNUMBER-based narrowing (highest priority) ----
+    # When candidate rows have non-empty VARIANT_ITEMNUMBER, try matching
+    # the invoice SKU (and its Craft-normalised candidates) directly.
+    # This is authoritative and prevents VARIANT_TITLE / VARIANT_TYPES
+    # from overriding a correct itemnumber match.
+    if 'VARIANT_ITEMNUMBER' in group.columns:
+        vi_col = group['VARIANT_ITEMNUMBER'].fillna('').astype(str).str.strip()
+        has_vi = vi_col.ne('')
+        if has_vi.any():
+            candidates_upper: set[str] = set()
+            raw_sku = inv_sku.strip().upper()
+            if raw_sku:
+                candidates_upper.add(raw_sku)
+            for craft_form in _craft_sku_candidates(inv_sku):
+                candidates_upper.add(craft_form.upper())
+            vi_upper = vi_col.str.upper()
+            vi_match = vi_upper.isin(candidates_upper)
+            if vi_match.sum() == 1:
+                return _dedupe_product_rows(group.loc[vi_match])
+
     # Pre-compute numeric hints from the invoice line for numeric
     # variant matching (e.g. "GTBL 3,0" → {3.0}).
     context_text = inv_sku
@@ -1415,7 +1490,10 @@ def build_export_from_matches(
     match_df = pd.DataFrame(match_records)
 
     # ---- Phase 2: Join with product catalogue on NUMBER ----
-    prods = products_df[['NUMBER', 'VARIANT_TYPES', 'EAN', 'TITLE_DK']].copy()
+    prods_cols = ['NUMBER', 'VARIANT_TYPES', 'EAN', 'TITLE_DK']
+    if 'VARIANT_ITEMNUMBER' in products_df.columns:
+        prods_cols.append('VARIANT_ITEMNUMBER')
+    prods = products_df[prods_cols].copy()
     prods['_num_key'] = prods['NUMBER'].astype(str).str.strip()
 
     merged = match_df.merge(

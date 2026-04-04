@@ -44,12 +44,13 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _debug_variant_itemnumber(df: pd.DataFrame) -> None:
-    """Log diagnostic info about the VARIANT_ITEMNUMBER column.
+    """Log diagnostic info about variant columns in the product DataFrame.
 
-    This is a *safe, temporary* debug section that proves whether the
-    column exists and is populated at runtime.  It writes to the module
-    logger at INFO level so it appears in both Streamlit console output
-    and backend logs.
+    Logs a health-metric summary (behind INFO level):
+    - total rows
+    - rows with non-empty VARIANT_ID
+    - rows with non-empty VARIANT_ITEMNUMBER
+    - rows with non-empty EAN
 
     **Removal criteria**: remove this function (and its call site in
     ``fetch_products``) once runtime output has confirmed that
@@ -57,8 +58,8 @@ def _debug_variant_itemnumber(df: pd.DataFrame) -> None:
     Alternatively, keep it as a permanent DEBUG-level diagnostic by
     changing the ``logger.info`` calls to ``logger.debug``.
     """
-    cols = list(df.columns)
-    logger.info("[DEBUG-VARIANT] DataFrame columns: %s", cols)
+    total = len(df)
+    logger.info("[DEBUG-VARIANT] DataFrame columns: %s", list(df.columns))
 
     if 'VARIANT_ITEMNUMBER' not in df.columns:
         logger.warning(
@@ -66,10 +67,18 @@ def _debug_variant_itemnumber(df: pd.DataFrame) -> None:
         )
         return
 
-    non_empty = df['VARIANT_ITEMNUMBER'].astype(str).str.strip().ne('').sum()
-    total = len(df)
+    def _non_empty(col_name: str) -> int:
+        if col_name not in df.columns:
+            return 0
+        return int(df[col_name].astype(str).str.strip().ne('').sum())
+
+    vid_count = _non_empty('VARIANT_ID')
+    vi_count = _non_empty('VARIANT_ITEMNUMBER')
+    ean_count = _non_empty('EAN')
     logger.info(
-        "[DEBUG-VARIANT] VARIANT_ITEMNUMBER non-empty: %d / %d rows", non_empty, total
+        "[DEBUG-VARIANT] Health: total=%d, VARIANT_ID non-empty=%d, "
+        "VARIANT_ITEMNUMBER non-empty=%d, EAN non-empty=%d",
+        total, vid_count, vi_count, ean_count,
     )
 
     sample_cols = [

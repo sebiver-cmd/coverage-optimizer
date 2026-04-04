@@ -270,7 +270,7 @@ class TestVariantItemNumberMatching:
         # Should match the XL variant (7 → XL in Craft size map)
         assert entry['score'] == 100
         # The method should be craft-exact or variant-itemnumber-exact
-        assert entry['method'] in ('craft-exact', 'variant-itemnumber-exact')
+        assert entry['method'] in ('craft-exact', 'variant-itemnumber-exact', 'craft-variant-itemnumber-exact')
 
     def test_no_variant_itemnumber_falls_back_to_existing_matching(self):
         """When VARIANT_ITEMNUMBER is empty, existing matching still works."""
@@ -647,7 +647,7 @@ class TestCraftEndToEnd:
         )
         entry = result['matches']['1910163-999000-7']
         assert entry['score'] == 100
-        assert entry['method'] == 'variant-itemnumber-exact'
+        assert entry['method'] == 'craft-variant-itemnumber-exact'
 
         # Verify it resolves to the XL variant, not the base product
         num, vtype = result['composite_lookup'][entry['sku']]
@@ -671,7 +671,7 @@ class TestCraftEndToEnd:
         row = mdf.iloc[0]
         assert row['matched_number'] == '1910163'
         assert 'XL' in row['matched_variant']
-        assert row['match_method_detail'] == 'variant-itemnumber-exact'
+        assert row['match_method_detail'] == 'craft-variant-itemnumber-exact'
         assert row['match_score'] == 100
         assert row['status'] == 'ok'
 
