@@ -639,20 +639,20 @@ def match_invoice_to_products(
     # UI / export can distinguish deterministic variant-level matches
     # from base-number or fuzzy matches.
     # Because normalize_sku strips separators, a composite key like
-    # "1910163 999000 // XL" normalises identically to "1910163-999000-XL".
-    # We therefore compare normalised invoice SKUs against normalised
+    # "1910163 999000 // XL" normalizes identically to "1910163-999000-XL".
+    # We therefore compare normalized invoice SKUs against normalized
     # variant item numbers (rather than the raw matched_key).
     if variant_itemnumber_lookup:
-        _norm_vi: dict[str, tuple[str, str]] = {}
+        norm_variant_keys: dict[str, tuple[str, str]] = {}
         for _vinum in variant_itemnumber_lookup:
-            _nk = normalize_sku(_vinum)
-            if _nk:
-                _norm_vi[_nk] = variant_itemnumber_lookup[_vinum]
+            norm_vkey = normalize_sku(_vinum)
+            if norm_vkey:
+                norm_variant_keys[norm_vkey] = variant_itemnumber_lookup[_vinum]
         for inv_sku, mentry in matches.items():
             if mentry.get('sku') is None:
                 continue
-            _norm_inv = normalize_sku(inv_sku)
-            if _norm_inv and _norm_inv in _norm_vi:
+            norm_inv_sku = normalize_sku(inv_sku)
+            if norm_inv_sku and norm_inv_sku in norm_variant_keys:
                 if mentry.get('method') in ('sku-exact', 'craft-exact'):
                     mentry['method'] = 'variant-itemnumber-exact'
 

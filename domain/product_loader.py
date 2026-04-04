@@ -144,7 +144,7 @@ def enrich_variants(
 
     - ``VARIANT_ITEMNUMBER`` — the variant's own item number / SKU.
     - ``VARIANT_TITLE`` — the variant's title (VariantTypeValues
-      concatenated with ``//`` per the HostedShop docs ``$Title``
+      concatenated with `` // `` per the HostedShop docs ``$Title``
       field).
     - ``VARIANT_EAN`` — the variant's EAN if available per variant.
 
