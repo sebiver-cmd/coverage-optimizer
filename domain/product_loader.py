@@ -27,12 +27,16 @@ matching the Streamlit default of *"All brands (no filter)"*.
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Callable, Optional
 
 import pandas as pd
 
-from dandomain_api import DanDomainClient
+from dandomain_api import DanDomainClient, DanDomainAPIError, BATCH_DELAY
 from domain.pricing import api_products_to_dataframe, _build_brand_id_map
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +127,109 @@ def fetch_products(
         brand_id_map = {**brand_id_map, **brands_map}
 
     return df, brand_id_map
+
+
+# ---------------------------------------------------------------------------
+# Variant enrichment
+# ---------------------------------------------------------------------------
+
+def enrich_variants(
+    df: pd.DataFrame,
+    client: DanDomainClient,
+) -> pd.DataFrame:
+    """Enrich product DataFrame with variant-level data from the API.
+
+    For each unique base product ``NUMBER`` in *df*, calls
+    ``Product_GetVariantsByItemNumber`` (read-only) and populates:
+
+    - ``VARIANT_ITEMNUMBER`` — the variant's own item number / SKU.
+    - ``VARIANT_TITLE`` — the variant's title (VariantTypeValues
+      concatenated with `` // `` per the HostedShop docs ``$Title``
+      field).
+    - ``VARIANT_EAN`` — the variant's EAN if available per variant.
+
+    When the initial product fetch already populated
+    ``VARIANT_ITEMNUMBER`` (from the ``Variants`` array included in
+    ``Product_GetAll``), rows that already have a non-empty value are
+    left untouched.
+
+    **Safety**: read-only, cached by base item number, respects
+    ``BATCH_DELAY`` between calls, catches all errors gracefully.
+    On any failure the DataFrame is returned unchanged.
+    """
+    if df.empty:
+        return df
+
+    # Ensure target columns exist
+    for col in ('VARIANT_ITEMNUMBER', 'VARIANT_TITLE', 'VARIANT_EAN'):
+        if col not in df.columns:
+            df[col] = ''
+
+    # Identify rows that still need enrichment: have a VARIANT_ID but
+    # no VARIANT_ITEMNUMBER yet.
+    needs_enrichment = (
+        df['VARIANT_ID'].astype(str).str.strip().ne('')
+        & df['VARIANT_ITEMNUMBER'].astype(str).str.strip().eq('')
+    )
+    if not needs_enrichment.any():
+        return df
+
+    # Collect unique base item numbers that have un-enriched variants.
+    base_numbers = (
+        df.loc[needs_enrichment, 'NUMBER']
+        .astype(str)
+        .str.strip()
+        .drop_duplicates()
+        .tolist()
+    )
+
+    # Cache: base_item_number → {variant_id_str: {itemnumber, title, ean}}
+    variant_cache: dict[str, dict[str, dict[str, str]]] = {}
+
+    for base_num in base_numbers:
+        if not base_num:
+            continue
+        try:
+            raw_variants = client.get_variants_by_item_number(base_num)
+        except Exception:
+            logger.debug(
+                "Variant enrichment failed for base %s — skipping",
+                base_num,
+            )
+            continue
+
+        by_id: dict[str, dict[str, str]] = {}
+        for rv in raw_variants:
+            vid = str(rv.get('Id', '') or '').strip()
+            if not vid:
+                continue
+            by_id[vid] = {
+                'itemnumber': str(rv.get('ItemNumber', '') or '').strip(),
+                'title': str(rv.get('Title', '') or '').strip(),
+                'ean': str(rv.get('Ean', '') or '').strip(),
+            }
+        variant_cache[base_num] = by_id
+
+        time.sleep(BATCH_DELAY)
+
+    # Merge enrichment data into the DataFrame
+    df = df.copy()
+    for idx in df.index:
+        if not needs_enrichment.at[idx]:
+            continue
+        base_num = str(df.at[idx, 'NUMBER'] or '').strip()
+        vid = str(df.at[idx, 'VARIANT_ID'] or '').strip()
+        by_id = variant_cache.get(base_num, {})
+        vdata = by_id.get(vid, {})
+        if vdata:
+            if vdata.get('itemnumber'):
+                df.at[idx, 'VARIANT_ITEMNUMBER'] = vdata['itemnumber']
+            if vdata.get('title'):
+                df.at[idx, 'VARIANT_TITLE'] = vdata['title']
+            if vdata.get('ean'):
+                df.at[idx, 'VARIANT_EAN'] = vdata['ean']
+
+    return df
 
 
 # ---------------------------------------------------------------------------

@@ -695,6 +695,40 @@ class DanDomainClient:
                 return int(vid)
         return None
 
+    def get_variants_by_item_number(
+        self,
+        item_number: str,
+    ) -> list[dict]:
+        """Fetch variant data for a product using its item number.
+
+        Calls ``Product_GetVariantsByItemNumber(ItemNumber)`` which, per
+        the HostedShop docs, *"Returns the ProductVariant(s) with the
+        indicated ItemNumber"*.
+
+        Each returned dict contains at least:
+        ``Id``, ``ItemNumber``, ``Title``, ``Ean``.
+
+        Returns an empty list when no variants are found or on failure.
+        This method is **read-only** and safe to call at any time.
+        """
+        try:
+            result = self._call(
+                "Product_GetVariantsByItemNumber",
+                ItemNumber=item_number,
+            )
+        except DanDomainAPIError:
+            return []
+
+        if result is None:
+            return []
+
+        items = result if isinstance(result, list) else [result]
+        variants: list[dict] = []
+        for v in items:
+            vdict = _fix_mojibake(serialize_object(v, dict))
+            variants.append(vdict)
+        return variants
+
     def get_product(
         self,
         product_number: str,
