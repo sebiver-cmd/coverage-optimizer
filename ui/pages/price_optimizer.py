@@ -446,6 +446,18 @@ def render(
 
     # --- Display cached results ---
     if "_opt_raw_df" in st.session_state:
+        # --- DEBUG: VARIANT_ITEMNUMBER proof (Streamlit side) ---
+        _raw = st.session_state["_opt_raw_df"]
+        if isinstance(_raw, pd.DataFrame) and not _raw.empty:
+            _has_vi = 'VARIANT_ITEMNUMBER' in _raw.columns
+            _vi_count = (
+                _raw['VARIANT_ITEMNUMBER'].astype(str).str.strip().ne('').sum()
+                if _has_vi else 0
+            )
+            logger.info(
+                "[DEBUG-VARIANT-UI] raw_df columns=%s  VARIANT_ITEMNUMBER present=%s  non-empty=%d/%d",
+                list(_raw.columns), _has_vi, _vi_count, len(_raw),
+            )
         _render_analysis(
             st.session_state["_opt_raw_df"],
             api_username,
