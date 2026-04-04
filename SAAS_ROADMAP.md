@@ -343,7 +343,7 @@ Redis.
 **Mitigation**: lazy engine init guarded by `DATABASE_URL` presence.
 
 ### Task 2.3 — Env var convention + config module
-- [ ] Task 2.3
+- [x] Task 2.3
 
 **Objective**: Centralise all configuration into one Pydantic `Settings` class.
 

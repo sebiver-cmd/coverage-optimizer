@@ -15,6 +15,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from dandomain_api import DanDomainClient, DanDomainAPIError
@@ -23,6 +24,7 @@ from backend.brands_api import router as brands_router
 from backend.apply_prices_api import router as apply_prices_router
 from backend.apply_real_api import router as apply_real_router
 from backend.catalog_api import router as catalog_router
+from backend.config import get_settings
 from backend.db import check_db, init_engine
 
 logger = logging.getLogger(__name__)
@@ -55,7 +57,10 @@ class ConnectionResponse(BaseModel):
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Initialise the database engine from ``DATABASE_URL`` (if set)."""
+    """Initialise the database engine and log safe configuration."""
+    settings = get_settings()
+    logger.info("Settings loaded (env=%s): %s", settings.sboptima_env, settings.to_safe_dict())
+
     engine = init_engine()
     if engine is not None:
         logger.info("Database engine initialised (pool_pre_ping=True)")
@@ -80,6 +85,17 @@ app.include_router(brands_router)
 app.include_router(apply_prices_router)
 app.include_router(apply_real_router)
 app.include_router(catalog_router)
+
+# -- CORS middleware (only when origins are configured) ------------------
+_cors_origins = get_settings().get_cors_origins_list()
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 # ---------------------------------------------------------------------------
