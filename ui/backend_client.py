@@ -51,7 +51,10 @@ def create_manifest(
     base = normalize_base_url(backend_url)
     url = f"{base}/apply-prices/create-manifest"
 
-    # Translate push_safety dict keys to the backend model field names.
+    # Translate push_safety dict keys → backend ManifestChangeEntry field names.
+    # Note: "NUMBER" (uppercase) is the canonical product-number field throughout
+    # this codebase's Pydantic models and product DataFrames; "product_number"
+    # is the push_safety convention for the same value.
     entries: list[dict] = []
     for u in changes:
         entry: dict[str, Any] = {
