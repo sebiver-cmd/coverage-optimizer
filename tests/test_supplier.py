@@ -16,6 +16,12 @@ from domain.supplier import (
     match_supplier_to_products,
     _dedupe_columns,
 )
+from domain.invoice_ean import (
+    suggest_column_mapping,
+    _build_mapping_prompt,
+    _parse_llm_mapping_response,
+    INTERNAL_FIELDS,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +418,212 @@ class TestMatchSupplierToProducts(unittest.TestCase):
         )
         self.assertEqual(result['GTR 4,5']['sku'], 'TO-GTR-4,5')
         self.assertEqual(result['GTR 4,5']['score'], 100)
+
+
+# ===================================================================
+# AI-assisted column mapping — suggest_column_mapping
+# ===================================================================
+
+class TestBuildMappingPrompt(unittest.TestCase):
+    """Tests for the prompt builder helper."""
+
+    def test_contains_column_names(self):
+        df = pd.DataFrame({'Art Nr': ['X1'], 'Pris': [99]})
+        prompt = _build_mapping_prompt(df)
+        self.assertIn('Art Nr', prompt)
+        self.assertIn('Pris', prompt)
+
+    def test_contains_internal_fields(self):
+        df = pd.DataFrame({'A': [1]})
+        prompt = _build_mapping_prompt(df)
+        for field in INTERNAL_FIELDS:
+            self.assertIn(field, prompt)
+
+    def test_limits_rows_to_five(self):
+        df = pd.DataFrame({'A': list(range(20))})
+        prompt = _build_mapping_prompt(df)
+        # The prompt should contain a markdown table with exactly 5 data rows
+        # (header + separator + 5 rows = 7 lines starting with '|')
+        table_lines = [
+            ln for ln in prompt.splitlines() if ln.strip().startswith('|')
+        ]
+        # header + separator + 5 data rows
+        self.assertEqual(len(table_lines), 7)
+
+
+class TestParseLLMMappingResponse(unittest.TestCase):
+    """Tests for _parse_llm_mapping_response validation."""
+
+    def test_valid_json_mapping(self):
+        raw = '{"SKU": "sku", "Price": "price", "Name": "description"}'
+        result = _parse_llm_mapping_response(raw, ['SKU', 'Price', 'Name'])
+        self.assertEqual(result, {
+            'sku': 'SKU', 'price': 'Price', 'description': 'Name',
+        })
+
+    def test_json_with_null_values_excluded(self):
+        raw = '{"SKU": "sku", "Extra": null}'
+        result = _parse_llm_mapping_response(raw, ['SKU', 'Extra'])
+        self.assertEqual(result, {'sku': 'SKU'})
+
+    def test_nonexistent_column_skipped(self):
+        raw = '{"MissingCol": "sku", "Price": "price"}'
+        result = _parse_llm_mapping_response(raw, ['Price'])
+        self.assertEqual(result, {'price': 'Price'})
+
+    def test_unknown_internal_field_skipped(self):
+        raw = '{"SKU": "sku", "Price": "total_cost"}'
+        result = _parse_llm_mapping_response(raw, ['SKU', 'Price'])
+        self.assertEqual(result, {'sku': 'SKU'})
+
+    def test_malformed_json_returns_none(self):
+        result = _parse_llm_mapping_response(
+            'not json at all', ['A'],
+        )
+        self.assertIsNone(result)
+
+    def test_empty_string_returns_none(self):
+        self.assertIsNone(_parse_llm_mapping_response('', ['A']))
+
+    def test_none_input_returns_none(self):
+        self.assertIsNone(_parse_llm_mapping_response(None, ['A']))
+
+    def test_json_in_code_fence(self):
+        raw = '```json\n{"SKU": "sku"}\n```'
+        result = _parse_llm_mapping_response(raw, ['SKU'])
+        self.assertEqual(result, {'sku': 'SKU'})
+
+    def test_json_with_surrounding_text(self):
+        raw = 'Here is the mapping:\n{"SKU": "sku"}\nDone!'
+        result = _parse_llm_mapping_response(raw, ['SKU'])
+        self.assertEqual(result, {'sku': 'SKU'})
+
+    def test_all_invalid_mappings_returns_none(self):
+        raw = '{"BadCol": "badfield"}'
+        result = _parse_llm_mapping_response(raw, ['SKU'])
+        self.assertIsNone(result)
+
+    def test_case_insensitive_field_matching(self):
+        raw = '{"SKU": "SKU", "Price": "Price"}'
+        result = _parse_llm_mapping_response(raw, ['SKU', 'Price'])
+        self.assertEqual(result, {'sku': 'SKU', 'price': 'Price'})
+
+    def test_first_mapping_per_field_wins(self):
+        """When two columns map to the same internal field, keep the first."""
+        raw = '{"Col1": "sku", "Col2": "sku"}'
+        result = _parse_llm_mapping_response(raw, ['Col1', 'Col2'])
+        self.assertEqual(result, {'sku': 'Col1'})
+
+
+class TestSuggestColumnMappingIntegration(unittest.TestCase):
+    """End-to-end tests for suggest_column_mapping with mocked LLM."""
+
+    def test_valid_mapping_returned(self):
+        df = pd.DataFrame({
+            'Artikelnr': ['X1', 'X2'],
+            'Enhedspris': [100, 200],
+            'Beskrivelse': ['Widget', 'Gadget'],
+        })
+
+        def fake_llm(prompt, key, model):
+            return (
+                '{"Artikelnr": "sku", "Enhedspris": "price", '
+                '"Beskrivelse": "description"}'
+            )
+
+        result = suggest_column_mapping(
+            df, api_key='test', llm_call=fake_llm,
+        )
+        self.assertEqual(result['sku'], 'Artikelnr')
+        self.assertEqual(result['price'], 'Enhedspris')
+        self.assertEqual(result['description'], 'Beskrivelse')
+
+    def test_no_api_key_returns_none(self):
+        df = pd.DataFrame({'A': [1]})
+        result = suggest_column_mapping(df)
+        self.assertIsNone(result)
+
+    def test_empty_df_returns_none(self):
+        df = pd.DataFrame()
+        result = suggest_column_mapping(df, api_key='test')
+        self.assertIsNone(result)
+
+    def test_llm_failure_returns_none(self):
+        df = pd.DataFrame({'A': [1], 'B': [2]})
+
+        def failing_llm(prompt, key, model):
+            return None
+
+        result = suggest_column_mapping(
+            df, api_key='test', llm_call=failing_llm,
+        )
+        self.assertIsNone(result)
+
+    def test_malformed_llm_response_returns_none(self):
+        df = pd.DataFrame({'A': [1]})
+
+        def bad_llm(prompt, key, model):
+            return 'I cannot process this request.'
+
+        result = suggest_column_mapping(
+            df, api_key='test', llm_call=bad_llm,
+        )
+        self.assertIsNone(result)
+
+    def test_partial_mapping_accepted(self):
+        """LLM maps only some columns — partial result is fine."""
+        df = pd.DataFrame({
+            'Col1': ['A1'], 'Col2': [100], 'Col3': ['Foo'],
+        })
+
+        def partial_llm(prompt, key, model):
+            return '{"Col1": "sku", "Col3": null}'
+
+        result = suggest_column_mapping(
+            df, api_key='test', llm_call=partial_llm,
+        )
+        self.assertEqual(result, {'sku': 'Col1'})
+
+    def test_llm_references_nonexistent_columns(self):
+        df = pd.DataFrame({'Real': [1]})
+
+        def bad_cols_llm(prompt, key, model):
+            return '{"Fake": "sku", "Real": "price"}'
+
+        result = suggest_column_mapping(
+            df, api_key='test', llm_call=bad_cols_llm,
+        )
+        self.assertEqual(result, {'price': 'Real'})
+
+    def test_model_param_forwarded(self):
+        df = pd.DataFrame({'A': [1]})
+        captured = {}
+
+        def capture_llm(prompt, key, model):
+            captured['model'] = model
+            return '{"A": "sku"}'
+
+        suggest_column_mapping(
+            df, api_key='test', model='gpt-4o', llm_call=capture_llm,
+        )
+        self.assertEqual(captured['model'], 'gpt-4o')
+
+    def test_api_key_from_env(self):
+        df = pd.DataFrame({'A': [1]})
+        captured = {}
+
+        def capture_llm(prompt, key, model):
+            captured['key'] = key
+            return '{"A": "sku"}'
+
+        with patch.dict('os.environ', {'OPENAI_API_KEY': 'env-key'}):
+            suggest_column_mapping(df, llm_call=capture_llm)
+        self.assertEqual(captured['key'], 'env-key')
+
+    def test_reexported_from_supplier_module(self):
+        """suggest_column_mapping should be accessible from domain.supplier."""
+        from domain.supplier import suggest_column_mapping as sup_scm
+        self.assertIs(sup_scm, suggest_column_mapping)
 
 
 if __name__ == '__main__':

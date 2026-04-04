@@ -1659,11 +1659,11 @@ class TestExtractSkuFromDescription:
 
 
 # ---------------------------------------------------------------------------
-# suggest_column_mapping  (AI strategy stub)
+# suggest_column_mapping  (AI column mapping)
 # ---------------------------------------------------------------------------
 
 class TestSuggestColumnMapping:
-    """Tests for the AI column-mapping stub."""
+    """Tests for the AI column-mapping implementation."""
 
     def test_returns_none_without_api_key(self):
         df = pd.DataFrame({'A': [1], 'B': [2]})
@@ -1672,6 +1672,29 @@ class TestSuggestColumnMapping:
     def test_accepts_model_kwarg(self):
         df = pd.DataFrame({'A': [1]})
         assert suggest_column_mapping(df, model='gpt-4o') is None
+
+    def test_returns_none_for_empty_df(self):
+        df = pd.DataFrame()
+        assert suggest_column_mapping(df, api_key='test-key') is None
+
+    def test_valid_mapping_via_injectable_llm_call(self):
+        df = pd.DataFrame({'Artikelnr': ['A1'], 'Pris': [100]})
+
+        def fake_llm(prompt, key, model):
+            return '{"Artikelnr": "sku", "Pris": "price"}'
+
+        result = suggest_column_mapping(df, api_key='k', llm_call=fake_llm)
+        assert result == {'sku': 'Artikelnr', 'price': 'Pris'}
+
+    def test_llm_returning_none_gives_none(self):
+        df = pd.DataFrame({'X': [1]})
+
+        def fake_llm(prompt, key, model):
+            return None
+
+        assert suggest_column_mapping(
+            df, api_key='k', llm_call=fake_llm,
+        ) is None
 
 
 # ---------------------------------------------------------------------------

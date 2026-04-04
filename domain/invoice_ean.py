@@ -14,8 +14,12 @@ The export document is **read-only** — it is never used for API imports.
 from __future__ import annotations
 
 import io
+import json
+import logging
 import math
+import os
 import re
+from typing import Callable
 
 import pandas as pd
 from rapidfuzz import fuzz, process as rfprocess
@@ -837,23 +841,162 @@ def _narrow_variants(
 
 
 # ---------------------------------------------------------------------------
-# AI-assisted column mapping (strategy stub)
+# AI-assisted column mapping
 # ---------------------------------------------------------------------------
+
+_log = logging.getLogger(__name__)
+
+#: Allowed internal field names that the LLM may map columns to.
+INTERNAL_FIELDS: frozenset[str] = frozenset({
+    'sku', 'qty', 'price', 'description', 'discount', 'currency',
+})
+
+#: Type alias for the injectable LLM call function.
+#: Signature: (prompt, api_key, model) -> response_text or None
+LLMCallFn = Callable[[str, str, str], "str | None"]
+
+
+def _build_mapping_prompt(df: pd.DataFrame) -> str:
+    """Build a compact prompt for column-mapping from sample rows.
+
+    Encodes the first 5 rows as a Markdown table together with the list
+    of target internal fields.
+    """
+    sample = df.head(5)
+
+    # Build markdown table without requiring tabulate
+    cols = list(sample.columns)
+    header = '| ' + ' | '.join(str(c) for c in cols) + ' |'
+    sep = '| ' + ' | '.join('---' for _ in cols) + ' |'
+    rows = []
+    for _, row in sample.iterrows():
+        rows.append('| ' + ' | '.join(str(v) for v in row) + ' |')
+    md_table = '\n'.join([header, sep] + rows)
+
+    return (
+        "You are a data-mapping assistant. "
+        "Given a supplier/invoice data file with the columns and sample rows below, "
+        "map each column to one of these internal fields or null if not mappable.\n\n"
+        "Internal fields:\n"
+        "- sku: Product SKU or article number\n"
+        "- qty: Quantity or amount\n"
+        "- price: Unit cost price\n"
+        "- description: Product name or description\n"
+        "- discount: Discount percentage\n"
+        "- currency: Currency code\n\n"
+        f"Columns: {list(df.columns)}\n\n"
+        f"Sample data:\n{md_table}\n\n"
+        "Return ONLY a JSON object mapping each column name to its internal field "
+        "(or null). Example: {\"Col1\": \"sku\", \"Col2\": \"price\", \"Col3\": null}\n"
+        "Do not include any text outside the JSON object."
+    )
+
+
+def _default_llm_call(prompt: str, api_key: str, model: str) -> str | None:
+    """OpenAI-compatible ``/v1/chat/completions`` call using ``requests``.
+
+    Reads ``OPENAI_BASE_URL`` from the environment to allow pointing at
+    compatible providers.  Defaults to ``https://api.openai.com``.
+    """
+    import requests as _requests
+
+    base_url = os.environ.get('OPENAI_BASE_URL', 'https://api.openai.com')
+    url = f"{base_url.rstrip('/')}/v1/chat/completions"
+
+    try:
+        resp = _requests.post(
+            url,
+            headers={
+                'Authorization': f'Bearer {api_key}',
+                'Content-Type': 'application/json',
+            },
+            json={
+                'model': model,
+                'messages': [{'role': 'user', 'content': prompt}],
+                'max_tokens': 200,
+                'temperature': 0,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data['choices'][0]['message']['content']
+    except Exception:
+        _log.exception("LLM call failed")
+        return None
+
+
+def _parse_llm_mapping_response(
+    raw_text: str | None,
+    df_columns: list[str],
+) -> dict[str, str | None] | None:
+    """Parse and validate an LLM column-mapping response.
+
+    Returns a dict ``{internal_field: column_name}`` with only valid
+    entries, or ``None`` if the response is unusable.
+    """
+    if not raw_text:
+        return None
+
+    # Try to extract JSON from the response (the LLM may wrap it in
+    # markdown code fences or add surrounding text).
+    text = raw_text.strip()
+    # Strip markdown code fences
+    if text.startswith('```'):
+        text = re.sub(r'^```(?:json)?\s*', '', text)
+        text = re.sub(r'\s*```$', '', text)
+        text = text.strip()
+
+    # Find the first { ... } block
+    brace_start = text.find('{')
+    brace_end = text.rfind('}')
+    if brace_start == -1 or brace_end == -1 or brace_end <= brace_start:
+        _log.warning("No JSON object found in LLM response")
+        return None
+
+    json_str = text[brace_start:brace_end + 1]
+
+    try:
+        mapping_raw: dict = json.loads(json_str)
+    except (json.JSONDecodeError, ValueError):
+        _log.warning("Failed to parse JSON from LLM response")
+        return None
+
+    if not isinstance(mapping_raw, dict):
+        return None
+
+    # Build the validated mapping: internal_field -> column_name
+    col_set = set(df_columns)
+    result: dict[str, str | None] = {}
+
+    for col_name, field in mapping_raw.items():
+        if col_name not in col_set:
+            _log.debug("LLM mapped non-existent column %r — skipping", col_name)
+            continue
+        if field is None:
+            continue
+        field_lower = str(field).lower().strip()
+        if field_lower not in INTERNAL_FIELDS:
+            _log.debug("LLM mapped to unknown field %r — skipping", field)
+            continue
+        # Only keep the first mapping per internal field
+        if field_lower not in result:
+            result[field_lower] = col_name
+
+    if not result:
+        return None
+
+    return result
+
 
 def suggest_column_mapping(
     df: pd.DataFrame,
     *,
     api_key: str | None = None,
     model: str = 'gpt-4o-mini',
+    llm_call: LLMCallFn | None = None,
 ) -> dict[str, str | None] | None:
     """Suggest column mappings using an LLM when standard rules fail.
-
-    .. note::
-
-        This is a **strategy stub** for future AI integration.  It
-        describes the intended interface and lightweight approach for
-        using an LLM as "plumbing" to map messy PDF/CSV columns to
-        our data structure.  The actual API call is not yet implemented.
 
     Strategy
     --------
@@ -868,9 +1011,10 @@ def suggest_column_mapping(
        - Instruction to return a JSON object mapping each role to the
          best matching column name (or ``null``).
 
-    3. **API call**: Use ``requests.post`` with the ``openai``-compatible
-       ``/v1/chat/completions`` endpoint.  Keep ``max_tokens`` ≤ 200
-       and ``temperature`` = 0 for deterministic output.
+    3. **API call**: Use an injectable ``llm_call`` function (defaults to
+       an OpenAI-compatible ``/v1/chat/completions`` endpoint via
+       ``requests``).  Keep ``max_tokens`` ≤ 200 and ``temperature`` = 0
+       for deterministic output.
     4. **Validation**: Parse the JSON response and verify each suggested
        column actually exists in ``df.columns``.  Discard any that don't.
 
@@ -884,6 +1028,11 @@ def suggest_column_mapping(
     model : str
         Model name (default ``'gpt-4o-mini'`` — cheapest option suitable
         for structured extraction tasks).
+    llm_call : callable or None
+        Optional injectable function with signature
+        ``(prompt: str, api_key: str, model: str) -> str | None``.
+        Defaults to :func:`_default_llm_call` which uses the OpenAI-
+        compatible REST API.
 
     Returns
     -------
@@ -900,13 +1049,17 @@ def suggest_column_mapping(
     No additional dependencies are required beyond ``requests`` (already
     in requirements.txt via ``streamlit``).
     """
-    # --- Stub: not yet implemented ---
-    # When implemented, the function will:
-    # 1. Check for api_key or OPENAI_API_KEY env var
-    # 2. Build a compact markdown table from df.head(5)
-    # 3. POST to /v1/chat/completions with the prompt
-    # 4. Parse and validate the JSON response
-    return None
+    key = api_key or os.environ.get('OPENAI_API_KEY')
+    if not key:
+        return None
+
+    if df.empty or len(df.columns) == 0:
+        return None
+
+    prompt = _build_mapping_prompt(df)
+    caller = llm_call or _default_llm_call
+    raw_response = caller(prompt, key, model)
+    return _parse_llm_mapping_response(raw_response, list(df.columns))
 
 
 # ---------------------------------------------------------------------------
