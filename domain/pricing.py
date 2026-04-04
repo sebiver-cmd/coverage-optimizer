@@ -160,6 +160,9 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
                 # over the product-level VariantTypes (e.g. "Size, Color").
                 vtitle_raw = v.get('Title', '') if isinstance(v, dict) else getattr(v, 'Title', '')
                 vtitle = str(vtitle_raw or '').strip()
+                # Extract the variant's own ItemNumber (variant SKU).
+                vitemnumber_raw = v.get('ItemNumber', '') if isinstance(v, dict) else getattr(v, 'ItemNumber', '')
+                vitemnumber = str(vitemnumber_raw or '').strip()
                 rows.append({
                     'PRODUCT_ID': format_int_col(pid),
                     'TITLE_DK': title,
@@ -168,6 +171,7 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
                     'PRICE': format_dk(float(vprice or 0)),
                     'VARIANT_ID': format_int_col(vid),
                     'VARIANT_TYPES': vtitle if vtitle else variant_types,
+                    'VARIANT_ITEMNUMBER': vitemnumber,
                     'PRODUCER': producer,
                     'PRODUCER_ID': producer_id,
                     'ONLINE': _is_online,
@@ -182,6 +186,7 @@ def api_products_to_dataframe(products: list[dict]) -> pd.DataFrame:
                 'PRICE': format_dk(float(price or 0)),
                 'VARIANT_ID': '',
                 'VARIANT_TYPES': '',
+                'VARIANT_ITEMNUMBER': '',
                 'PRODUCER': producer,
                 'PRODUCER_ID': producer_id,
                 'ONLINE': _is_online,

@@ -579,6 +579,11 @@ def match_invoice_to_products(
     augmented_skus: list[str] = []
     title_lookup: dict[str, str] = {}
 
+    # Also build a variant-item-number → (NUMBER, VARIANT_TYPES) lookup
+    # so that invoice SKUs matching a variant's own item number can be
+    # resolved deterministically (priority 2 after EAN exact match).
+    variant_itemnumber_lookup: dict[str, tuple[str, str]] = {}
+
     for _, row in products_df.iterrows():
         num = str(row.get('NUMBER', '') or '').strip()
         vtype = str(row.get('VARIANT_TYPES', '') or '').strip()
@@ -600,6 +605,21 @@ def match_invoice_to_products(
                 if title:
                     title_lookup[composite] = title
 
+        # Register variant item numbers as additional exact-match keys.
+        # When a variant has its own ItemNumber (e.g. "1910163-999000-XL"),
+        # an invoice SKU equal to that string should match directly.
+        vitemnumber = str(row.get('VARIANT_ITEMNUMBER', '') or '').strip()
+        if vitemnumber and vitemnumber != num:
+            if vitemnumber not in composite_lookup:
+                composite_lookup[vitemnumber] = (num, vtype)
+                augmented_skus.append(vitemnumber)
+                if title:
+                    title_lookup[vitemnumber] = title
+            # Keep a separate lookup for the "variant-itemnumber-exact"
+            # method label (used after the fuzzy pass).
+            if vitemnumber not in variant_itemnumber_lookup:
+                variant_itemnumber_lookup[vitemnumber] = (num, vtype)
+
     # Build name lookups so match_supplier_to_products can use product
     # name / designation similarity as a secondary reranking signal.
     inv_names: dict[str, str] | None = desc_map if desc_map else None
@@ -612,6 +632,18 @@ def match_invoice_to_products(
         supplier_names=inv_names,
         product_names=prod_names,
     )
+
+    # --- Variant-item-number promotion ---
+    # When a match resolved to a variant item number key (e.g.
+    # "1910163-999000-XL"), relabel it with a specific method so the
+    # UI / export can distinguish deterministic variant-level matches
+    # from base-number or fuzzy matches.
+    if variant_itemnumber_lookup:
+        for inv_sku, mentry in matches.items():
+            matched_key = mentry.get('sku')
+            if matched_key and matched_key in variant_itemnumber_lookup:
+                if mentry.get('method') in ('sku-exact', 'craft-exact'):
+                    mentry['method'] = 'variant-itemnumber-exact'
 
     # --- EAN cross-check: use EAN as a strong signal ---
     # If the product catalogue has EAN values, build a reverse lookup
