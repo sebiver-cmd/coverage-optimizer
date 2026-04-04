@@ -1171,19 +1171,19 @@ class TestDedupeProductRows(unittest.TestCase):
 # ===================================================================
 
 class TestNormalizeExportDf(unittest.TestCase):
-    """Tests for the final export DataFrame normalization."""
+    """Tests for the final export DataFrame normalization (internal schema)."""
 
     def test_no_duplicates_unchanged(self):
         from domain.invoice_ean import _normalize_export_df
 
         df = pd.DataFrame({
-            'SKU': ['A', 'B'],
-            'Product Number': ['P1', 'P2'],
-            'Variant Name': ['S', 'M'],
-            'Title': ['T1', 'T2'],
-            'Amount': [1, 2],
+            '_inv_sku': ['A', 'B'],
+            'NUMBER': ['P1', 'P2'],
+            'VARIANT_TYPES': ['S', 'M'],
+            'TITLE_DK': ['T1', 'T2'],
+            '_inv_qty': [1, 2],
             'EAN': ['111', '222'],
-            'Match %': [90, 85],
+            '_score': [90, 85],
         })
         result = _normalize_export_df(df)
         self.assertEqual(len(result), 2)
@@ -1192,13 +1192,13 @@ class TestNormalizeExportDf(unittest.TestCase):
         from domain.invoice_ean import _normalize_export_df
 
         df = pd.DataFrame({
-            'SKU': ['A', 'A'],
-            'Product Number': ['P1', 'P1'],
-            'Variant Name': ['S', 'S'],
-            'Title': ['T1', 'T1'],
-            'Amount': [5, 5],
+            '_inv_sku': ['A', 'A'],
+            'NUMBER': ['P1', 'P1'],
+            'VARIANT_TYPES': ['S', 'S'],
+            'TITLE_DK': ['T1', 'T1'],
+            '_inv_qty': [5, 5],
             'EAN': ['', '111'],
-            'Match %': [90, 90],
+            '_score': [90, 90],
         })
         result = _normalize_export_df(df)
         self.assertEqual(len(result), 1)
@@ -1209,8 +1209,8 @@ class TestNormalizeExportDf(unittest.TestCase):
         from domain.invoice_ean import _normalize_export_df
 
         df = pd.DataFrame(columns=[
-            'SKU', 'Product Number', 'Variant Name',
-            'Title', 'Amount', 'EAN', 'Match %',
+            '_inv_sku', 'NUMBER', 'VARIANT_TYPES',
+            'TITLE_DK', '_inv_qty', 'EAN', '_score',
         ])
         result = _normalize_export_df(df)
         self.assertEqual(len(result), 0)
