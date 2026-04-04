@@ -50,6 +50,12 @@ def _debug_variant_itemnumber(df: pd.DataFrame) -> None:
     column exists and is populated at runtime.  It writes to the module
     logger at INFO level so it appears in both Streamlit console output
     and backend logs.
+
+    **Removal criteria**: remove this function (and its call site in
+    ``fetch_products``) once runtime output has confirmed that
+    VARIANT_ITEMNUMBER is correctly populated for live shop data.
+    Alternatively, keep it as a permanent DEBUG-level diagnostic by
+    changing the ``logger.info`` calls to ``logger.debug``.
     """
     cols = list(df.columns)
     logger.info("[DEBUG-VARIANT] DataFrame columns: %s", cols)
