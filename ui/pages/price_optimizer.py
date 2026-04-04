@@ -1470,29 +1470,34 @@ def _enrich_work_df_with_catalog(
 
     # Build a lookup from (NUMBER, VARIANT_ID) → VARIANT_ITEMNUMBER
     vi_lookup: dict[tuple[str, str], str] = {}
-    for _, row in cat_df.iterrows():
-        num = str(row.get('NUMBER', '') or '').strip()
-        vid = str(row.get('VARIANT_ID', '') or '').strip()
-        vi = str(row.get('VARIANT_ITEMNUMBER', '') or '').strip()
+    for tup in cat_df[["NUMBER", "VARIANT_ID", "VARIANT_ITEMNUMBER"]].itertuples(index=False):
+        num = str(tup[0] or "").strip()
+        vid = str(tup[1] or "").strip()
+        vi = str(tup[2] or "").strip()
         if num and vi:
             vi_lookup[(num, vid)] = vi
 
     if not vi_lookup:
-        if 'VARIANT_ITEMNUMBER' not in work_df.columns:
+        if "VARIANT_ITEMNUMBER" not in work_df.columns:
             work_df = work_df.copy()
-            work_df['VARIANT_ITEMNUMBER'] = ''
+            work_df["VARIANT_ITEMNUMBER"] = ""
         return work_df
 
     enriched = work_df.copy()
-    if 'VARIANT_ITEMNUMBER' not in enriched.columns:
-        enriched['VARIANT_ITEMNUMBER'] = ''
+    if "VARIANT_ITEMNUMBER" not in enriched.columns:
+        enriched["VARIANT_ITEMNUMBER"] = ""
 
-    for idx in enriched.index:
-        num = str(enriched.at[idx, 'NUMBER'] if 'NUMBER' in enriched.columns else '').strip()
-        vid = str(enriched.at[idx, 'VARIANT_ID'] if 'VARIANT_ID' in enriched.columns else '').strip()
-        existing = str(enriched.at[idx, 'VARIANT_ITEMNUMBER'] or '').strip()
-        if not existing:
-            enriched.at[idx, 'VARIANT_ITEMNUMBER'] = vi_lookup.get((num, vid), '')
+    # Vectorized merge via map on (NUMBER, VARIANT_ID) tuples
+    if "NUMBER" in enriched.columns and "VARIANT_ID" in enriched.columns:
+        keys = list(zip(
+            enriched["NUMBER"].astype(str).str.strip(),
+            enriched["VARIANT_ID"].astype(str).str.strip(),
+        ))
+        mapped = [vi_lookup.get(k, "") for k in keys]
+        existing = enriched["VARIANT_ITEMNUMBER"].astype(str).str.strip()
+        enriched["VARIANT_ITEMNUMBER"] = [
+            ex if ex else mp for ex, mp in zip(existing, mapped)
+        ]
 
     return enriched
 

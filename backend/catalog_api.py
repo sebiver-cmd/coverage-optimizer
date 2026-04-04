@@ -16,7 +16,6 @@ products directly via the SOAP client.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -55,7 +54,7 @@ class CatalogRequest(BaseModel):
             "its own row.  When false, only one row per base product."
         ),
     )
-    brand_ids: Optional[list[int]] = Field(
+    brand_ids: list[int] | None = Field(
         default=None,
         description=(
             "Filter to specific brand / producer IDs.  "
