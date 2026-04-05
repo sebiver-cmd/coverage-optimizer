@@ -277,6 +277,11 @@ def _parse_iso(value: str | None) -> datetime | None:
 async def enqueue_optimize(payload: OptimizeRequest, request: Request) -> EnqueueResponse:
     """Enqueue an async optimisation job and return its ``job_id``."""
     settings = get_settings()
+
+    # Quota enforcement (Task 7.1) — only when auth is enabled
+    if settings.sboptima_auth_required:
+        _check_optimize_quota(request)
+
     if not settings.redis_url:
         raise _service_unavailable()
 
@@ -316,6 +321,36 @@ async def enqueue_optimize(payload: OptimizeRequest, request: Request) -> Enqueu
         await pool.aclose()
 
     return EnqueueResponse(job_id=job_id)
+
+
+def _check_optimize_quota(request: Request) -> None:
+    """Enforce daily optimize-job quota (best-effort, non-fatal on DB error)."""
+    try:
+        from backend.db import get_db
+        from backend.models import Tenant
+        from backend.quotas import check_quota
+
+        tenant_id = getattr(request.state, "tenant_id", None)
+        if tenant_id is None:
+            return
+
+        get_db_fn = request.app.dependency_overrides.get(get_db, get_db)
+        db_gen = get_db_fn()
+        db = next(db_gen)
+        try:
+            tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+            if tenant is None:
+                return
+            check_quota(db, tenant, "optimize_job")
+        finally:
+            try:
+                next(db_gen, None)
+            except StopIteration:
+                pass
+    except HTTPException:
+        raise
+    except Exception:
+        logger.debug("Quota check failed (non-fatal)", exc_info=True)
 
 
 def _persist_job_to_db(request: Request, job_id: str, payload: OptimizeRequest) -> None:

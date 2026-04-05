@@ -113,6 +113,11 @@ class Tenant(Base):
     plan = Column(String(50), nullable=True)
     status = Column(String(50), nullable=True)
 
+    # Usage limits (Task 7.1) — NULL means unlimited
+    daily_optimize_jobs_limit = Column(sa.Integer, nullable=True, default=None)
+    daily_apply_limit = Column(sa.Integer, nullable=True, default=None)
+    daily_optimize_sync_limit = Column(sa.Integer, nullable=True, default=None)
+
     # Relationships
     users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
     credentials = relationship(
