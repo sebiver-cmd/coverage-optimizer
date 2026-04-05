@@ -3,9 +3,6 @@
 # ---------------------------------------------------------------------------
 # Usage:
 #   docker compose -f infra/docker-compose.yml up --build
-#
-# Streamlit is *not* containerized; run it locally with:
-#   SB_OPTIMA_BACKEND_URL=http://localhost:8000 streamlit run app.py
 # ---------------------------------------------------------------------------
 
 services:
@@ -28,6 +25,20 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  # ---- Next.js frontend ----
+  frontend:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.frontend
+    ports:
+      - "3000:3000"
+    environment:
+      # Browser requests go to localhost:8000 (mapped from the api service).
+      # Override in production with your real API domain.
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - api
 
   # ---- Postgres 16 ----
   postgres:

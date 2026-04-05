@@ -1224,7 +1224,7 @@ adding semantic HTML elements, ARIA labels, and focus management.
 ## Phase 12 — Frontend Testing & CI/CD Pipeline
 
 ### Task 12.1 — Frontend test infrastructure + initial test suite
-- [ ] Task 12.1
+- [x] Task 12.1
 
 **Objective**: Set up a frontend test framework and write initial unit/component
 tests for critical paths (auth, API client, key pages).
@@ -1245,15 +1245,15 @@ tests for critical paths (auth, API client, key pages).
 - Target: ≥15 frontend tests passing.
 
 **Acceptance criteria**:
-- [ ] `cd frontend && npm test` runs Vitest and passes ≥15 tests.
-- [ ] Tests cover: API client, auth context, login page, dashboard page.
-- [ ] No new runtime dependencies added (test deps are devDependencies only).
-- [ ] `npm run build` still succeeds.
+- [x] `cd frontend && npm test` runs Vitest and passes ≥15 tests.
+- [x] Tests cover: API client, auth context, login page, dashboard page.
+- [x] No new runtime dependencies added (test deps are devDependencies only).
+- [x] `npm run build` still succeeds.
 
 ---
 
 ### Task 12.2 — CI/CD pipeline (GitHub Actions) + frontend Dockerfile
-- [ ] Task 12.2
+- [x] Task 12.2
 
 **Objective**: Automate build, lint, and test for both backend and frontend on
 every push/PR; add a production-ready frontend Docker image.
@@ -1276,12 +1276,12 @@ every push/PR; add a production-ready frontend Docker image.
   frontend.
 
 **Acceptance criteria**:
-- [ ] `.github/workflows/ci.yml` exists and defines backend + frontend jobs.
-- [ ] `infra/Dockerfile.frontend` builds a runnable Next.js image.
-- [ ] `next.config.ts` has `output: "standalone"`.
-- [ ] `docker-compose.yml` includes `frontend` service on port 3000.
-- [ ] README updated with full-stack docker compose instructions.
-- [ ] CI workflow passes (backend tests + frontend lint/build/test).
+- [x] `.github/workflows/ci.yml` exists and defines backend + frontend jobs.
+- [x] `infra/Dockerfile.frontend` builds a runnable Next.js image.
+- [x] `next.config.ts` has `output: "standalone"`.
+- [x] `docker-compose.yml` includes `frontend` service on port 3000.
+- [x] README updated with full-stack docker compose instructions.
+- [x] CI workflow passes (backend tests + frontend lint/build/test).
 
 ---
 

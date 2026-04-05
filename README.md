@@ -38,14 +38,24 @@ Multi-tenant SaaS application for DanDomain price optimisation.
 # 1. Create your local env file (edit as needed)
 cp .env.example .env
 
-# 2. Start backend services (FastAPI + Postgres + Redis)
+# 2. Start all services (API + Frontend + Postgres + Redis)
 docker compose -f infra/docker-compose.yml up --build
 
 # 3. Verify the backend is running
 curl http://localhost:8000/health
 # → {"status":"ok"}
 
-# 4. In a separate terminal, start the Next.js frontend
+# 4. Open the frontend
+#    → http://localhost:3000
+```
+
+**Alternative — run frontend in dev mode** (hot reloading):
+
+```bash
+# Start backend services only
+docker compose -f infra/docker-compose.yml up --build api postgres redis
+
+# In a separate terminal, start the Next.js dev server
 cd frontend
 npm install
 npm run dev
