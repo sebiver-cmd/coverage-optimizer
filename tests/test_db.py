@@ -137,3 +137,18 @@ def test_health_db_skipped(monkeypatch):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["db"] == "skipped"
+
+
+def test_healthz_returns_ok(monkeypatch):
+    """GET /healthz returns 200 with no auth and no DB check."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    _reset_db_module()
+
+    from fastapi.testclient import TestClient
+    from backend.main import app
+
+    client = TestClient(app)
+    resp = client.get("/healthz")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {"status": "ok"}

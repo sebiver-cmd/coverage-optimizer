@@ -147,9 +147,20 @@ if _cors_origins or _cors_regex:
 # ---------------------------------------------------------------------------
 
 
+@app.get("/healthz")
+def healthz() -> dict[str, str]:
+    """Unauthenticated liveness probe for container orchestrators.
+
+    Used by Docker / Kubernetes healthchecks to determine if the process
+    is alive.  No database check — intentionally minimal so it responds
+    even if Postgres is temporarily unreachable.
+    """
+    return {"status": "ok"}
+
+
 @app.get("/health", dependencies=[Depends(require_role("viewer"))])
 def health_check() -> dict[str, str]:
-    """Liveness probe — returns basic status plus optional DB ping.
+    """Readiness probe — returns basic status plus optional DB ping.
 
     * ``db: skipped`` when ``DATABASE_URL`` is not configured.
     * ``db: ok`` when the database responds to ``SELECT 1``.
