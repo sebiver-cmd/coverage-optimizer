@@ -111,26 +111,80 @@ no per-service charges like PaaS platforms. The deploy workflow
 **Steps**:
 
 1. Create an account at [hetzner.com](https://www.hetzner.com/).
-2. Go to **Cloud Console** → **Add Server**.
-3. Location: **Falkenstein** or **Nuremberg** (closest to Denmark).
-4. Image: **Ubuntu 24.04**.
-5. Type: **CX22** (2 vCPU, 4 GB RAM, 40 GB SSD) — ~€7/mo.
-6. Add your **SSH key** (or create one).
-7. Click **Create & Buy Now**.
-8. Note down the server's **IP address** (e.g., `123.45.67.89`).
-9. SSH into the server:
-   ```bash
-   ssh root@123.45.67.89
+
+2. **Generate an SSH key on your local machine** (skip if you already have one):
+
+   **Windows** (PowerShell):
+   ```powershell
+   ssh-keygen -t ed25519 -C "your-email@example.com"
+   # Press Enter to accept the default path (~/.ssh/id_ed25519)
+   # Enter a passphrase (or leave empty for no passphrase)
    ```
-10. Install Docker:
+
+   **macOS / Linux**:
+   ```bash
+   ssh-keygen -t ed25519 -C "your-email@example.com"
+   ```
+
+   This creates two files:
+   - `~/.ssh/id_ed25519` — your **private** key (keep secret, never share)
+   - `~/.ssh/id_ed25519.pub` — your **public** key (this goes to Hetzner)
+
+3. **Copy your public key** to clipboard:
+
+   **Windows** (PowerShell):
+   ```powershell
+   Get-Content ~/.ssh/id_ed25519.pub | Set-Clipboard
+   ```
+
+   **macOS**:
+   ```bash
+   cat ~/.ssh/id_ed25519.pub | pbcopy
+   ```
+
+   **Linux**:
+   ```bash
+   cat ~/.ssh/id_ed25519.pub
+   # Then select and copy the output
+   ```
+
+4. Go to **Hetzner Cloud Console** → **Add Server**.
+5. Location: **Falkenstein** or **Nuremberg** (closest to Denmark).
+6. Image: **Ubuntu 24.04**.
+7. Type: **CX22** (2 vCPU, 4 GB RAM, 40 GB SSD) — ~€7/mo.
+8. Under **SSH keys**, click **Add SSH key** and paste your public key.
+9. Click **Create & Buy Now**.
+10. Note down the server's **IP address** (e.g., `123.45.67.89`).
+11. SSH into the server (no password needed — your key authenticates you):
+    ```bash
+    ssh root@123.45.67.89
+    ```
+
+    > **⚠️ Troubleshooting: "Permission denied"**
+    >
+    > If you see `Permission denied, please try again` it means your SSH key
+    > was not added to the server correctly. Options:
+    >
+    > - **Easiest**: Delete the server in Hetzner Cloud Console, add your SSH
+    >   key under **Security → SSH Keys**, and create a new server selecting
+    >   that key.
+    > - **Alternative**: Use the Hetzner Cloud Console's **Rescue** mode to
+    >   get a temporary root password, log in, and add your key manually:
+    >   ```bash
+    >   mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    >   echo "PASTE_YOUR_PUBLIC_KEY_HERE" >> ~/.ssh/authorized_keys
+    >   chmod 600 ~/.ssh/authorized_keys
+    >   ```
+
+12. Install Docker:
     ```bash
     curl -fsSL https://get.docker.com | sh
     ```
-11. Install Docker Compose:
+13. Install Docker Compose:
     ```bash
-    apt install docker-compose-plugin
+    apt install -y docker-compose-plugin
     ```
-12. Verify:
+14. Verify:
     ```bash
     docker --version && docker compose version
     ```
