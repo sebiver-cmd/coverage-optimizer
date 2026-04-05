@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 from typing import Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -64,9 +65,13 @@ logger = logging.getLogger(__name__)
 class OptimizeRequest(BaseModel):
     """Parameters accepted by ``POST /optimize``."""
 
-    api_username: str = Field(..., description="DanDomain API employee username (email).")
-    api_password: str = Field(..., description="DanDomain API employee password.")
+    api_username: str = Field(default="", description="DanDomain API employee username (email).")
+    api_password: str = Field(default="", description="DanDomain API employee password.")
     site_id: int = Field(default=1, description="Site / shop ID (default 1).")
+    credential_id: Optional[UUID] = Field(
+        default=None,
+        description="UUID of a stored vault credential (used when auth is enabled).",
+    )
 
     # Pricing-pipeline parameters (mirror the Price Optimizer UI controls)
     price_pct: float = Field(

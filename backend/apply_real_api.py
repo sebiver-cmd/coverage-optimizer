@@ -29,6 +29,7 @@ import logging
 import math
 from datetime import datetime, timezone
 from typing import Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -62,9 +63,13 @@ class ApplyRequest(BaseModel):
         ...,
         description="Must be true to proceed.  Safety gate against accidental calls.",
     )
-    api_username: str = Field(..., description="DanDomain API username.")
-    api_password: str = Field(..., description="DanDomain API password.")
+    api_username: str = Field(default="", description="DanDomain API username.")
+    api_password: str = Field(default="", description="DanDomain API password.")
     site_id: int = Field(default=1, description="DanDomain site/language ID.")
+    credential_id: Optional[UUID] = Field(
+        default=None,
+        description="UUID of a stored vault credential (used when auth is enabled).",
+    )
 
 
 class FailedRow(BaseModel):

@@ -124,6 +124,18 @@ class Settings(BaseSettings):
 
     # -- Crypto / Auth ----------------------------------------------------
     encryption_key: Optional[str] = Field(default=None)
+    credential_cipher: str = Field(
+        default="fernet",
+        description="Encryption cipher used for credential vault (only 'fernet' is supported).",
+    )
+    allow_request_credentials_when_authed: bool = Field(
+        default=False,
+        description=(
+            "When True and auth is required, allow request-supplied credentials "
+            "in addition to vault credentials.  When False (default), only vault "
+            "credentials are accepted when auth is enabled."
+        ),
+    )
     jwt_secret: Optional[str] = Field(
         default=None,
         description=(
