@@ -134,14 +134,37 @@ def get_usage(
 
 
 def get_limits(tenant: Tenant) -> dict[str, int | None]:
-    """Extract daily limit values from *tenant*.
+    """Compute **effective** daily limits for *tenant*.
 
-    ``None`` means unlimited.
+    Precedence (per action):
+    1. If the tenant has an explicit (non-``None``) limit column → use it.
+    2. Else if ``tenant.plan`` matches a known plan → use plan default.
+    3. Else → ``None`` (unlimited).
     """
+    from backend.plans import get_plan
+
+    plan = get_plan(tenant.plan) if tenant.plan else None
+
+    def _effective(override: int | None, plan_default: int | None) -> int | None:
+        if override is not None:
+            return override
+        if plan is not None:
+            return plan_default
+        return None
+
     return {
-        "optimize_job": tenant.daily_optimize_jobs_limit,
-        "apply": tenant.daily_apply_limit,
-        "optimize_sync": tenant.daily_optimize_sync_limit,
+        "optimize_job": _effective(
+            tenant.daily_optimize_jobs_limit,
+            plan.daily_optimize_jobs_limit if plan else None,
+        ),
+        "apply": _effective(
+            tenant.daily_apply_limit,
+            plan.daily_apply_limit if plan else None,
+        ),
+        "optimize_sync": _effective(
+            tenant.daily_optimize_sync_limit,
+            plan.daily_optimize_sync_limit if plan else None,
+        ),
     }
 
 

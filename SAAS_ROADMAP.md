@@ -695,8 +695,8 @@ Streamlit History page added for tenant-scoped job/batch/audit history.
 **Risks**: webhook reliability.
 **Mitigation**: idempotent webhook handler; Stripe event deduplication.
 
-### Task 7.2 — Usage metering (optional)
-- [ ] Task 7.2
+### Task 7.2 — Plans + billing scaffolding (Stripe-ready)
+- [x] Task 7.2
 
 **Objective**: Track optimisation runs and applies per tenant for usage-based
 billing.

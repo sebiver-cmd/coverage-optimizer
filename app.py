@@ -200,6 +200,68 @@ with st.sidebar:
                     st.warning("Fill in all fields.")
 
     # ------------------------------------------------------------------
+    # Plan & Limits (when signed in)
+    # ------------------------------------------------------------------
+    if token:
+        st.divider()
+        st.caption("PLAN & LIMITS")
+        try:
+            import requests as _rq
+
+            _plan_resp = _rq.get(
+                f"{normalize_base_url(backend_url)}/tenant/plan",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10,
+            )
+            if _plan_resp.status_code == 200:
+                _plan_data = _plan_resp.json()
+                _current_plan = _plan_data.get("plan") or "—"
+                st.metric("Current plan", _current_plan.capitalize() if _current_plan != "—" else "—")
+
+                _eff = _plan_data.get("effective_limits", {})
+                _limit_lines = []
+                for _lk, _lv in _eff.items():
+                    _limit_lines.append(f"- **{_lk}**: {_lv if _lv is not None else '∞'}")
+                if _limit_lines:
+                    st.markdown("**Daily limits:**\n" + "\n".join(_limit_lines))
+
+                # Admin/owner plan change
+                _plans_resp = _rq.get(
+                    f"{normalize_base_url(backend_url)}/plans",
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=10,
+                )
+                if _plans_resp.status_code == 200:
+                    _avail_plans = _plans_resp.json().get("plans", [])
+                    _plan_names = [p["name"] for p in _avail_plans]
+                    _cur_idx = 0
+                    if _plan_data.get("plan") in _plan_names:
+                        _cur_idx = _plan_names.index(_plan_data["plan"])
+                    _chosen = st.selectbox(
+                        "Change plan (admin only)",
+                        options=_plan_names,
+                        index=_cur_idx,
+                        key="_plan_select",
+                    )
+                    if st.button("Update plan", key="_btn_update_plan", use_container_width=True):
+                        _up_resp = _rq.put(
+                            f"{normalize_base_url(backend_url)}/tenant/plan",
+                            headers={"Authorization": f"Bearer {token}"},
+                            json={"plan": _chosen},
+                            timeout=10,
+                        )
+                        if _up_resp.status_code == 200:
+                            st.success(f"Plan updated to **{_chosen}**.")
+                            st.rerun()
+                        else:
+                            _err_detail = _up_resp.json().get("detail", "Update failed")
+                            st.error(_err_detail)
+            else:
+                st.caption("Plan info unavailable.")
+        except Exception:
+            st.caption("Could not load plan info.")
+
+    # ------------------------------------------------------------------
     # Legacy API credentials (when NOT signed in)
     # ------------------------------------------------------------------
     if not token:
