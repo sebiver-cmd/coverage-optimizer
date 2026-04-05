@@ -53,8 +53,8 @@ class TestDefaults:
         monkeypatch.delenv("CORS_ALLOWED_ORIGINS", raising=False)
         s = Settings()
         assert s.cors_origins == ""
-        # In dev mode (default), empty origins fall back to localhost:8501
-        assert s.get_cors_origins_list() == ["http://localhost:8501"]
+        # In dev mode (default), empty origins fall back to localhost:8501 + localhost:3000
+        assert s.get_cors_origins_list() == ["http://localhost:8501", "http://localhost:3000"]
 
 
 # ---------------------------------------------------------------------------
@@ -106,8 +106,8 @@ class TestCorsOriginsParsing:
         monkeypatch.setenv("CORS_ORIGINS", "")
         monkeypatch.delenv("CORS_ALLOWED_ORIGINS", raising=False)
         s = Settings()
-        # In dev mode (default), empty origins fall back to localhost:8501
-        assert s.get_cors_origins_list() == ["http://localhost:8501"]
+        # In dev mode (default), empty origins fall back to localhost:8501 + localhost:3000
+        assert s.get_cors_origins_list() == ["http://localhost:8501", "http://localhost:3000"]
 
     def test_empty_string_prod(self, monkeypatch):
         monkeypatch.setenv("CORS_ORIGINS", "")

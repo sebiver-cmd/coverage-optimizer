@@ -10,7 +10,7 @@ Validates:
 
 from __future__ import annotations
 
-import inspect
+
 import json
 import os
 import shutil
@@ -315,37 +315,6 @@ class TestApplyVariantRouting:
         assert by_num["BASE-001"].get("buy_price") == 100.0
         assert by_num["VAR-002"].get("buy_price") == 200.0
 
-
-# ---------------------------------------------------------------------------
-# Tests – UI module does not import DanDomainClient at module level
-# ---------------------------------------------------------------------------
-
-
-class TestUINoDirectSoap:
-    """UI must not directly import DanDomainClient at module level."""
-
-    def test_no_module_level_dandomain_import(self):
-        """price_optimizer.py must not unconditionally import DanDomainClient."""
-        import ui.pages.price_optimizer as mod
-        assert "DanDomainClient" not in mod.__dict__, (
-            "DanDomainClient must not be present in module namespace."
-        )
-
-    def test_no_dandomain_api_in_source(self):
-        """The UI module must not reference dandomain_api at all."""
-        import ui.pages.price_optimizer as mod
-        source = inspect.getsource(mod)
-        assert "dandomain_api" not in source, (
-            "dandomain_api must not appear in price_optimizer.py source."
-        )
-
-    def test_backend_client_module_imported(self):
-        """The UI should import from ui.backend_client for apply operations."""
-        import ui.pages.price_optimizer as mod
-        source = inspect.getsource(mod)
-        assert "backend_client" in source, (
-            "UI must use ui.backend_client for backend HTTP calls."
-        )
 
 
 # ---------------------------------------------------------------------------

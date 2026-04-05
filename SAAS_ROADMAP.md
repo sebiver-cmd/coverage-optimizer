@@ -1,6 +1,6 @@
 # SB-Optima — SaaS Migration Roadmap
 
-> Last updated: 2026-04-05 — Tasks 5.3, 7.1, 7.2 completed; all remaining backend work done.
+> Last updated: 2026-04-05 — All tasks complete including Phase 8 (Next.js frontend).
 
 This roadmap migrates **SB-Optima / Coverage Optimizer** from a single-tenant
 Streamlit + FastAPI tool into a **multi-tenant, paid SaaS web application**
@@ -887,8 +887,8 @@ visibility, ready for Stripe metered billing.
 
 ## Phase 8 — Web Frontend (Next.js) + Deprecate Streamlit
 
-### Task 8.1 — Next.js scaffold + auth UI ⛔
-- [ ] Task 8.1 — Updated: 2026-04-05
+### Task 8.1 — Next.js scaffold + auth UI ✅
+- [x] Task 8.1 — Updated: 2026-04-05
 
 **Objective**: Minimal Next.js app with login, tenant dashboard, and navigation.
 
@@ -902,16 +902,18 @@ visibility, ready for Stripe metered billing.
 - Login then JWT then dashboard renders.
 - Cookie domain works for `.sboptima.dk`.
 
-**Evidence**: No `frontend/` directory exists. Not started.
+**Evidence**:
+- `frontend/` directory with Next.js 16 + TypeScript + Tailwind CSS.
+- `frontend/src/app/login/page.tsx` — login page connected to `POST /auth/login`.
+- `frontend/src/app/signup/page.tsx` — signup page connected to `POST /auth/signup`.
+- `frontend/src/app/dashboard/page.tsx` — tenant dashboard with plan, usage, credentials.
+- `frontend/src/lib/auth-context.tsx` — JWT auth provider with localStorage, auto-refresh.
+- `frontend/src/components/Navbar.tsx` — navigation bar with user info.
+- `backend/config.py` — CORS dev defaults include `http://localhost:3000`.
+- `npm run build` succeeds with all routes compiled.
 
-**Remaining work**:
-- Scaffold Next.js app with TypeScript in `frontend/`.
-- Login/signup pages connected to `POST /auth/signup`, `POST /auth/login`.
-- Tenant dashboard skeleton.
-- CORS configuration for `sboptima.dk` + localhost.
-
-### Task 8.2 — Price Optimizer page (web) ⛔
-- [ ] Task 8.2 — Updated: 2026-04-05
+### Task 8.2 — Price Optimizer page (web) ✅
+- [x] Task 8.2 — Updated: 2026-04-05
 
 **Objective**: Port the Streamlit Price Optimizer to Next.js.
 
@@ -920,12 +922,20 @@ filters, risk view, dry-run + apply flow, CSV export.
 
 **Acceptance criteria**: feature parity with Streamlit Price Optimizer page.
 
-**Evidence**: No `frontend/` directory exists. Depends on Task 8.1.
+**Evidence**:
+- `frontend/src/app/optimizer/page.tsx` — full Price Optimizer page with:
+  - Credential profile selector, brand multi-select filter.
+  - Async job trigger via `POST /jobs/optimize` with polling.
+  - Results table (All Products, Adjusted Only tabs) with text filter.
+  - Risk View (histogram, largest decreases, near-cost warnings).
+  - Dry-run preview + "APPLY" confirmation flow.
+  - CSV export of optimization results.
+- `frontend/src/app/history/page.tsx` — History page (jobs, batches, audit).
+- `frontend/src/app/billing/page.tsx` — Billing page (plan info, Stripe checkout).
+- `frontend/src/lib/api.ts` — typed API client covering all backend endpoints.
 
-**Remaining work**: Port Streamlit Price Optimizer (2925 lines) to Next.js with brand selector, async job trigger, results table, risk view, dry-run + apply flow, CSV export.
-
-### Task 8.3 — Deprecate Streamlit ⛔
-- [ ] Task 8.3 — Updated: 2026-04-05
+### Task 8.3 — Deprecate Streamlit ✅
+- [x] Task 8.3 — Updated: 2026-04-05
 
 **Objective**: Remove Streamlit UI code once Next.js has feature parity.
 
@@ -934,9 +944,18 @@ filters, risk view, dry-run + apply flow, CSV export.
 **Acceptance criteria**: `app.py` and `ui/` removed; all tests pass; README
 points to Next.js frontend.
 
-**Evidence**: `app.py` and `ui/` still active. Depends on Tasks 8.1 + 8.2.
-
-**Remaining work**: Delete `app.py`, `ui/`, update README once Next.js reaches feature parity.
+**Evidence**:
+- `app.py` removed.
+- `ui/` directory removed.
+- `.streamlit/` directory removed.
+- `streamlit` removed from `requirements.txt`.
+- Streamlit-only test files removed: `test_backend_url.py`, `test_ui_vault_mode.py`,
+  `test_ui_billing.py`, `test_result_summary.py`, `test_task_1_2_no_ui_soap.py`,
+  `test_price_optimizer_backend.py`.
+- `TestUINoDirectSoap` class removed from `test_task_1_1_retire_direct_soap.py`.
+- README updated to point to Next.js frontend.
+- `docs/REPO_OVERVIEW.md` updated with Next.js frontend section.
+- All 1227 remaining tests pass.
 
 ---
 
@@ -1158,15 +1177,15 @@ row caps.
 | 6 | 6.2 — DB apply + dashboards | ✅ | List endpoints, History page |
 | 7 | 7.1 — Stripe integration | ✅ | Checkout + webhook + billing gate (`backend/billing_gate.py`, 32 tests) |
 | 7 | 7.2 — Plans + quotas + usage | ✅ | Plans + quotas + `usage_events` table + Stripe reporting (17 tests) |
-| 8 | 8.1 — Next.js scaffold | ⛔ | No `frontend/` directory |
-| 8 | 8.2 — Price Optimizer (web) | ⛔ | Depends on 8.1 |
-| 8 | 8.3 — Deprecate Streamlit | ⛔ | Depends on 8.1 + 8.2 |
+| 8 | 8.1 — Next.js scaffold | ✅ | `frontend/` Next.js 16 + TypeScript + Tailwind, auth pages, dashboard |
+| 8 | 8.2 — Price Optimizer (web) | ✅ | Full optimizer page with async jobs, risk view, apply flow, CSV export |
+| 8 | 8.3 — Deprecate Streamlit | ✅ | `app.py` + `ui/` removed; 1227 tests pass; README updated |
 | 9 | 9.1 — Observability hardening | ✅ | Request IDs, JSON logs, redaction, Prometheus metrics (18 tests) |
 | 9 | 9.2 — Operational safety | ✅ | Admin diagnostics/tenants endpoints, migration tests, ops docs (25 tests) |
 | 10 | 10.1 — Security hardening | ✅ | CORS, security headers, HSTS, request size limits (13 tests) |
 | 10 | 10.2 — Data retention + export | ✅ | Retention pruning, CLI script, tenant export endpoint (17 tests) |
 
-**Total**: 21 ✅ · 0 🟡 · 3 ⛔ (Phase 8 — Next.js frontend, deferred)
+**Total**: 24 ✅ · 0 🟡 · 0 ⛔ (All tasks complete)
 
 ---
 
