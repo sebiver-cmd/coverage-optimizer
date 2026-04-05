@@ -1307,7 +1307,7 @@ strength validation on the signup form.
 - **Password strength**: On Signup page, add a password strength indicator
   below the password field. Rules: minimum 8 chars (already enforced),
   at least one uppercase, one lowercase, one digit. Display strength as
-  "Weak" / "Medium" / "Strong" with colour coding. Disable submit when
+  "Weak" / "Medium" / "Strong" with color coding. Disable submit when
   strength < Medium.
 - **Next.js image config**: Remove `images: { unoptimized: true }` from
   `next.config.ts` (or set to `false`) so Next.js image optimization is
