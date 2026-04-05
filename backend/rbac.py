@@ -94,7 +94,9 @@ def require_role(min_role: Role | str):
         from backend.auth import get_current_user
         from backend.db import get_db
 
-        db_gen = get_db()
+        # Respect FastAPI dependency_overrides (used by tests).
+        get_db_fn = request.app.dependency_overrides.get(get_db, get_db)
+        db_gen = get_db_fn()
         db = next(db_gen)
         try:
             user: User = await get_current_user(
@@ -104,13 +106,13 @@ def require_role(min_role: Role | str):
                 settings=settings,
             )
         except Exception:
-            # Ensure the generator is properly closed on error
+            # Ensure the generator is properly closed on error.
             try:
                 next(db_gen, None)
             except StopIteration:
                 pass
             raise
-        # Close the generator
+        # Close the generator.
         try:
             next(db_gen, None)
         except StopIteration:
