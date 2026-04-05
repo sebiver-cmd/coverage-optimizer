@@ -444,9 +444,9 @@ def _persist_apply_batch_to_db(
             except Exception:
                 logger.debug("Failed to emit usage event (non-fatal)", exc_info=True)
             try:
-                from backend.models import Tenant as _Tenant
+                from backend.models import Tenant
                 from backend.stripe_billing import report_usage_to_stripe
-                tenant_obj = db.query(_Tenant).filter(_Tenant.id == tenant_id).first()
+                tenant_obj = db.query(Tenant).filter(Tenant.id == tenant_id).first()
                 if tenant_obj:
                     report_usage_to_stripe(
                         tenant_obj, "batch.apply", settings=get_settings()

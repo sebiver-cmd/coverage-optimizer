@@ -327,6 +327,8 @@ def report_usage_to_stripe(
         return False
     if tenant.billing_status != "active":
         return False
+    if not tenant.stripe_customer_id:
+        return False
 
     _configure_stripe(settings)
     try:

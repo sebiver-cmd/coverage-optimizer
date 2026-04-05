@@ -1,0 +1,2 @@
+{"timestamp": "2026-04-05T14:24:36.323812+00:00", "batch_id": "5109fddb-68ef-4f42-938c-1acc7f872f91", "api_username": "test@example.com", "total_rows": 1, "skipped_count": 0, "applied_count": 1, "failed_count": 0}
+{"timestamp": "2026-04-05T14:27:00.423877+00:00", "batch_id": "4bde996c-fa28-47bd-bfac-eaac94c68c8b", "api_username": "test@example.com", "total_rows": 1, "skipped_count": 0, "applied_count": 1, "failed_count": 0}
