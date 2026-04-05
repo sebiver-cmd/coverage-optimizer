@@ -15,6 +15,11 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
+# NEXT_PUBLIC_* vars must be present at build time so the client bundle
+# is compiled with the correct API URL instead of the localhost fallback.
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
 # Install dependencies first (layer caching)
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
