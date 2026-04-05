@@ -67,11 +67,6 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=1)
 
-    @field_validator("password")
-    @classmethod
-    def password_max_bytes(cls, v: str) -> str:
-        return _validate_password_bytes(v)
-
 
 class TokenResponse(BaseModel):
     """JWT token response."""

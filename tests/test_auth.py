@@ -587,14 +587,19 @@ class TestPasswordByteLimit:
         assert resp.status_code == 201
         assert "access_token" in resp.json()
 
-    def test_login_over_72_byte_password_returns_422(self, client: TestClient, db_session: Session):
-        """A >72-byte password on login is rejected at validation, not as 401/500."""
+    def test_login_over_72_byte_password_returns_401(self, client: TestClient, db_session: Session):
+        """A >72-byte password on login must return 401 (invalid credentials), not 422 or 500.
+
+        Returning 422 for login would leak information about server-side
+        byte-length validation.  Login should treat any unverifiable password
+        as plain invalid credentials.
+        """
         _seed_user(db_session, email="longpwd@example.com", password="ValidPass1!")
         resp = client.post(
             "/auth/login",
             json={"email": "longpwd@example.com", "password": self._LONG_ASCII_PASSWORD},
         )
-        assert resp.status_code == 422
+        assert resp.status_code == 401
 
     def test_error_response_does_not_echo_password(self, client: TestClient):
         """The 422 error body must not contain the submitted password."""
@@ -608,3 +613,25 @@ class TestPasswordByteLimit:
         )
         assert resp.status_code == 422
         assert self._LONG_ASCII_PASSWORD not in resp.text
+
+    def test_non_password_422_includes_input(self, client: TestClient):
+        """Non-sensitive field validation errors still include ``input`` for debuggability.
+
+        The RequestValidationError handler only strips ``input`` for the
+        ``password`` field; other fields keep their input so developers can
+        identify what value triggered the error.
+        """
+        resp = client.post(
+            "/auth/signup",
+            json={
+                "tenant_name": "",  # too short — min_length=1
+                "email": "ok@example.com",
+                "password": "Str0ngP@ss!",
+            },
+        )
+        assert resp.status_code == 422
+        body = resp.json()
+        errors = body["detail"]
+        tenant_errors = [e for e in errors if "tenant_name" in e.get("loc", [])]
+        assert tenant_errors, "expected a validation error for tenant_name"
+        assert "input" in tenant_errors[0]  # non-sensitive field keeps input
