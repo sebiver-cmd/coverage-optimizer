@@ -14,7 +14,8 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - ../.env
+      - path: ../.env
+        required: false
     environment:
       # Defaults — .env file values take precedence
       - SB_OPTIMA_ENABLE_APPLY=false
@@ -33,7 +34,8 @@ services:
       dockerfile: infra/Dockerfile.api
     command: ["arq", "backend.worker.WorkerSettings"]
     env_file:
-      - ../.env
+      - path: ../.env
+        required: false
     environment:
       - DATABASE_URL=postgresql+psycopg2://sboptima:sboptima@postgres:5432/sboptima
       - REDIS_URL=redis://redis:6379/0
