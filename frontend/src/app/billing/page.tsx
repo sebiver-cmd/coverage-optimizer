@@ -6,25 +6,46 @@ import { useAuth } from "@/lib/auth-context";
 import { useCallback, useState } from "react";
 import {
   getBillingStatus,
+  getBillingInvoices,
   getTenantPlan,
   createCheckout,
   type BillingStatus,
   type TenantPlan,
+  type InvoicesResponse,
   ApiError,
 } from "@/lib/api";
 import { useCachedFetch } from "@/lib/use-cached-fetch";
-import { SkeletonText } from "@/components/Skeleton";
+import { SkeletonText, SkeletonTable } from "@/components/Skeleton";
+import VirtualTable, { type ColumnDef } from "@/components/VirtualTable";
+import type { InvoiceItem } from "@/lib/api";
+
+const invoiceColumns: ColumnDef<InvoiceItem>[] = [
+  { header: "Date", cellClassName: "text-gray-500", render: (i) => fmtDate(i.created_at) },
+  { header: "Description", render: (i) => i.description },
+  { header: "Event Type", cellClassName: "text-gray-500", render: (i) => i.event_type },
+];
+
+function fmtDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
+}
 
 function BillingContent() {
   const { token, user } = useAuth();
 
   const planFetcher = useCallback(() => getTenantPlan(token!), [token]);
   const billingFetcher = useCallback(() => getBillingStatus(token!), [token]);
+  const invoiceFetcher = useCallback(() => getBillingInvoices(token!, { limit: 50 }), [token]);
 
   const { data: plan, loading: planLoading } =
     useCachedFetch<TenantPlan>(planFetcher, "/tenant/plan", token);
   const { data: billing, loading: billingLoading } =
     useCachedFetch<BillingStatus>(billingFetcher, "/billing/status", token);
+  const { data: invoices, loading: invoicesLoading, error: invoicesError } =
+    useCachedFetch<InvoicesResponse>(invoiceFetcher, "/billing/invoices", token);
 
   const [selectedPlan, setSelectedPlan] = useState("pro");
   const [error, setError] = useState<string | null>(null);
@@ -141,6 +162,40 @@ function BillingContent() {
           </div>
         </div>
       )}
+
+      {/* Billing History */}
+      <div className="bg-white rounded-lg shadow p-6 mt-6">
+        <h2 className="text-lg font-semibold mb-3">Billing History</h2>
+        {billing && !billing.billing_enabled ? (
+          <p className="text-sm text-gray-500">
+            Billing history is not available when billing is disabled.
+          </p>
+        ) : invoicesLoading ? (
+          <SkeletonTable rows={4} cols={3} />
+        ) : invoicesError ? (
+          <p className="text-sm text-gray-500">
+            Billing history is not available.
+          </p>
+        ) : invoices && invoices.items.length > 0 ? (
+          <>
+            <VirtualTable
+              rows={invoices.items}
+              columns={invoiceColumns}
+              ariaLabel="Billing history"
+              getRowKey={(i) => i.id}
+              maxHeight={400}
+              emptyMessage="No billing history"
+            />
+            {invoices.total > invoices.items.length && (
+              <p className="text-xs text-gray-400 mt-2">
+                Showing {invoices.items.length} of {invoices.total} events
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="text-sm text-gray-500">No billing events yet.</p>
+        )}
+      </div>
     </PageShell>
   );
 }

@@ -257,3 +257,103 @@ async def billing_webhook(request: Request) -> Response:
             next(db_gen, None)
         except StopIteration:
             pass
+
+
+# ---------------------------------------------------------------------------
+# GET /billing/invoices
+# ---------------------------------------------------------------------------
+
+
+class InvoiceItem(BaseModel):
+    """A single usage-event row surfaced as a billing line item."""
+
+    id: str
+    event_type: str
+    created_at: str
+    description: str
+    meta: Optional[dict[str, Any]] = None
+
+
+class InvoicesResponse(BaseModel):
+    """Response for ``GET /billing/invoices``."""
+
+    total: int
+    items: list[InvoiceItem]
+
+
+@router.get(
+    "/invoices",
+    response_model=InvoicesResponse,
+    dependencies=[Depends(require_role("viewer"))],
+)
+def billing_invoices(
+    request: Request,
+    limit: int = 50,
+    offset: int = 0,
+) -> InvoicesResponse:
+    """Return recent billing/usage events for the current tenant.
+
+    When Stripe billing is disabled, returns 503 with a clear message.
+    """
+    settings = get_settings()
+    _require_billing(settings)
+
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if tenant_id is None:
+        raise _billing_unavailable("No tenant context.")
+
+    import json as _json
+
+    from backend.db import get_db
+    from backend.repositories.usage_repo import list_usage_events
+
+    get_db_fn = request.app.dependency_overrides.get(get_db, get_db)
+    db_gen = get_db_fn()
+    db = next(db_gen)
+    try:
+        safe_limit = max(1, min(limit, 100))
+        safe_offset = max(0, offset)
+        total, events = list_usage_events(
+            db,
+            tenant_id=tenant_id,
+            limit=safe_limit,
+            offset=safe_offset,
+        )
+        items: list[InvoiceItem] = []
+        for evt in events:
+            meta: dict[str, Any] | None = None
+            if evt.meta_json:
+                try:
+                    meta = _json.loads(evt.meta_json)
+                except (_json.JSONDecodeError, TypeError):
+                    meta = None
+
+            items.append(
+                InvoiceItem(
+                    id=str(evt.id),
+                    event_type=evt.event_type,
+                    created_at=evt.created_at.isoformat() if evt.created_at else "",
+                    description=_event_description(evt.event_type, meta),
+                    meta=meta,
+                )
+            )
+        return InvoicesResponse(total=total, items=items)
+    finally:
+        try:
+            next(db_gen, None)
+        except StopIteration:
+            pass
+
+
+def _event_description(event_type: str, meta: dict[str, Any] | None) -> str:
+    """Human-readable description for a usage event."""
+    descriptions: dict[str, str] = {
+        "optimize_job": "Optimisation job",
+        "apply": "Price apply",
+        "dry_run": "Dry-run apply",
+        "optimize_sync": "Sync optimisation",
+    }
+    base = descriptions.get(event_type, event_type.replace("_", " ").title())
+    if meta and meta.get("brand"):
+        return f"{base} — {meta['brand']}"
+    return base
