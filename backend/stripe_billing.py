@@ -302,3 +302,48 @@ def _handle_subscription_change(
         "plan": tenant.plan,
         "billing_status": tenant.billing_status,
     }
+
+
+# ---------------------------------------------------------------------------
+# Metered usage reporting (Task 7.2)
+# ---------------------------------------------------------------------------
+
+
+def report_usage_to_stripe(
+    tenant: Tenant,
+    event_type: str,
+    *,
+    settings: Settings,
+    quantity: int = 1,
+) -> bool:
+    """Report a usage record to Stripe for metered billing.
+
+    Returns True if reported, False if skipped (billing disabled or no subscription).
+    Uses the Stripe Billing Meter Events API (stripe >= 15.x).
+    """
+    if not is_billing_configured(settings):
+        return False
+    if not tenant.stripe_subscription_id:
+        return False
+    if tenant.billing_status != "active":
+        return False
+
+    _configure_stripe(settings)
+    try:
+        stripe.billing.MeterEvent.create(
+            event_name=event_type,
+            payload={
+                "stripe_customer_id": tenant.stripe_customer_id or "",
+                "value": str(quantity),
+            },
+        )
+        logger.info(
+            "Stripe usage reported: tenant=%s event=%s qty=%d",
+            tenant.id,
+            event_type,
+            quantity,
+        )
+        return True
+    except Exception:
+        logger.warning("Stripe usage reporting failed (non-fatal)", exc_info=True)
+        return False

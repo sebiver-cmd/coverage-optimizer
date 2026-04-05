@@ -433,6 +433,26 @@ def _persist_apply_batch_to_db(
                 event_type="apply.apply.completed",
                 meta={"batch_id": batch_id, **summary},
             )
+            try:
+                from backend.repositories import usage_repo
+                usage_repo.emit_usage_event(
+                    db,
+                    tenant_id=tenant_id,
+                    event_type="batch.apply",
+                    meta={"batch_id": batch_id, "applied_count": applied_count},
+                )
+            except Exception:
+                logger.debug("Failed to emit usage event (non-fatal)", exc_info=True)
+            try:
+                from backend.models import Tenant as _Tenant
+                from backend.stripe_billing import report_usage_to_stripe
+                tenant_obj = db.query(_Tenant).filter(_Tenant.id == tenant_id).first()
+                if tenant_obj:
+                    report_usage_to_stripe(
+                        tenant_obj, "batch.apply", settings=get_settings()
+                    )
+            except Exception:
+                logger.debug("Stripe usage reporting failed (non-fatal)", exc_info=True)
         finally:
             try:
                 next(db_gen, None)

@@ -388,6 +388,26 @@ def _persist_job_to_db(request: Request, job_id: str, payload: OptimizeRequest) 
                 event_type="job.enqueued",
                 meta={"job_id": job_id},
             )
+            try:
+                from backend.repositories import usage_repo
+                usage_repo.emit_usage_event(
+                    db,
+                    tenant_id=tenant_id,
+                    event_type="job.optimize",
+                    meta={"job_id": job_id},
+                )
+            except Exception:
+                logger.debug("Failed to emit usage event (non-fatal)", exc_info=True)
+            try:
+                from backend.models import Tenant
+                from backend.stripe_billing import report_usage_to_stripe
+                tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+                if tenant:
+                    report_usage_to_stripe(
+                        tenant, "job.optimize", settings=get_settings()
+                    )
+            except Exception:
+                logger.debug("Stripe usage reporting failed (non-fatal)", exc_info=True)
         finally:
             try:
                 next(db_gen, None)

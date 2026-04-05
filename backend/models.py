@@ -319,3 +319,29 @@ class AuditEvent(Base):
         server_default=sa.text("(CURRENT_TIMESTAMP)"),
     )
     meta_json = Column(sa.Text, nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# UsageEvent model (Task 7.2)
+# ---------------------------------------------------------------------------
+
+
+class UsageEvent(Base):
+    """A usage event for billing/metering, scoped to a tenant."""
+
+    __tablename__ = "usage_events"
+
+    id = Column(_GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(
+        _GUID(),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    event_type = Column(String(100), nullable=False)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("(CURRENT_TIMESTAMP)"),
+    )
+    meta_json = Column(sa.Text, nullable=True)
