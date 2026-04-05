@@ -204,3 +204,111 @@ class HostedShopCredential(Base):
 
     def __repr__(self) -> str:
         return f"<HostedShopCredential id={self.id!r} name={self.name!r}>"
+
+
+# ---------------------------------------------------------------------------
+# OptimizationJob model (Task 6.1)
+# ---------------------------------------------------------------------------
+
+
+class OptimizationJob(Base):
+    """A persisted async optimisation job run, scoped to a tenant."""
+
+    __tablename__ = "optimization_jobs"
+
+    id = Column(_GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(
+        _GUID(),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    user_id = Column(
+        _GUID(),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    status = Column(String(20), nullable=False, default="queued")
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("(CURRENT_TIMESTAMP)"),
+    )
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    request_json = Column(sa.Text, nullable=True)
+    result_json = Column(sa.Text, nullable=True)
+    error = Column(sa.Text, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<OptimizationJob id={self.id!r} status={self.status!r}>"
+
+
+# ---------------------------------------------------------------------------
+# ApplyBatch model (Task 6.1)
+# ---------------------------------------------------------------------------
+
+
+class ApplyBatch(Base):
+    """A persisted apply-price batch (dry-run or real apply), scoped to a tenant."""
+
+    __tablename__ = "apply_batches"
+
+    id = Column(_GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(
+        _GUID(),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    user_id = Column(
+        _GUID(),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    mode = Column(String(20), nullable=False)  # dry_run | apply | create_manifest
+    status = Column(String(20), nullable=False, default="created")
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("(CURRENT_TIMESTAMP)"),
+    )
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    manifest_json = Column(sa.Text, nullable=True)
+    summary_json = Column(sa.Text, nullable=True)
+    error = Column(sa.Text, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<ApplyBatch id={self.id!r} mode={self.mode!r} status={self.status!r}>"
+
+
+# ---------------------------------------------------------------------------
+# AuditEvent model (Task 6.1)
+# ---------------------------------------------------------------------------
+
+
+class AuditEvent(Base):
+    """A lightweight audit event scoped to a tenant."""
+
+    __tablename__ = "audit_events"
+
+    id = Column(_GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(
+        _GUID(),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    user_id = Column(
+        _GUID(),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    event_type = Column(String(100), nullable=False)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("(CURRENT_TIMESTAMP)"),
+    )
+    meta_json = Column(sa.Text, nullable=True)

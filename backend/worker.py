@@ -6,6 +6,9 @@ Run with::
 
 The worker connects to the Redis instance specified by ``REDIS_URL`` and
 processes ``optimize_job`` tasks enqueued via the ``/jobs/optimize`` API.
+
+When ``SBOPTIMA_AUTH_REQUIRED=true``, the worker also updates the durable
+``OptimizationJob`` record in the database.
 """
 
 from __future__ import annotations
@@ -50,6 +53,53 @@ async def _update_job(redis, job_id: str, status: JobStatus, *, result=None, err
     await redis.set(key, json.dumps(record), ex=settings.job_result_ttl_s)
 
 
+def _update_job_in_db(
+    job_id: str,
+    status: str,
+    *,
+    result=None,
+    error: str | None = None,
+) -> None:
+    """Update the OptimizationJob row in the database (best-effort)."""
+    try:
+        settings = get_settings()
+        if not settings.sboptima_auth_required:
+            return
+
+        from backend.db import get_engine
+        if get_engine() is None:
+            from backend.db import init_engine
+            init_engine()
+
+        from backend.db import get_db
+        import uuid
+
+        for db in get_db():
+            try:
+                from backend.repositories import jobs_repo
+
+                now = datetime.now(timezone.utc)
+                kwargs: dict = {
+                    "db": db,
+                    "job_id": uuid.UUID(job_id),
+                    "status": status,
+                }
+                if status == "running":
+                    kwargs["started_at"] = now
+                if status in ("completed", "failed"):
+                    kwargs["finished_at"] = now
+                if result is not None:
+                    kwargs["result"] = result
+                if error is not None:
+                    kwargs["error"] = error
+
+                jobs_repo.update_job_status(**kwargs)
+            finally:
+                pass
+    except Exception:
+        logger.debug("Failed to update job in DB (non-fatal)", exc_info=True)
+
+
 # ---------------------------------------------------------------------------
 # Job function
 # ---------------------------------------------------------------------------
@@ -66,6 +116,7 @@ async def optimize_job(ctx: dict, job_id: str, payload: dict):
         return
 
     await _update_job(redis, job_id, JobStatus.running)
+    _update_job_in_db(job_id, "running")
 
     try:
         # Import synchronous handler and run it in a thread so the async
@@ -79,11 +130,13 @@ async def optimize_job(ctx: dict, job_id: str, payload: dict):
         result_data = response.model_dump()
 
         await _update_job(redis, job_id, JobStatus.completed, result=result_data)
+        _update_job_in_db(job_id, "completed", result=result_data)
         logger.info("Job %s completed successfully", job_id)
 
     except Exception as exc:
         error_msg = f"{type(exc).__name__}: {exc}"
         await _update_job(redis, job_id, JobStatus.failed, error=error_msg)
+        _update_job_in_db(job_id, "failed", error=error_msg)
         logger.exception("Job %s failed: %s", job_id, error_msg)
 
 
