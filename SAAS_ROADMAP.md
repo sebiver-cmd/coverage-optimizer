@@ -1,6 +1,6 @@
 # SB-Optima — SaaS Migration Roadmap
 
-> Last updated: 2026-04-05 — full codebase re-audit with per-task evidence and next-tasks refresh.
+> Last updated: 2026-04-05 — Tasks 5.3, 7.1, 7.2 completed; all remaining backend work done.
 
 This roadmap migrates **SB-Optima / Coverage Optimizer** from a single-tenant
 Streamlit + FastAPI tool into a **multi-tenant, paid SaaS web application**
@@ -676,8 +676,8 @@ every request body.
 - Config: `ALLOW_REQUEST_CREDENTIALS_WHEN_AUTHED` (default false).
 - Tests: `tests/test_ui_vault_mode.py`, `tests/test_credentials.py`.
 
-### Task 5.3 — LLM key management ⛔
-- [ ] Task 5.3 — Updated: 2026-04-05
+### Task 5.3 — LLM key management ✅
+- [x] Task 5.3 — Updated: 2026-04-05
 
 **Objective**: Decide and implement how `OPENAI_API_KEY` is handled in SaaS
 context.
@@ -686,29 +686,31 @@ context.
 - For MVP: single server-managed key (env var), shared across tenants.
 - Add usage tracking: log tenant_id + token count per LLM call in
   `domain/invoice_ean.py` and `domain/supplier.py`.
+- `backend/llm_usage.py`: in-memory usage tracking with `tracked_llm_call()`,
+  `get_monthly_llm_usage()`, `check_llm_limit()`, and `record_llm_usage()`.
+- `OPENAI_MONTHLY_TOKEN_LIMIT` config flag with enforcement (0 = unlimited).
+- Admin API tenant detail extended with `llm_usage` field.
 - Future: per-tenant key stored in vault (document upgrade path).
 
 **Acceptance criteria**:
-- LLM calls log `{tenant_id, tokens_used, model}`.
-- No tenant can see another's LLM usage.
+- ✅ LLM calls log `{tenant_id, tokens_used, model}` via structured JSON logger.
+- ✅ No tenant can see another's LLM usage (tenant-scoped via admin API).
+- ✅ `OPENAI_MONTHLY_TOKEN_LIMIT` enforced; calls rejected when exceeded.
+- ✅ `_default_llm_call` accepts `tenant_id` keyword param (backward compatible).
+- ✅ 10 tests pass covering tracking, isolation, limits, and config.
 
-**Tests**: unit test that LLM usage logging captures tenant_id.
+**Tests**: `tests/test_llm_usage.py` — 10 tests.
 
 **Risks**: cost blowup.
-**Mitigation**: add `OPENAI_MONTHLY_TOKEN_LIMIT` env var; reject calls above limit.
+**Mitigation**: `OPENAI_MONTHLY_TOKEN_LIMIT` env var; reject calls above limit.
 
 **Evidence**:
-- `backend/config.py` — `openai_api_key` and `openai_base_url` exist, but **no** `OPENAI_MONTHLY_TOKEN_LIMIT`.
-- `domain/invoice_ean.py` — `_default_llm_call()` makes OpenAI requests directly. **No** tenant_id or token count logging.
-- `domain/supplier.py` — LLM calls via injected `llm_call` parameter. **No** tenant_id or token tracking.
-- Domain-layer LLM functions are tenant-unaware.
-
-**Remaining work**:
-- Add `tenant_id` parameter to LLM call functions in `domain/invoice_ean.py` and `domain/supplier.py`.
-- Log `{tenant_id, tokens_used, model}` after each LLM call.
-- Add `OPENAI_MONTHLY_TOKEN_LIMIT` to `backend/config.py` with enforcement.
-- Add tenant isolation for LLM usage visibility.
-- Add unit test for LLM usage logging with tenant_id.
+- `backend/llm_usage.py` — `tracked_llm_call()`, `get_monthly_llm_usage()`, `check_llm_limit()`, `record_llm_usage()`, `reset_usage_store()`.
+- `backend/config.py` — `openai_monthly_token_limit` (default 0 = unlimited).
+- `domain/invoice_ean.py` — `_default_llm_call(prompt, api_key, model, *, tenant_id=None)`, `detect_invoice_columns(*, tenant_id=None)`, `suggest_column_mapping(*, tenant_id=None)`.
+- `domain/supplier.py` — `_parse_pdf_line_items_llm(*, tenant_id=None)` with usage logging.
+- `backend/admin_api.py` — `TenantDetailResponse.llm_usage` field with per-tenant monthly usage.
+- Tests: `tests/test_llm_usage.py` (10 tests: usage tracking, tenant isolation, limits, config, admin endpoint).
 
 ---
 
@@ -793,8 +795,8 @@ Streamlit History page added for tenant-scoped job/batch/audit history.
 
 ## Phase 7 — Billing + Plans (Stripe)
 
-### Task 7.1 — Stripe integration 🟡
-- [ ] Task 7.1 — Updated: 2026-04-05
+### Task 7.1 — Stripe integration ✅
+- [x] Task 7.1 — Updated: 2026-04-05
 
 **Objective**: Paid subscriptions with plan-based gating.
 
@@ -802,44 +804,42 @@ Streamlit History page added for tenant-scoped job/batch/audit history.
 - Stripe checkout session endpoint.
 - Webhook handler (subscription created/updated/cancelled).
 - `tenants.stripe_customer_id`, `tenants.stripe_subscription_id`, `tenants.billing_status`.
-- Billing gate middleware: non-active tenants get 402 on `/optimize` and `/apply`.
+- Billing gate: non-active tenants get 402 on `/optimize`, `/apply-prices/apply`,
+  `/jobs/optimize`. Gate skipped when `BILLING_ENABLED=false` or
+  `SBOPTIMA_AUTH_REQUIRED=false`.
 
 **Acceptance criteria**:
-- Checkout flow creates Stripe customer.
-- Webhook updates tenant status.
-- Expired subscription blocks optimise/apply.
+- ✅ Checkout flow creates Stripe customer.
+- ✅ Webhook updates tenant plan/status.
+- ✅ Billing gate returns 402 for `billing_status` in (NULL, canceled, past_due, inactive).
+- ✅ Billing gate passes `billing_status = "active"` tenants.
+- ✅ Gate skipped when `BILLING_ENABLED=false`.
+- ✅ Gate skipped when `SBOPTIMA_AUTH_REQUIRED=false`.
+- ✅ 32 billing gate tests pass (parameterised by status × endpoint).
 
-**Tests**: webhook signature verify (mocked); billing gate test.
+**Tests**: `tests/test_billing.py`, `tests/test_ui_billing.py`, `tests/test_billing_gate.py` — 32 gate tests.
 
 **Risks**: webhook reliability.
 **Mitigation**: idempotent webhook handler; Stripe event deduplication.
 
 **Evidence**:
-- `backend/stripe_billing.py` — `is_billing_configured()`, `create_or_get_customer()`, `create_checkout_session()`, `parse_and_verify_webhook()`, `handle_webhook_event()`. Handles `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.payment_succeeded`.
+- `backend/stripe_billing.py` — `is_billing_configured()`, `create_or_get_customer()`, `create_checkout_session()`, `parse_and_verify_webhook()`, `handle_webhook_event()`, `report_usage_to_stripe()`.
 - `backend/billing_api.py` — `POST /billing/checkout` (admin+), `GET /billing/status` (viewer+), `POST /billing/webhook` (signature-verified).
+- `backend/billing_gate.py` — `check_billing_gate` FastAPI dependency; returns 402 for inactive billing_status.
 - `backend/models.py:Tenant` — `stripe_customer_id`, `stripe_subscription_id`, `billing_status` columns.
 - `alembic/versions/0005_add_stripe_fields.py` — Adds Stripe columns.
 - Config: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID_PRO`, `STRIPE_PRICE_ID_ENTERPRISE`, `BILLING_ENABLED`.
 - UI: `ui/pages/billing.py` — Plan display, billing status, Stripe checkout.
-- Tests: `tests/test_billing.py`, `tests/test_ui_billing.py`.
-- ✅ Checkout flow creates Stripe customer.
-- ✅ Webhook updates tenant plan/status.
-- ❌ **Missing**: Billing gate middleware — no 402 returned for expired/inactive subscriptions on `/optimize` or `/apply`.
+- Endpoints gated: `POST /jobs/optimize` (`jobs_api.py`), `POST /apply-prices/apply` (`apply_real_api.py`), `POST /optimize/` (`optimizer_api.py`).
+- Tests: `tests/test_billing.py`, `tests/test_ui_billing.py`, `tests/test_billing_gate.py` (32 tests).
 
-**Remaining work**:
-- Implement billing gate middleware: check `tenant.billing_status` before `/optimize`, `/apply-prices/apply`, `/jobs/optimize`; return 402 for inactive/canceled/past_due subscriptions.
-- Gate should be skipped when `BILLING_ENABLED=false`.
-- Add billing gate test (parameterised by `billing_status` × endpoint).
-- **Files likely to change**: `backend/middleware/billing_gate.py` (new), `backend/main.py` (mount), `backend/config.py` (ensure `billing_enabled` is used).
-- **Security**: 402 response must not leak billing details.
-
-### Task 7.2 — Plans + quotas + usage tracking (Stripe-ready) 🟡
-- [ ] Task 7.2 — Updated: 2026-04-05
+### Task 7.2 — Plans + quotas + usage tracking (Stripe-ready) ✅
+- [x] Task 7.2 — Updated: 2026-04-05
 
 **Objective**: Define plan tiers with per-tenant quota enforcement and usage
 visibility, ready for Stripe metered billing.
 
-**Scope (implemented)**:
+**Scope**:
 - `backend/plans.py`: `Plan` dataclass, `PLANS` dict (free/pro/enterprise),
   `get_plan()`, `list_plans()`.
 - `backend/plan_api.py`: `GET /plans` (viewer+), `GET /tenant/plan` (viewer+),
@@ -850,34 +850,38 @@ visibility, ready for Stripe metered billing.
 - `backend/usage_api.py`: `GET /usage` (viewer+) returns daily usage vs limits.
 - `alembic/versions/0004_add_tenant_limits.py`: `daily_optimize_jobs_limit`,
   `daily_apply_limit`, `daily_optimize_sync_limit` on tenants table.
-
-**Scope (remaining)**:
-- Dedicated `usage_events` table for explicit event recording.
-- Stripe `UsageRecord` reporting for metered plans.
+- `backend/models.py:UsageEvent` — dedicated `usage_events` table.
+- `alembic/versions/0006_add_usage_events.py` — creates `usage_events` table.
+- `backend/repositories/usage_repo.py` — `emit_usage_event()`, `list_usage_events()`.
+- Usage events emitted from `backend/jobs_api.py` (`job.optimize`) and
+  `backend/apply_real_api.py` (`batch.apply`) on every persisted operation.
+- `backend/stripe_billing.py:report_usage_to_stripe()` — Stripe Billing Meter
+  Events API reporting for metered-plan tenants (non-fatal, best-effort).
 
 **Acceptance criteria**:
 - ✅ Plans defined with limits (free/pro/enterprise).
 - ✅ Quota enforcement works (429 on limit exceed).
 - ✅ `GET /usage` returns daily usage vs limits.
-- ❌ `usage_events` table exists and records events for every optimize + apply.
-- ❌ Stripe usage records reported for metered plans.
+- ✅ `usage_events` table exists and records events for every optimize + apply.
+- ✅ Stripe usage records reported for metered plans (via `report_usage_to_stripe()`).
+- ✅ Usage events are tenant-scoped (no cross-tenant visibility).
+- ✅ 17 tests pass covering event emission, listing, tenant isolation, Stripe reporting.
 
-**Tests**: `tests/test_plans.py`, `tests/test_quotas.py` (existing — cover plan/quota logic).
+**Tests**: `tests/test_plans.py`, `tests/test_quotas.py`, `tests/test_usage_events.py` — 17 usage event tests.
 
 **Evidence**:
 - `backend/plans.py` — `Plan` dataclass, `PLANS` dict (free/pro/enterprise), `get_plan()`, `list_plans()`.
 - `backend/plan_api.py` — `GET /plans` (viewer+), `GET /tenant/plan` (viewer+), `PUT /tenant/plan` (admin+).
-- `backend/quotas.py` — `check_quota()`, `get_usage()`, `get_limits()`. Counts existing `OptimizationJob` / `ApplyBatch` rows (not separate usage_events table). Raises 429 `QuotaExceeded`.
+- `backend/quotas.py` — `check_quota()`, `get_usage()`, `get_limits()`. Raises 429 `QuotaExceeded`.
 - `backend/usage_api.py` — `GET /usage` (viewer+) returns daily usage vs limits.
 - `alembic/versions/0004_add_tenant_limits.py` — Adds `daily_*_limit` columns to tenants.
-
-**Remaining work**:
-- Create `usage_events` table (`tenant_id`, `event_type`, `timestamp`, `metadata` JSONB) via Alembic migration.
-- Record explicit usage events for every optimize + apply call (emit from `backend/jobs_api.py` and `backend/apply_real_api.py`).
-- Add Stripe usage record reporting (`stripe.UsageRecord.create()`) for metered plans.
-- Add tests for usage event recording and Stripe reporting (mock Stripe API).
-- **Files likely to change**: `alembic/versions/0006_*.py` (new), `backend/models.py` (UsageEvent), `backend/repositories/usage_repo.py` (new), `backend/jobs_api.py`, `backend/apply_real_api.py`, `backend/stripe_billing.py`.
-- **Security**: no PII in usage events; tenant-scoped queries only.
+- `backend/models.py:UsageEvent` — `id`, `tenant_id` (FK), `event_type`, `created_at`, `meta_json`.
+- `alembic/versions/0006_add_usage_events.py` — Creates `usage_events` table.
+- `backend/repositories/usage_repo.py` — `emit_usage_event()`, `list_usage_events()` (paginated, filtered, tenant-scoped).
+- `backend/jobs_api.py` — Emits `job.optimize` usage event + Stripe reporting in `_persist_job_to_db()`.
+- `backend/apply_real_api.py` — Emits `batch.apply` usage event + Stripe reporting in `_persist_apply_batch_to_db()`.
+- `backend/stripe_billing.py` — `report_usage_to_stripe()` via Stripe Billing Meter Events API.
+- Tests: `tests/test_usage_events.py` (17 tests: emission, listing, pagination, tenant isolation, Stripe reporting).
 
 ---
 
@@ -1149,11 +1153,11 @@ row caps.
 | 4 | 4.3 — RBAC | ✅ | `backend/rbac.py` |
 | 5 | 5.1 — Credential vault | ✅ | `backend/crypto.py`, `credentials_api.py`, migration 0002 |
 | 5 | 5.2 — Remove creds from payloads | ✅ | `backend/credential_resolver.py` |
-| 5 | 5.3 — LLM key management | ⛔ | No tenant-aware LLM logging; no `OPENAI_MONTHLY_TOKEN_LIMIT` |
+| 5 | 5.3 — LLM key management | ✅ | `backend/llm_usage.py`, `OPENAI_MONTHLY_TOKEN_LIMIT`, tenant-aware logging (10 tests) |
 | 6 | 6.1 — Batch + audit tables | ✅ | Migration 0003, repos |
 | 6 | 6.2 — DB apply + dashboards | ✅ | List endpoints, History page |
-| 7 | 7.1 — Stripe integration | 🟡 | Checkout + webhook work; **billing gate missing** |
-| 7 | 7.2 — Plans + quotas + usage | 🟡 | Plans + quotas work; **`usage_events` table + Stripe usage missing** |
+| 7 | 7.1 — Stripe integration | ✅ | Checkout + webhook + billing gate (`backend/billing_gate.py`, 32 tests) |
+| 7 | 7.2 — Plans + quotas + usage | ✅ | Plans + quotas + `usage_events` table + Stripe reporting (17 tests) |
 | 8 | 8.1 — Next.js scaffold | ⛔ | No `frontend/` directory |
 | 8 | 8.2 — Price Optimizer (web) | ⛔ | Depends on 8.1 |
 | 8 | 8.3 — Deprecate Streamlit | ⛔ | Depends on 8.1 + 8.2 |
@@ -1162,7 +1166,7 @@ row caps.
 | 10 | 10.1 — Security hardening | ✅ | CORS, security headers, HSTS, request size limits (13 tests) |
 | 10 | 10.2 — Data retention + export | ✅ | Retention pruning, CLI script, tenant export endpoint (17 tests) |
 
-**Total**: 18 ✅ · 2 🟡 · 5 ⛔
+**Total**: 21 ✅ · 0 🟡 · 3 ⛔ (Phase 8 — Next.js frontend, deferred)
 
 ---
 
@@ -1202,97 +1206,29 @@ The following are explicitly **out of scope** for current sprints:
 
 # Section F — Next 3 Tasks
 
-> Updated: 2026-04-05 — based on unfinished tasks in the roadmap, ordered by
-> priority (billing gate first, then usage tracking, then LLM management).
+> Updated: 2026-04-05 — All three previously-next tasks are now complete.
+> The only remaining tasks are Phase 8 (Next.js frontend), which is deferred.
+
+### ✅ Completed: Task 7.1 — Billing gate middleware
+
+Implemented in `backend/billing_gate.py`. 32 tests in `tests/test_billing_gate.py`.
+
+### ✅ Completed: Task 7.2 — Usage events table + Stripe metered billing
+
+Implemented: migration `0006_add_usage_events.py`, `UsageEvent` model,
+`backend/repositories/usage_repo.py`, `report_usage_to_stripe()`.
+17 tests in `tests/test_usage_events.py`.
+
+### ✅ Completed: Task 5.3 — LLM key management (tenant-aware usage tracking)
+
+Implemented: `backend/llm_usage.py`, `openai_monthly_token_limit` config,
+`_default_llm_call(*, tenant_id=None)` in `domain/invoice_ean.py`,
+LLM usage in admin tenant detail. 10 tests in `tests/test_llm_usage.py`.
 
 ---
 
-### Next 1: Task 7.1 — Billing gate middleware (finish Stripe integration)
+### Next (deferred): Phase 8 — Next.js Frontend
 
-**Current status**: 🟡 — Checkout + webhook + billing status all work, but no
-gate prevents inactive/expired tenants from using paid endpoints.
-
-**Acceptance criteria**:
-- Middleware checks `tenant.billing_status` on `POST /optimize`,
-  `POST /apply-prices/apply`, `POST /jobs/optimize`.
-- Tenants with `billing_status` in (`canceled`, `past_due`, `inactive`, `NULL`)
-  receive **402 Payment Required** with JSON error body.
-- Tenants with `billing_status = "active"` pass through.
-- Billing gate is **skipped** when `BILLING_ENABLED=false` (dev/migration mode).
-- Billing gate is **skipped** for non-billing endpoints (health, auth, etc.).
-
-**Files likely to change**:
-- `backend/middleware/billing_gate.py` (new — middleware class)
-- `backend/main.py` (mount middleware)
-- `backend/config.py` (ensure `billing_enabled` is read)
-
-**Required tests** (add to `tests/test_billing.py` or new `tests/test_billing_gate.py`):
-- Parameterised: `billing_status` × endpoint → 402 or pass.
-- `BILLING_ENABLED=false` → gate disabled, all pass.
-- Free-tier tenants (no Stripe) are handled gracefully.
-
-**Security notes**: Do not leak billing details in 402 response; message should
-be generic ("Payment required — please update your subscription.").
-
----
-
-### Next 2: Task 7.2 — Usage events table + Stripe metered billing (finish plans)
-
-**Current status**: 🟡 — Plans + quotas work via existing tables, but no
-explicit `usage_events` table exists and Stripe usage reporting is absent.
-
-**Acceptance criteria**:
-- `usage_events` table created via Alembic migration with columns: `id` (UUID),
-  `tenant_id` (FK), `event_type` (string), `timestamp` (UTC), `metadata` (JSONB).
-- Every `POST /jobs/optimize` emits a `job.optimize` usage event.
-- Every `POST /apply-prices/apply` emits a `batch.apply` usage event.
-- `stripe.UsageRecord.create()` called for metered-plan tenants on each event
-  (when `BILLING_ENABLED=true` and tenant has active Stripe subscription).
-- Usage events are tenant-scoped (no cross-tenant visibility).
-
-**Files likely to change**:
-- `alembic/versions/0006_add_usage_events.py` (new migration)
-- `backend/models.py` (add `UsageEvent` model)
-- `backend/repositories/usage_repo.py` (new — CRUD for usage events)
-- `backend/jobs_api.py` (emit usage event after job enqueue)
-- `backend/apply_real_api.py` (emit usage event after apply)
-- `backend/stripe_billing.py` (add `report_usage()` function)
-
-**Required tests**:
-- Usage event created on optimize/apply.
-- Stripe usage record created when billing enabled + active sub.
-- No Stripe call when billing disabled.
-- Tenant isolation for usage events.
-
-**Security notes**: No PII in usage event metadata; tenant_id scoping enforced.
-
----
-
-### Next 3: Task 5.3 — LLM key management (tenant-aware usage tracking)
-
-**Current status**: ⛔ — Domain LLM functions (`domain/invoice_ean.py`,
-`domain/supplier.py`) have no tenant_id awareness; no usage tracking or limits.
-
-**Acceptance criteria**:
-- LLM call functions accept `tenant_id` parameter.
-- After each LLM call, log `{tenant_id, tokens_used, model}` via structured
-  logger (JSON format from Task 9.1).
-- `OPENAI_MONTHLY_TOKEN_LIMIT` config flag exists with enforcement (reject
-  calls above limit with clear error).
-- Per-tenant LLM usage visible via admin API (extend `GET /admin/tenant/{id}`
-  or add new endpoint).
-- No tenant can see another tenant's LLM usage.
-
-**Files likely to change**:
-- `domain/invoice_ean.py` (add `tenant_id` param to `_default_llm_call`)
-- `domain/supplier.py` (add `tenant_id` param to LLM call)
-- `backend/config.py` (add `openai_monthly_token_limit`)
-- `backend/admin_api.py` (extend tenant detail or add LLM usage endpoint)
-
-**Required tests**:
-- Unit test: LLM usage log contains `tenant_id`, `tokens_used`, `model`.
-- Unit test: calls rejected when monthly limit exceeded.
-- Unit test: tenant isolation for usage visibility.
-
-**Security notes**: Never log the LLM API key; only log usage metadata.
-`OPENAI_API_KEY` remains a server-level env var (not per-tenant for MVP).
+The only remaining roadmap tasks are Phase 8 (Tasks 8.1, 8.2, 8.3) which
+require scaffolding a Next.js frontend. These are explicitly deferred in
+Section E — Streamlit remains the UI until the frontend migration is scheduled.
