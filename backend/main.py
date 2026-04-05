@@ -32,6 +32,7 @@ from backend.audit_api import router as audit_router
 from backend.usage_api import router as usage_router
 from backend.plan_api import router as plan_router
 from backend.billing_api import router as billing_router
+from backend.admin_api import router as admin_router
 from backend.config import get_settings
 from backend.db import check_db, init_engine
 from backend.logging_config import setup_logging
@@ -109,6 +110,7 @@ app.include_router(audit_router)
 app.include_router(usage_router)
 app.include_router(plan_router)
 app.include_router(billing_router)
+app.include_router(admin_router)
 app.include_router(get_metrics_router())
 
 # -- Observability middleware (Task 9.1) --------------------------------
