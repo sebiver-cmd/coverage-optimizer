@@ -11,6 +11,7 @@ All tests use an in-memory SQLite database (no Postgres required).
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -421,8 +422,6 @@ def test_invalid_token_returns_401(client_auth_required):
 
 def test_expired_token_returns_401(db_session, client_auth_required):
     """An expired token must produce 401."""
-    from datetime import timedelta
-
     user = _seed_user(db_session, "owner")
     expired = create_access_token(
         sub=user.id,

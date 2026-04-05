@@ -105,8 +105,9 @@ def require_role(min_role: Role | str):
                 db=db,
                 settings=settings,
             )
-        except Exception:
-            # Ensure the generator is properly closed on error.
+        except HTTPException:
+            # Re-raise auth errors (401 for bad/missing token).
+            # Ensure the DB generator is properly closed.
             try:
                 next(db_gen, None)
             except StopIteration:
