@@ -41,6 +41,7 @@ export default function Navbar() {
           href="https://sboptima.dk"
           target="_blank"
           rel="noopener noreferrer"
+          aria-label="Visit SB-Optima website"
           className="text-gray-500 hover:text-gray-300 text-xs"
         >
           sboptima.dk
