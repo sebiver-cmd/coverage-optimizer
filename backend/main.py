@@ -14,7 +14,9 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from dandomain_api import DanDomainClient, DanDomainAPIError
@@ -97,6 +99,30 @@ app = FastAPI(
     version="0.1.0",
     lifespan=_lifespan,
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_handler(request, exc: RequestValidationError) -> JSONResponse:
+    """Return 422 validation errors without the ``input`` field.
+
+    Pydantic v2 includes the raw input value in each error dict by default.
+    For fields like ``password`` this would leak plaintext credentials in the
+    response body, so we strip ``input`` and ``url`` from every error.
+    The ``ctx`` dict may contain non-serialisable exception objects, so we
+    convert those to strings.
+    """
+    errors = []
+    for err in exc.errors():
+        safe_err = {}
+        for k, v in err.items():
+            if k in ("input", "url"):
+                continue
+            if k == "ctx" and isinstance(v, dict):
+                safe_err[k] = {ck: str(cv) for ck, cv in v.items()}
+            else:
+                safe_err[k] = v
+        errors.append(safe_err)
+    return JSONResponse(status_code=422, content={"detail": errors})
 
 app.include_router(optimizer_router)
 app.include_router(brands_router)
