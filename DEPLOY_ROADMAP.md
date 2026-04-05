@@ -65,7 +65,7 @@ Everything below is built, tested, and working locally:
 **Done when**: `docker compose up` shows 5 running services (api, frontend,
 postgres, redis, worker), and a submitted optimization job completes.
 
-- [ ] Task 14.1 — Add Arq worker to docker-compose
+- [x] Task 14.1 — Add Arq worker to docker-compose
 
 ---
 
@@ -89,7 +89,7 @@ The API needs to run `alembic upgrade head` automatically on startup.
 **Done when**: A fresh `docker compose up` creates the database tables
 automatically without manual `alembic` commands.
 
-- [ ] Task 14.2 — Auto-run migrations on API startup
+- [x] Task 14.2 — Auto-run migrations on API startup
 
 ---
 
@@ -384,7 +384,7 @@ SSL certificates from Let's Encrypt. No manual cert management needed.
 **Done when**: `infra/Caddyfile` exists, and docker-compose.yml includes
 the Caddy service with ports 80 and 443.
 
-- [ ] Task 17.1 — Add Caddy reverse proxy with automatic HTTPS
+- [x] Task 17.1 — Add Caddy reverse proxy with automatic HTTPS
 
 ---
 
@@ -616,7 +616,7 @@ and Fly.io auto-deploy on push to `main`.
 
 **Done when**: Pushing to `main` automatically deploys to production.
 
-- [ ] Task 20.1 — Set up automatic deployment from GitHub
+- [x] Task 20.1 — Set up automatic deployment from GitHub
 
 ---
 

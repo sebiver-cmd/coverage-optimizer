@@ -1,0 +1,19 @@
+# SB-Optima — Production reverse proxy
+#
+# Caddy automatically obtains and renews SSL certificates from Let's Encrypt.
+# No manual certificate management needed.
+
+sboptima.dk, www.sboptima.dk {
+	# Frontend (Next.js)
+	reverse_proxy frontend:3000
+}
+
+api.sboptima.dk {
+	# Backend API (FastAPI)
+	reverse_proxy api:8000
+}
+
+sboptima.com, www.sboptima.com {
+	# Redirect .com to .dk
+	redir https://sboptima.dk{uri} permanent
+}
