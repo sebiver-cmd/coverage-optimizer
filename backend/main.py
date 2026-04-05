@@ -1,8 +1,7 @@
 """FastAPI backend for SB-Optima.
 
 Exposes a REST API that wraps the existing DanDomain SOAP client and
-domain logic.  Runs independently of the Streamlit frontend so neither
-process interferes with the other.
+domain logic.
 
 Start with::
 

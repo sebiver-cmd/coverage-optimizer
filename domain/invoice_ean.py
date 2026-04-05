@@ -1,4 +1,4 @@
-"""Invoice-to-EAN barcode matching — no Streamlit dependency.
+"""Invoice-to-EAN barcode matching — no UI dependency.
 
 Parses an invoice (CSV / PDF), matches its SKUs to the product catalogue
 using fuzzy matching, and builds an export DataFrame with:
@@ -886,7 +886,7 @@ def build_matches_df(
     - ``status`` — ``"ok"``, ``"ambiguous"``, or ``"needs-manual"``.
 
     This DataFrame serves as the **single source of truth** for the
-    matching step.  The Streamlit UI renders it directly, and
+    matching step.  The frontend renders it directly, and
     :func:`export_from_matches_df` converts it to the final export.
 
     Parameters
@@ -2042,7 +2042,7 @@ def suggest_column_mapping(
         export OPENAI_API_KEY="sk-..."
 
     No additional dependencies are required beyond ``requests`` (already
-    in requirements.txt via ``streamlit``).
+    in requirements.txt).
     """
     key = api_key or os.environ.get('OPENAI_API_KEY')
     if not key:

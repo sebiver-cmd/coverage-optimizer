@@ -1,4 +1,4 @@
-"""Supplier price-list parsing and fuzzy SKU matching — no Streamlit dependency.
+"""Supplier price-list parsing and fuzzy SKU matching — no UI dependency.
 
 Handles CSV / PDF supplier files, auto-detects column mappings, performs
 fuzzy SKU matching against the product catalogue, and detects discount

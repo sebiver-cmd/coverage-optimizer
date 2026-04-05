@@ -5,8 +5,8 @@
 This repository contains **SB‑Optima / Coverage Optimizer**, a toolset for:
 
 - Optimizing product prices for a DanDomain shop based on margin / coverage rate.
-- Providing a **Streamlit UI** for analysts/operators.
-- Exposing a **FastAPI backend** for optimization, dry‑run “apply” previews, and guarded real apply.
+- Providing a **Next.js web frontend** for analysts/operators.
+- Exposing a **FastAPI backend** for optimization, dry‑run "apply" previews, and guarded real apply.
 - Enforcing **strict safety & audit guardrails** around price changes.
 
 High‑level flow:
@@ -23,25 +23,24 @@ High‑level flow:
 
 At the repo root:
 
-- `app.py` — Streamlit app entrypoint.
+- `frontend/` — Next.js 16 web frontend (TypeScript + Tailwind CSS).
 - `backend/` — FastAPI backend (API endpoints).
 - `domain/` — Core domain logic: pricing, product loading, invoices, risk analysis, suppliers.
-- `ui/` — Shared UI helpers for Streamlit (styles, backend URL handling, pages).
 - `tests/` — Test suite for backend, domain, and safety logic.
 - `data/` — Local data files:
   - HostedShop / currency‑converter docs (single source of truth for that API).
   - `data/apply_batches/` — stored dry‑run manifests (see roadmap tasks 2.5.x).
   - `data/apply_audit.log` — JSONL audit log for real applies.
 - `CLAUDE.md` — Agent authority/policy instructions.
-- `ROADMAP.md` — Single checklist for backend + Streamlit roadmap (one task per message).
-- `SAAS_ROADMAP.md` — Longer‑term SaaS multi‑tenant roadmap.
+- `ROADMAP.md` — Historical checklist for the original backend roadmap.
+- `SAAS_ROADMAP.md` — SaaS multi‑tenant roadmap (Phases 0–13).
 - `requirements.txt` — Python dependencies.
 
 ---
 
 ## 3. FastAPI Backend (`backend/`)
 
-The backend is the **API layer** used by Streamlit and any other clients.
+The backend is the **API layer** used by the Next.js frontend and any other clients.
 
 Key modules:
 
@@ -63,7 +62,6 @@ Key modules:
     - Check DanDomain connectivity.
     - Fetch brands / catalog metadata for the UI.
   - Uses `dandomain_api.py` or related helpers to talk to the external DanDomain API.
-  - Often involved in **“backend URL connectivity”** checks from the Streamlit UI (see roadmap Task 1.2 and 4.3).
 
 - `backend/optimizer_api.py`
   - Endpoints for **price optimization**:
@@ -139,7 +137,7 @@ Key modules:
     - `version` (constant, env, or git SHA).
     - `apply_enabled` (from `SB_OPTIMA_ENABLE_APPLY`).
     - `timestamp` (UTC ISO).
-  - Streamlit uses this instead of probing `/brands` with fake credentials.
+  - The frontend uses this for backend connectivity checks.
 
 ---
 
@@ -152,7 +150,7 @@ Pure business logic; aim to keep this side‑effect‑free where possible.
     - Calculation of `PRICE_EX_VAT` from gross prices (25% Danish VAT by default).
     - Computation of current coverage/margins.
     - Determining suggested new prices to meet minimum margin (e.g., 50%).
-    - “Beautification” of prices (e.g., round/up to end in 9) while respecting margin constraints.
+    - "Beautification" of prices (e.g., round/up to end in 9) while respecting margin constraints.
   - Shared between backend and any other callers (UI should go through backend, not call this directly).
 
 - `domain/product_loader.py`
@@ -167,7 +165,7 @@ Pure business logic; aim to keep this side‑effect‑free where possible.
     - Compute largest price decreases.
     - Identify near‑cost / low‑margin rows.
     - Prepare histogram/binned statistics for Change %.
-  - Designed to be testable independently of Streamlit.
+  - Designed to be testable independently of any UI framework.
 
 - `domain/invoice_ean.py`
   - Invoice + EAN related logic:
@@ -204,13 +202,6 @@ The Next.js app is the **primary human interface** to the optimizer.
 
 Tests are critical for safety and regression protection. Key test modules:
 
-- `tests/test_price_optimizer_backend.py`
-  - End‑to‑end behavior for optimization backend.
-  - Ensures:
-    - Correct calculation of coverage/margins.
-    - Respect for minimum coverage rate.
-    - Correct beautification behavior.
-
 - `tests/test_apply_prices_dry_run.py`
   - Tests for the **dry‑run** pipeline:
     - `POST /apply-prices/dry-run` behavior.
@@ -226,12 +217,6 @@ Tests are critical for safety and regression protection. Key test modules:
     - Idempotency / `.applied` markers.
     - Environment gating via `SB_OPTIMA_ENABLE_APPLY`.
 
-- `tests/test_backend_url.py`
-  - Behavior of `ui/backend_url.py`:
-    - URL normalization.
-    - Connectivity check logic.
-    - Backend status indicator.
-
 - `tests/test_brands_api.py`
   - Brand/shop connectivity endpoints:
     - Success and failure modes.
@@ -240,10 +225,8 @@ Tests are critical for safety and regression protection. Key test modules:
 - `tests/test_invoice_ean.py`, `tests/test_supplier.py`
   - Domain logic for invoices and suppliers.
 
-- `tests/test_result_summary.py`, `tests/test_risk_analysis.py`
-  - Summary and risk analysis helpers:
-    - Top increases/decreases tables.
-    - Risk metrics and histogram helpers.
+- `tests/test_risk_analysis.py`
+  - Risk metrics and histogram helpers.
 
 - `tests/test_push_safety.py`
   - Tests for `push_safety.py`:
@@ -268,7 +251,7 @@ When extending or modifying functionality, keep these principles:
   - A batch must not be applied twice without explicit override logic.
 - **Environment gating**:
   - Applying prices requires `SB_OPTIMA_ENABLE_APPLY=true` (or equivalent).
-  - Lower environments should default to “apply disabled”.
+  - Lower environments should default to "apply disabled".
 - **HostedShop / currency API**:
   - The single source of truth is `data/hostedshop_docs/hostedshop_api_docs_full.md`.
   - Do **not** infer undocumented endpoints or behavior.

@@ -1,12 +1,16 @@
 {
-  "name": "Python 3",
+  "name": "SB-Optima Dev",
   // Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
   "image": "mcr.microsoft.com/devcontainers/python:1-3.11-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "18"
+    }
+  },
   "customizations": {
     "codespaces": {
       "openFiles": [
-        "README.md",
-        "app.py"
+        "README.md"
       ]
     },
     "vscode": {
@@ -17,20 +21,22 @@
       ]
     }
   },
-  "updateContentCommand": "[ -f packages.txt ] && sudo apt update && sudo apt upgrade -y && sudo xargs apt install -y <packages.txt; [ -f requirements.txt ] && pip3 install --user -r requirements.txt; pip3 install --user streamlit; echo '✅ Packages installed and Requirements met'",
-  // SECURITY NOTE: CORS and XSRF protection are disabled here for local
-  // dev-container convenience only.  Never deploy to production with these
-  // flags — re-enable both protections for any internet-facing environment.
+  "updateContentCommand": "[ -f packages.txt ] && sudo apt update && sudo apt upgrade -y && sudo xargs apt install -y <packages.txt; [ -f requirements.txt ] && pip3 install --user -r requirements.txt; cd frontend && npm install; echo '✅ Packages installed and Requirements met'",
   "postAttachCommand": {
-    "server": "streamlit run app.py --server.enableCORS false --server.enableXsrfProtection false"
+    "api": "uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000",
+    "frontend": "cd frontend && npm run dev"
   },
   "portsAttributes": {
-    "8501": {
-      "label": "Application",
+    "3000": {
+      "label": "Frontend (Next.js)",
       "onAutoForward": "openPreview"
+    },
+    "8000": {
+      "label": "Backend (FastAPI)"
     }
   },
   "forwardPorts": [
-    8501
+    3000,
+    8000
   ]
 }

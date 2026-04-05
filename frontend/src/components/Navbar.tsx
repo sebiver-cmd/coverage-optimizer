@@ -37,6 +37,15 @@ export default function Navbar() {
       ))}
 
       <div className="ml-auto flex items-center gap-4">
+        <a
+          href="https://sboptima.dk"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Visit SB-Optima website"
+          className="text-gray-500 hover:text-gray-300 text-xs"
+        >
+          sboptima.dk
+        </a>
         <span className="text-gray-400 text-xs">
           {user.email} ({user.role})
         </span>

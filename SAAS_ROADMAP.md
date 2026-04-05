@@ -31,8 +31,7 @@ for DanDomain price optimisation.
 | **Database** | Postgres + SQLAlchemy + Alembic migrations |
 | **Cache / queue** | Redis |
 | **Background jobs** | **Arq** (lightweight, async-native; revisit Celery only if needed) |
-| **Frontend (interim)** | Keep Streamlit as thin HTTP client during migration |
-| **Frontend (target)** | Next.js / React (deferred to Phase 8) |
+| **Frontend** | Next.js 16 + TypeScript + Tailwind (`frontend/`) — ✅ migrated in Phase 8 |
 | **Auth** | Custom JWT + password + email-verify (or Clerk/Auth0 — decide in ADR) |
 | **Billing** | Stripe subscriptions (deferred to Phase 7) |
 | **Hosting** | Production domains: `sboptima.dk` / `sboptima.com` (DNS/SSL deferred) |
@@ -46,14 +45,17 @@ for DanDomain price optimisation.
    backend reads from the vault, scoped by `tenant_id`.
 3. **Preserve existing apply safety model** (guardrails, idempotency, audit)
    while migrating storage from files to Postgres.
-4. **Incremental migration** — each phase must leave existing tests green and
-   the Streamlit UI functional.
+4. **Incremental migration** — each phase must leave existing tests green.
 
 ---
 
-# Section A — Current State (as-is)
+# Section A — Pre-Migration Snapshot (historical)
 
-## Components
+> ⚠️ **Historical snapshot** — this section describes the architecture **before**
+> the SaaS migration.  Streamlit was removed in Phase 8.3 and replaced by a
+> Next.js frontend (`frontend/`).  Kept here for historical reference only.
+
+## Components (pre-migration)
 
 | Layer | Module(s) | Responsibility |
 |---|---|---|
@@ -1423,8 +1425,8 @@ The following are explicitly **out of scope** for current sprints:
 - **KMS-based encryption** — Fernet is acceptable for MVP; document upgrade path.
 - **Per-tenant LLM keys** — use server-managed key; add usage tracking first
   (Task 5.3).
-- **Invoice/supplier matching migration** — these features keep working as-is via
-  Streamlit; no SaaS-specific changes until frontend migration.
+- **Invoice/supplier matching migration** — these features work via the backend
+  API; a dedicated Next.js UI for invoice/supplier matching is deferred.
 - **Variant matching improvements** — paused per project decision.
 - **Post-apply verification** (re-fetch and confirm) — nice-to-have; schedule
   after billing gate is in place.

@@ -7,24 +7,16 @@ anything back to the webshop**.
 
 Product and variant selection
 -----------------------------
-The inclusion logic here is **intentionally aligned** with the Streamlit
-Price Optimizer (``ui/pages/price_optimizer.py``):
-
 *   Products are fetched via ``DanDomainClient.get_products_batch()``
     (``Product_GetAll`` with extended fields including ``Variants``).
 *   Variants are expanded into separate rows by
-    ``domain.pricing.api_products_to_dataframe`` — exactly the same
-    helper the Dashboard / Price Optimizer UI uses.
-*   Default filters match the Streamlit defaults:
-    -  ``include_offline=False`` → only online products (same as the
-       UI checkbox *"Only active (online) products"* defaulting to
-       checked).
-    -  ``include_variants=True`` → variants expanded into individual
-       rows (the UI always includes variants).
+    ``domain.pricing.api_products_to_dataframe``.
+*   Default filters:
+    -  ``include_offline=False`` → only online products.
+    -  ``include_variants=True`` → variants expanded into individual rows.
     -  No brand filter by default (all brands).
 *   ``summary.total_products`` equals the number of **rows** (base
-    products + their variant rows) after filtering — the same number
-    displayed as *"Total Products"* in the Streamlit Price Optimizer.
+    products + their variant rows) after filtering.
 *   ``summary.base_products`` is the count of distinct ``PRODUCT_ID``
     values (i.e. unique base products, before variant expansion).
 *   ``summary.total_rows`` is an explicit alias for ``total_products``
@@ -89,9 +81,8 @@ class OptimizeRequest(BaseModel):
         description="Round adjusted prices up to the nearest integer ending in this digit (9, 0, or 5).",
     )
 
-    # Filters — defaults match the Streamlit Price Optimizer
-    # (ui/pages/price_optimizer.py) so that the same credentials and
-    # default parameters produce the same product set.
+    # Filters — defaults match the original Price Optimizer so that the
+    # same credentials and default parameters produce the same product set.
     brand_ids: Optional[list[int]] = Field(
         default=None,
         description=(
@@ -103,19 +94,19 @@ class OptimizeRequest(BaseModel):
         default=False,
         description=(
             "When false (default), only products with an active / online "
-            "status are included — matching the Streamlit UI checkbox "
-            "'Only active (online) products' which defaults to checked. "
-            "Set to true to include offline / inactive products as well."
+            "status are included (the 'Only active (online) products' "
+            "default).  Set to true to include offline / inactive "
+            "products as well."
         ),
     )
     include_variants: bool = Field(
         default=True,
         description=(
             "When true (default), each product variant is expanded into "
-            "its own row with variant-specific pricing — matching the "
-            "Streamlit Price Optimizer behaviour.  When false, only one "
-            "row per base product is returned (using the base product's "
-            "price and buy-price, ignoring individual variant prices)."
+            "its own row with variant-specific pricing.  When false, "
+            "only one row per base product is returned (using the base "
+            "product's price and buy-price, ignoring individual variant "
+            "prices)."
         ),
     )
 
@@ -144,8 +135,7 @@ class OptimizeSummary(BaseModel):
     """Aggregate statistics for the optimisation run.
 
     ``total_products`` is the number of **rows** (base products + variant
-    rows) after filtering — the same number displayed as *"Total Products"*
-    in the Streamlit Price Optimizer (``ui/pages/price_optimizer.py``).
+    rows) after filtering.
 
     ``base_products`` is the number of distinct ``PRODUCT_ID`` values
     (unique base products, before variant expansion).
@@ -181,11 +171,6 @@ router = APIRouter(prefix="/optimize", tags=["optimize"], dependencies=[Depends(
 @router.post("/", response_model=OptimizeResponse, dependencies=[Depends(check_billing_gate)])
 def run_optimization(payload: OptimizeRequest) -> OptimizeResponse:
     """Run the read-only pricing optimisation pipeline.
-
-    The product and variant selection logic mirrors the Streamlit Price
-    Optimizer (``ui/pages/price_optimizer.py``) so that, for the same
-    shop credentials and equivalent default parameters, the output
-    (row count, adjusted count, etc.) is consistent with the UI.
 
     Pipeline
     --------
@@ -278,8 +263,7 @@ def run_optimization(payload: OptimizeRequest) -> OptimizeResponse:
         unchanged = total - adjusted_count
 
         # Count distinct base products (unique PRODUCT_ID values) in
-        # the filtered set — comparable to the "base products" number
-        # shown on the Streamlit Dashboard.
+        # the filtered set.
         if "PRODUCT_ID" in df.columns:
             base_products = int(df["PRODUCT_ID"].nunique())
         else:
