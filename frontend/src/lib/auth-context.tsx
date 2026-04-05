@@ -34,6 +34,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 /* ------------------------------------------------------------------ */
 
 const TOKEN_KEY = "sb_token";
+const JWT_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({
@@ -73,7 +74,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setState({ token: null, user: null, ready: true });
           });
       },
-      10 * 60 * 1000,
+      JWT_REFRESH_INTERVAL_MS,
     );
     return () => clearInterval(id);
   }, [state.token]);
