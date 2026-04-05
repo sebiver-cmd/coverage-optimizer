@@ -53,6 +53,7 @@ from backend.cache import (
     get_cached_products,
     set_cached_products,
 )
+from backend.billing_gate import check_billing_gate
 from backend.rbac import require_role
 
 logger = logging.getLogger(__name__)
@@ -177,7 +178,7 @@ class OptimizeResponse(BaseModel):
 router = APIRouter(prefix="/optimize", tags=["optimize"], dependencies=[Depends(require_role("viewer"))])
 
 
-@router.post("/", response_model=OptimizeResponse)
+@router.post("/", response_model=OptimizeResponse, dependencies=[Depends(check_billing_gate)])
 def run_optimization(payload: OptimizeRequest) -> OptimizeResponse:
     """Run the read-only pricing optimisation pipeline.
 

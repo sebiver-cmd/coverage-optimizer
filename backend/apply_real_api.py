@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field
 
 from dandomain_api import DanDomainClient
 from backend.apply_constants import BATCH_DIR, UUID_RE, AUDIT_LOG
+from backend.billing_gate import check_billing_gate
 from backend.cache import build_caller_key, invalidate_products_cache
 from backend.config import get_settings
 from backend.rbac import require_role
@@ -166,7 +167,7 @@ def apply_status() -> dict[str, bool]:
     return {"enabled": is_apply_enabled()}
 
 
-@router.post("/apply-prices/apply", response_model=ApplyResponse, dependencies=[Depends(require_role("admin"))])
+@router.post("/apply-prices/apply", response_model=ApplyResponse, dependencies=[Depends(require_role("admin")), Depends(check_billing_gate)])
 def apply_prices(payload: ApplyRequest, request: Request) -> ApplyResponse:
     """Apply a previously created batch manifest to the webshop.
 

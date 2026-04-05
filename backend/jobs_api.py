@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from backend.config import get_settings
+from backend.billing_gate import check_billing_gate
 from backend.optimizer_api import OptimizeRequest
 from backend.rbac import require_role
 
@@ -273,7 +274,7 @@ def _parse_iso(value: str | None) -> datetime | None:
         return None
 
 
-@router.post("/optimize", response_model=EnqueueResponse, dependencies=[Depends(require_role("operator"))])
+@router.post("/optimize", response_model=EnqueueResponse, dependencies=[Depends(require_role("operator")), Depends(check_billing_gate)])
 async def enqueue_optimize(payload: OptimizeRequest, request: Request) -> EnqueueResponse:
     """Enqueue an async optimisation job and return its ``job_id``."""
     settings = get_settings()
