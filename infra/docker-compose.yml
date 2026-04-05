@@ -34,7 +34,9 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://api:8000
+      # Browser requests go to localhost:8000 (mapped from the api service).
+      # Override in production with your real API domain.
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
     depends_on:
       - api
 

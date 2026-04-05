@@ -16,6 +16,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   # ---- Backend (Python) ----
   backend:
@@ -33,7 +36,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install pytest httpx fastapi fpdf2
+          pip install pytest httpx fastapi fpdf2  # test-only deps
 
       - name: Run tests
         run: python -m pytest tests/ -v
