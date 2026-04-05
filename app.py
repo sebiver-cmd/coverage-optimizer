@@ -181,13 +181,13 @@ with st.sidebar:
         # Create new profile
         with st.expander("Create new profile"):
             _new_name = st.text_input("Name", key="_new_cred_name", placeholder="Main shop")
-            _new_site = st.text_input("Site ID", key="_new_cred_site", placeholder="1")
+            _new_site = st.number_input("Site ID", key="_new_cred_site", min_value=1, value=1)
             _new_user = st.text_input("API username", key="_new_cred_user")
             _new_pass = st.text_input("API password", key="_new_cred_pass", type="password")
             if st.button("Save profile", use_container_width=True, key="_btn_create_cred"):
                 if _new_name and _new_site and _new_user and _new_pass:
                     _cresult, _cerr2 = create_credential(
-                        backend_url, token, _new_name, _new_site, _new_user, _new_pass,
+                        backend_url, token, _new_name, str(_new_site), _new_user, _new_pass,
                     )
                     if _cresult:
                         st.session_state.pop("_vault_creds", None)

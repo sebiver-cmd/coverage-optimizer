@@ -23,6 +23,7 @@ from ui.backend_client import create_manifest, apply_batch
 from ui.vault_helpers import (
     build_optimize_payload,
     build_catalog_payload,
+    build_apply_payload,
     build_brands_params,
     build_test_connection_payload,
     get_auth_headers,
@@ -637,11 +638,9 @@ def _apply_batch(
 
     Returns the response dict on success, or *None* on error.
     """
-    from ui.vault_helpers import build_apply_payload as _build_apply
-
     base = _normalize_base_url(backend_url)
     url = f"{base}/apply-prices/apply"
-    body = _build_apply(
+    body = build_apply_payload(
         batch_id=batch_id,
         site_id=site_id,
         credential_id=credential_id,

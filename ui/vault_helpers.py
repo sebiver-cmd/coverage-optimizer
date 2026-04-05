@@ -18,14 +18,11 @@ Security invariants
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 import requests
 
 from ui.backend_url import normalize_base_url
-
-logger = logging.getLogger(__name__)
 
 # Default HTTP timeout for auth / credential calls (seconds).
 _AUTH_TIMEOUT = 30
@@ -123,7 +120,7 @@ def list_credentials(
     try:
         resp = requests.get(
             url,
-            headers=_auth_headers(token),
+            headers=get_auth_headers(token),
             timeout=timeout,
         )
         resp.raise_for_status()
@@ -161,7 +158,7 @@ def create_credential(
     try:
         resp = requests.post(
             url,
-            headers=_auth_headers(token),
+            headers=get_auth_headers(token),
             json={
                 "name": name,
                 "site_id": site_id,
@@ -197,7 +194,7 @@ def delete_credential(
     try:
         resp = requests.delete(
             url,
-            headers=_auth_headers(token),
+            headers=get_auth_headers(token),
             timeout=timeout,
         )
         resp.raise_for_status()
@@ -366,9 +363,9 @@ def get_auth_headers(token: str | None) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def _auth_headers(token: str) -> dict[str, str]:
-    """Return auth header dict for requests."""
-    return {"Authorization": f"Bearer {token}"}
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
 
 
 def _inject_credentials(
