@@ -563,13 +563,13 @@ class TestPasswordByteLimit:
 
     def test_signup_exactly_72_byte_password_succeeds(self, client: TestClient):
         """A password of exactly 72 ASCII bytes is within the limit."""
-        password_72 = "A" * 64 + "1!aB" + "zZyY"  # 72 chars = 72 bytes
+        password_exactly_72_bytes = "A" * 64 + "1!aB" + "zZyY"  # 72 chars = 72 bytes
         resp = client.post(
             "/auth/signup",
             json={
                 "tenant_name": "Boundary72",
                 "email": "boundary72@example.com",
-                "password": password_72,
+                "password": password_exactly_72_bytes,
             },
         )
         assert resp.status_code == 201

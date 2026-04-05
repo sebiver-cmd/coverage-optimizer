@@ -41,6 +41,13 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 _BCRYPT_MAX_BYTES = 72
 
 
+def _validate_password_bytes(v: str) -> str:
+    """Reject passwords whose UTF-8 encoding exceeds bcrypt's 72-byte limit."""
+    if len(v.encode("utf-8")) > _BCRYPT_MAX_BYTES:
+        raise ValueError(f"Password must be at most {_BCRYPT_MAX_BYTES} bytes")
+    return v
+
+
 class SignupRequest(BaseModel):
     """Payload for creating a new tenant + first (owner) user."""
 
@@ -51,9 +58,7 @@ class SignupRequest(BaseModel):
     @field_validator("password")
     @classmethod
     def password_max_bytes(cls, v: str) -> str:
-        if len(v.encode("utf-8")) > _BCRYPT_MAX_BYTES:
-            raise ValueError(f"Password must be at most {_BCRYPT_MAX_BYTES} bytes")
-        return v
+        return _validate_password_bytes(v)
 
 
 class LoginRequest(BaseModel):
@@ -65,9 +70,7 @@ class LoginRequest(BaseModel):
     @field_validator("password")
     @classmethod
     def password_max_bytes(cls, v: str) -> str:
-        if len(v.encode("utf-8")) > _BCRYPT_MAX_BYTES:
-            raise ValueError(f"Password must be at most {_BCRYPT_MAX_BYTES} bytes")
-        return v
+        return _validate_password_bytes(v)
 
 
 class TokenResponse(BaseModel):
@@ -144,6 +147,10 @@ def signup(
     try:
         password_hash = hash_password(payload.password)
     except ValueError:
+        # Second line of defence: the Pydantic field_validator already blocks
+        # passwords longer than 72 bytes, but if passlib/bcrypt ever raises
+        # ValueError for any other reason (e.g. a future library version with
+        # stricter checks) we still want a 422 rather than a 500.
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
