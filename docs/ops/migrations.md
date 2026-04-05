@@ -18,7 +18,9 @@ alembic revision --autogenerate -m "short_description"
 ### Naming convention
 
 Use the pattern `NNNN_short_description.py` where `NNNN` is a zero-padded
-sequence number (e.g., `0006_add_analytics_table.py`).
+sequence number (e.g., `0006_add_analytics_table.py`).  This is a
+project-specific convention — after autogenerate creates the file, rename
+it to follow this scheme.
 
 ### Review checklist
 
@@ -65,13 +67,14 @@ alembic downgrade <rev_id>  # to a specific revision
 
 ## CI safety check
 
-The test `tests/test_migrations_sqlite.py` runs `alembic upgrade head`
-against a temporary SQLite database as part of the normal `pytest` suite.
-This catches:
+The test `tests/test_migrations_sqlite.py` validates migration safety as
+part of the normal `pytest` suite.  It verifies:
 
-- Broken revision chains (branching).
-- Missing imports or syntax errors in migration files.
-- Missing tables that core code depends on.
+- The ORM schema (via `Base.metadata.create_all`) produces all expected
+  tables on SQLite — confirming model consistency.
+- The Alembic revision chain is strictly linear (no branching).
+- Every migration file is importable with valid `upgrade()`/`downgrade()`.
+- Revision IDs are unique across all migration files.
 
 The CI check is **required to pass** before merging.
 
