@@ -13,6 +13,7 @@ All billing endpoints return **503** when:
 
 from __future__ import annotations
 
+import json as _json
 import logging
 from typing import Any, Optional
 
@@ -301,8 +302,6 @@ def billing_invoices(
     tenant_id = getattr(request.state, "tenant_id", None)
     if tenant_id is None:
         raise _billing_unavailable("No tenant context.")
-
-    import json as _json
 
     from backend.db import get_db
     from backend.repositories.usage_repo import list_usage_events

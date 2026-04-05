@@ -102,6 +102,10 @@ export function useCachedFetch<T>(
         });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
+    // `fetcher` is intentionally excluded — callers must wrap it in useCallback.
+    // Including it here would cause refetches on every render when the parent
+    // doesn't memoize the fetcher.  The cache-relevant deps (cacheUrl, token,
+    // skip, ttl) are sufficient to detect meaningful changes.
     [cacheUrl, token, skip, ttl],
   );
 
