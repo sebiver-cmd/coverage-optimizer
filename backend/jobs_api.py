@@ -166,10 +166,114 @@ def build_job_record(
 # Router
 # ---------------------------------------------------------------------------
 
-router = APIRouter(prefix="/jobs", tags=["jobs"], dependencies=[Depends(require_role("operator"))])
+router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
-@router.post("/optimize", response_model=EnqueueResponse)
+# ---------------------------------------------------------------------------
+# List endpoint (viewer+ — lower role than the router default)
+# ---------------------------------------------------------------------------
+
+
+class JobListItem(BaseModel):
+    """Single item returned by ``GET /jobs``."""
+
+    id: str
+    status: str
+    created_at: Optional[str] = None
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    user_id: Optional[str] = None
+    error: Optional[str] = None
+
+
+class JobListResponse(BaseModel):
+    """Paginated list returned by ``GET /jobs``."""
+
+    total: int
+    items: list[JobListItem]
+
+
+def _history_unavailable() -> HTTPException:
+    return HTTPException(status_code=503, detail="History requires auth — set SBOPTIMA_AUTH_REQUIRED=true.")
+
+
+@router.get("", response_model=JobListResponse, dependencies=[Depends(require_role("viewer"))])
+def list_jobs_endpoint(
+    request: Request,
+    limit: int = 50,
+    offset: int = 0,
+    status: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+) -> JobListResponse:
+    """Return a paginated, tenant-scoped list of optimisation jobs.
+
+    Only available when ``SBOPTIMA_AUTH_REQUIRED=true``.
+    """
+    settings = get_settings()
+    if not settings.sboptima_auth_required:
+        raise _history_unavailable()
+
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+
+    since_dt = _parse_iso(since)
+    until_dt = _parse_iso(until)
+
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if tenant_id is None:
+        raise _history_unavailable()
+
+    from backend.db import get_db
+    from backend.repositories import jobs_repo
+
+    get_db_fn = request.app.dependency_overrides.get(get_db, get_db)
+    db_gen = get_db_fn()
+    db = next(db_gen)
+    try:
+        total, items = jobs_repo.list_jobs(
+            db,
+            tenant_id=tenant_id,
+            limit=limit,
+            offset=offset,
+            status=status,
+            since=since_dt,
+            until=until_dt,
+        )
+    finally:
+        try:
+            next(db_gen, None)
+        except StopIteration:
+            pass
+
+    return JobListResponse(
+        total=total,
+        items=[
+            JobListItem(
+                id=str(j.id),
+                status=j.status,
+                created_at=j.created_at.isoformat() if j.created_at else None,
+                started_at=j.started_at.isoformat() if j.started_at else None,
+                finished_at=j.finished_at.isoformat() if j.finished_at else None,
+                user_id=str(j.user_id) if j.user_id else None,
+                error=j.error,
+            )
+            for j in items
+        ],
+    )
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    """Parse an ISO datetime string, returning *None* on failure or ``None`` input."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+
+
+@router.post("/optimize", response_model=EnqueueResponse, dependencies=[Depends(require_role("operator"))])
 async def enqueue_optimize(payload: OptimizeRequest, request: Request) -> EnqueueResponse:
     """Enqueue an async optimisation job and return its ``job_id``."""
     settings = get_settings()
@@ -257,7 +361,7 @@ def _persist_job_to_db(request: Request, job_id: str, payload: OptimizeRequest) 
         logger.debug("Failed to persist job to DB (non-fatal)", exc_info=True)
 
 
-@router.get("/{job_id}", response_model=JobStatusResponse)
+@router.get("/{job_id}", response_model=JobStatusResponse, dependencies=[Depends(require_role("operator"))])
 async def get_job_status(job_id: str, request: Request) -> JobStatusResponse:
     """Return the current status (and result when completed) of a job."""
     _validate_uuid(job_id)

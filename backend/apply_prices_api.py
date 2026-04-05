@@ -132,6 +132,113 @@ class CreateManifestResponse(BaseModel):
 router = APIRouter(tags=["apply-prices"])
 
 
+# ---------------------------------------------------------------------------
+# Batch list endpoint (viewer+)
+# ---------------------------------------------------------------------------
+
+
+class BatchListItem(BaseModel):
+    """Single item returned by ``GET /apply-prices/batches``."""
+
+    id: str
+    mode: str
+    status: str
+    created_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    user_id: Optional[str] = None
+
+
+class BatchListResponse(BaseModel):
+    """Paginated list returned by ``GET /apply-prices/batches``."""
+
+    total: int
+    items: list[BatchListItem]
+
+
+def _history_unavailable() -> HTTPException:
+    return HTTPException(status_code=503, detail="History requires auth — set SBOPTIMA_AUTH_REQUIRED=true.")
+
+
+def _parse_iso(value: str | None):
+    """Parse an ISO datetime string, returning *None* on failure."""
+    if not value:
+        return None
+    try:
+        from datetime import datetime as _dt
+        return _dt.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+
+
+@router.get("/apply-prices/batches", response_model=BatchListResponse, dependencies=[Depends(require_role("viewer"))])
+def list_batches_endpoint(
+    request: Request,
+    limit: int = 50,
+    offset: int = 0,
+    status: Optional[str] = None,
+    mode: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+) -> BatchListResponse:
+    """Return a paginated, tenant-scoped list of apply batches.
+
+    Only available when ``SBOPTIMA_AUTH_REQUIRED=true``.
+    """
+    from backend.config import get_settings as _get_settings
+
+    settings = _get_settings()
+    if not settings.sboptima_auth_required:
+        raise _history_unavailable()
+
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+
+    since_dt = _parse_iso(since)
+    until_dt = _parse_iso(until)
+
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if tenant_id is None:
+        raise _history_unavailable()
+
+    from backend.db import get_db
+    from backend.repositories import batches_repo
+
+    get_db_fn = request.app.dependency_overrides.get(get_db, get_db)
+    db_gen = get_db_fn()
+    db = next(db_gen)
+    try:
+        total, items = batches_repo.list_batches(
+            db,
+            tenant_id=tenant_id,
+            limit=limit,
+            offset=offset,
+            status=status,
+            mode=mode,
+            since=since_dt,
+            until=until_dt,
+        )
+    finally:
+        try:
+            next(db_gen, None)
+        except StopIteration:
+            pass
+
+    return BatchListResponse(
+        total=total,
+        items=[
+            BatchListItem(
+                id=str(b.id),
+                mode=b.mode,
+                status=b.status,
+                created_at=b.created_at.isoformat() if b.created_at else None,
+                finished_at=b.finished_at.isoformat() if b.finished_at else None,
+                user_id=str(b.user_id) if b.user_id else None,
+            )
+            for b in items
+        ],
+    )
+
+
 @router.post("/apply-prices/dry-run", response_model=DryRunResponse, dependencies=[Depends(require_role("operator"))])
 def dry_run_apply(payload: DryRunRequest, request: Request) -> DryRunResponse:
     """Compute a dry-run change set without writing to the webshop.

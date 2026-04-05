@@ -93,16 +93,30 @@ def list_jobs(
     tenant_id: uuid.UUID,
     limit: int = 50,
     offset: int = 0,
-) -> list[OptimizationJob]:
-    """List jobs for a tenant, newest first."""
-    return (
-        db.query(OptimizationJob)
-        .filter(OptimizationJob.tenant_id == tenant_id)
-        .order_by(OptimizationJob.created_at.desc())
+    status: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> tuple[int, list[OptimizationJob]]:
+    """List jobs for a tenant, newest first, with optional filters.
+
+    Returns ``(total_count, items)`` where *total_count* is the number
+    of rows matching the filters (before limit/offset).
+    """
+    q = db.query(OptimizationJob).filter(OptimizationJob.tenant_id == tenant_id)
+    if status is not None:
+        q = q.filter(OptimizationJob.status == status)
+    if since is not None:
+        q = q.filter(OptimizationJob.created_at >= since)
+    if until is not None:
+        q = q.filter(OptimizationJob.created_at <= until)
+    total = q.count()
+    items = (
+        q.order_by(OptimizationJob.created_at.desc())
         .offset(offset)
         .limit(limit)
         .all()
     )
+    return total, items
 
 
 def emit_job_audit(
