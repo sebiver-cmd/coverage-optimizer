@@ -64,13 +64,16 @@ class Settings(BaseSettings):
         description="Custom OpenAI-compatible base URL.",
     )
 
-    # -- CORS -------------------------------------------------------------
+    # -- CORS (legacy alias — kept for backward compatibility) ------------
     #: Stored as a raw comma-separated string because pydantic-settings
     #: attempts JSON-parse on complex types (``list``) before validators
     #: run.  Use :meth:`get_cors_origins_list` to obtain a ``list[str]``.
     cors_origins: str = Field(
         default="",
-        description="Comma-separated allowed origins for CORS.",
+        description=(
+            "Legacy comma-separated allowed origins for CORS. "
+            "Prefer CORS_ALLOWED_ORIGINS; this is checked as fallback."
+        ),
     )
 
     # -- Backend URL (consumed by Streamlit, declared here for docs) ------
@@ -159,6 +162,42 @@ class Settings(BaseSettings):
         ),
     )
 
+    # -- Security hardening (Task 10.1) ------------------------------------
+    cors_allowed_origins: str = Field(
+        default="",
+        description=(
+            "Comma-separated allowed origins for CORS (e.g. "
+            "'https://app.example.com,https://admin.example.com'). "
+            "In dev, defaults to http://localhost:8501 if left empty."
+        ),
+    )
+    cors_allowed_origin_regex: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional regex pattern for allowed CORS origins. "
+            "Evaluated in addition to the explicit list."
+        ),
+    )
+    security_headers_enabled: bool = Field(
+        default=True,
+        description="Attach standard security headers on every response.",
+    )
+    hsts_enabled: bool = Field(
+        default=False,
+        description=(
+            "Include Strict-Transport-Security header. "
+            "Only enable when behind TLS termination."
+        ),
+    )
+    max_request_body_bytes: int = Field(
+        default=1_000_000,
+        description="Maximum allowed Content-Length in bytes (default 1 MB).",
+    )
+    webhook_rate_limit_per_minute: int = Field(
+        default=60,
+        description="Rate-limit ceiling for the webhook endpoint (per minute).",
+    )
+
     # -- Observability (Task 9.1) -----------------------------------------
     metrics_enabled: bool = Field(
         default=False,
@@ -222,10 +261,20 @@ class Settings(BaseSettings):
     # -----------------------------------------------------------------
 
     def get_cors_origins_list(self) -> list[str]:
-        """Parse :attr:`cors_origins` into a list of origin strings."""
-        if not self.cors_origins:
-            return []
-        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        """Parse CORS allowed origins into a list.
+
+        Merges :attr:`cors_allowed_origins` (preferred) and legacy
+        :attr:`cors_origins`.  In *dev* mode with no explicit origins,
+        returns ``["http://localhost:8501"]`` as a convenience default.
+        In *prod*, returns an empty list when nothing is configured
+        (CORS middleware will simply not be added).
+        """
+        raw = self.cors_allowed_origins or self.cors_origins or ""
+        # cors_allowed_origins takes precedence; cors_origins is legacy fallback
+        origins = [o.strip() for o in raw.split(",") if o.strip()]
+        if not origins and self.sboptima_env == "dev":
+            origins = ["http://localhost:8501"]
+        return origins
 
     def get_jwt_secret(self) -> str:
         """Return the effective JWT signing secret.

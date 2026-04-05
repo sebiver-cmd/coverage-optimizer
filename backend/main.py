@@ -39,6 +39,8 @@ from backend.logging_config import setup_logging
 from backend.metrics import get_metrics_router
 from backend.middleware.request_id import RequestIDMiddleware
 from backend.middleware.access_log import AccessLogMiddleware
+from backend.middleware.security_headers import SecurityHeadersMiddleware
+from backend.middleware.request_size_limit import RequestSizeLimitMiddleware
 from backend.rbac import require_role
 
 # Activate structured JSON logging as early as possible.
@@ -117,19 +119,27 @@ app.include_router(get_metrics_router())
 # Order matters: RequestIDMiddleware must wrap AccessLogMiddleware so that
 # the request_id is available when the access log line is emitted.
 # Starlette processes middleware in reverse registration order (last added
-# is outermost), so we add AccessLog first, then RequestID.
+# is outermost), so we add innermost first, outermost last.
 app.add_middleware(AccessLogMiddleware)
 app.add_middleware(RequestIDMiddleware)
 
-# -- CORS middleware (only when origins are configured) ------------------
-_cors_origins = get_settings().get_cors_origins_list()
-if _cors_origins:
+# -- Security middleware (Task 10.1) ------------------------------------
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RequestSizeLimitMiddleware)
+
+# -- CORS middleware (Task 10.1 – explicit, no wildcard) ----------------
+_settings = get_settings()
+_cors_origins = _settings.get_cors_origins_list()
+_cors_regex = _settings.cors_allowed_origin_regex or None
+
+if _cors_origins or _cors_regex:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origin_regex=_cors_regex,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
     )
 
 
