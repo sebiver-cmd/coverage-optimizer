@@ -84,7 +84,7 @@ def _render_jobs(backend_url: str, token: str) -> None:
     for j in items:
         rows.append(
             {
-                "ID": j["id"][:8] + "…",
+                "ID": _short_id(j["id"]),
                 "Status": j.get("status", ""),
                 "Created": _short_ts(j.get("created_at")),
                 "Finished": _short_ts(j.get("finished_at")),
@@ -134,7 +134,7 @@ def _render_batches(backend_url: str, token: str) -> None:
     for b in items:
         rows.append(
             {
-                "ID": b["id"][:8] + "…",
+                "ID": _short_id(b["id"]),
                 "Mode": b.get("mode", ""),
                 "Status": b.get("status", ""),
                 "Created": _short_ts(b.get("created_at")),
@@ -179,7 +179,7 @@ def _render_audit(backend_url: str, token: str) -> None:
         meta_str = ", ".join(f"{k}={v}" for k, v in meta.items())[:120]
         rows.append(
             {
-                "ID": e["id"][:8] + "…",
+                "ID": _short_id(e["id"]),
                 "Event": e.get("event_type", ""),
                 "Created": _short_ts(e.get("created_at")),
                 "Meta": meta_str,
@@ -198,3 +198,10 @@ def _short_ts(iso: str | None) -> str:
     if not iso:
         return ""
     return iso[:16].replace("T", " ")
+
+
+def _short_id(full_id: str) -> str:
+    """Return the first 8 chars of an ID followed by ``…``."""
+    if len(full_id) <= 8:
+        return full_id
+    return full_id[:8] + "…"

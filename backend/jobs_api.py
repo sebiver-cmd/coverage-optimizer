@@ -166,7 +166,7 @@ def build_job_record(
 # Router
 # ---------------------------------------------------------------------------
 
-router = APIRouter(prefix="/jobs", tags=["jobs"], dependencies=[Depends(require_role("operator"))])
+router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +273,7 @@ def _parse_iso(value: str | None) -> datetime | None:
         return None
 
 
-@router.post("/optimize", response_model=EnqueueResponse)
+@router.post("/optimize", response_model=EnqueueResponse, dependencies=[Depends(require_role("operator"))])
 async def enqueue_optimize(payload: OptimizeRequest, request: Request) -> EnqueueResponse:
     """Enqueue an async optimisation job and return its ``job_id``."""
     settings = get_settings()
@@ -361,7 +361,7 @@ def _persist_job_to_db(request: Request, job_id: str, payload: OptimizeRequest) 
         logger.debug("Failed to persist job to DB (non-fatal)", exc_info=True)
 
 
-@router.get("/{job_id}", response_model=JobStatusResponse)
+@router.get("/{job_id}", response_model=JobStatusResponse, dependencies=[Depends(require_role("operator"))])
 async def get_job_status(job_id: str, request: Request) -> JobStatusResponse:
     """Return the current status (and result when completed) of a job."""
     _validate_uuid(job_id)

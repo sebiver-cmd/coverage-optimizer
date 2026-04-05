@@ -501,7 +501,7 @@ add per-caller rate limiting.
 **Mitigation**: use `passlib[bcrypt]`; never store plaintext.
 
 ### Task 4.3 — RBAC middleware
-- [ ] Task 4.3
+- [x] Task 4.3
 
 **Objective**: Role-based access control on all API routes.
 
@@ -531,7 +531,7 @@ for local dev / migration period.
 ## Phase 5 — Credential Vault + Secret Handling
 
 ### Task 5.1 — Encrypted credential storage
-- [ ] Task 5.1
+- [x] Task 5.1
 
 **Objective**: Store DanDomain SOAP credentials per tenant, encrypted at rest.
 
@@ -614,7 +614,7 @@ context.
 ## Phase 6 — DB Migration of Batches + Audit (preserve guardrails)
 
 ### Task 6.1 — Batch manifest + audit tables
-- [ ] Task 6.1
+- [x] Task 6.1
 
 **Objective**: Postgres tables for batch manifests and audit, replacing
 `data/apply_batches/` and `data/apply_audit.log`.
@@ -645,11 +645,13 @@ context.
 **Mitigation**: dual-write (file + DB) during transition; remove file path once
 verified.
 
-### Task 6.2 — Apply endpoint uses DB (guardrails preserved)
-- [ ] Task 6.2
+### Task 6.2 — Apply endpoint uses DB (guardrails preserved) + Tenant Dashboards
+- [x] Task 6.2
 
 **Objective**: `POST /apply-prices/apply` reads manifest from DB, writes audit
-to DB, uses DB status for idempotency.
+to DB, uses DB status for idempotency. Additionally, tenant dashboard list
+endpoints (`GET /jobs`, `GET /apply-prices/batches`, `GET /audit`) and
+Streamlit History page added for tenant-scoped job/batch/audit history.
 
 **Scope**:
 - `backend/apply_real_api.py`: load from DB instead of file; set `status=applied`.
