@@ -18,7 +18,7 @@ export default function Navbar() {
   if (!user) return null;
 
   return (
-    <nav className="bg-gray-900 text-white px-6 py-3 flex items-center gap-6 text-sm">
+    <nav aria-label="Main navigation" className="bg-gray-900 text-white px-6 py-3 flex items-center gap-6 text-sm">
       <Link href="/dashboard" className="font-bold text-lg tracking-tight mr-4">
         SB‑Optima
       </Link>
@@ -27,7 +27,8 @@ export default function Navbar() {
         <Link
           key={n.href}
           href={n.href}
-          className={`hover:text-blue-300 transition-colors ${
+          aria-current={path.startsWith(n.href) ? "page" : undefined}
+          className={`hover:text-blue-300 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-900 rounded ${
             path.startsWith(n.href) ? "text-blue-400 font-semibold" : "text-gray-300"
           }`}
         >
@@ -41,7 +42,7 @@ export default function Navbar() {
         </span>
         <button
           onClick={logout}
-          className="text-gray-400 hover:text-white text-xs underline"
+          className="text-gray-400 hover:text-white text-xs underline focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-900 rounded"
         >
           Sign out
         </button>

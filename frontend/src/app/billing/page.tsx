@@ -110,15 +110,16 @@ function BillingContent() {
           <h2 className="text-lg font-semibold mb-3">Upgrade Plan</h2>
 
           {error && (
-            <div className="bg-red-50 text-red-700 border border-red-200 rounded p-3 mb-4 text-sm">
+            <div role="alert" aria-live="polite" className="bg-red-50 text-red-700 border border-red-200 rounded p-3 mb-4 text-sm">
               {error}
             </div>
           )}
 
           <div className="flex gap-3 items-end">
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Target Plan</label>
+              <label htmlFor="billing-plan" className="block text-xs font-medium text-gray-500 mb-1">Target Plan</label>
               <select
+                id="billing-plan"
                 value={selectedPlan}
                 onChange={(e) => setSelectedPlan(e.target.value)}
                 className="border rounded px-3 py-1.5 text-sm"

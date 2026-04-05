@@ -99,7 +99,7 @@ function DashboardContent() {
             No credentials stored. Add one in the Price Optimizer to connect to DanDomain.
           </p>
         ) : (
-          <table className="w-full text-sm">
+          <table aria-label="Credential profiles" className="w-full text-sm">
             <thead>
               <tr className="text-left text-gray-500 border-b">
                 <th className="pb-2">Label</th>

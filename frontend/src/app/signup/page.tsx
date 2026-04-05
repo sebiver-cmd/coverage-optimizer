@@ -37,7 +37,7 @@ export default function SignupPage() {
         <h1 className="text-2xl font-bold text-center mb-6">Create a new tenant</h1>
 
         {error && (
-          <div className="bg-red-50 text-red-700 border border-red-200 rounded p-3 mb-4 text-sm">
+          <div role="alert" aria-live="polite" className="bg-red-50 text-red-700 border border-red-200 rounded p-3 mb-4 text-sm">
             {error}
           </div>
         )}

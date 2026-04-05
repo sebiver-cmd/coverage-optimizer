@@ -110,30 +110,38 @@ function HistoryContent() {
         {tab === "jobs" && (
           <>
             <div className="flex gap-3 mb-4">
-              <select
-                value={jobStatusFilter}
-                onChange={(e) => setJobStatusFilter(e.target.value)}
-                className="border rounded px-2 py-1 text-sm"
-              >
-                <option value="">All statuses</option>
-                <option value="queued">Queued</option>
-                <option value="running">Running</option>
-                <option value="complete">Complete</option>
-                <option value="failed">Failed</option>
-              </select>
-              <select
-                value={jobLimit}
-                onChange={(e) => setJobLimit(Number(e.target.value))}
-                className="border rounded px-2 py-1 text-sm"
-              >
-                {[25, 50, 100].map((n) => (
-                  <option key={n} value={n}>
-                    {n} rows
-                  </option>
-                ))}
-              </select>
+              <div>
+                <label htmlFor="job-status-filter" className="sr-only">Job status filter</label>
+                <select
+                  id="job-status-filter"
+                  value={jobStatusFilter}
+                  onChange={(e) => setJobStatusFilter(e.target.value)}
+                  className="border rounded px-2 py-1 text-sm"
+                >
+                  <option value="">All statuses</option>
+                  <option value="queued">Queued</option>
+                  <option value="running">Running</option>
+                  <option value="complete">Complete</option>
+                  <option value="failed">Failed</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="job-limit" className="sr-only">Rows per page</label>
+                <select
+                  id="job-limit"
+                  value={jobLimit}
+                  onChange={(e) => setJobLimit(Number(e.target.value))}
+                  className="border rounded px-2 py-1 text-sm"
+                >
+                  {[25, 50, 100].map((n) => (
+                    <option key={n} value={n}>
+                      {n} rows
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
-            <table className="w-full text-xs">
+            <table aria-label="Optimisation jobs" className="w-full text-xs">
               <thead>
                 <tr className="text-left text-gray-500 border-b">
                   <th className="pb-1 pr-2">Job ID</th>
@@ -171,39 +179,51 @@ function HistoryContent() {
         {tab === "batches" && (
           <>
             <div className="flex gap-3 mb-4">
-              <select
-                value={batchStatusFilter}
-                onChange={(e) => setBatchStatusFilter(e.target.value)}
-                className="border rounded px-2 py-1 text-sm"
-              >
-                <option value="">All statuses</option>
-                <option value="pending">Pending</option>
-                <option value="applied">Applied</option>
-                <option value="failed">Failed</option>
-              </select>
-              <select
-                value={batchModeFilter}
-                onChange={(e) => setBatchModeFilter(e.target.value)}
-                className="border rounded px-2 py-1 text-sm"
-              >
-                <option value="">All modes</option>
-                <option value="dry_run">Dry Run</option>
-                <option value="apply">Apply</option>
-                <option value="create_manifest">Create Manifest</option>
-              </select>
-              <select
-                value={batchLimit}
-                onChange={(e) => setBatchLimit(Number(e.target.value))}
-                className="border rounded px-2 py-1 text-sm"
-              >
-                {[25, 50, 100].map((n) => (
-                  <option key={n} value={n}>
-                    {n} rows
-                  </option>
-                ))}
-              </select>
+              <div>
+                <label htmlFor="batch-status-filter" className="sr-only">Batch status filter</label>
+                <select
+                  id="batch-status-filter"
+                  value={batchStatusFilter}
+                  onChange={(e) => setBatchStatusFilter(e.target.value)}
+                  className="border rounded px-2 py-1 text-sm"
+                >
+                  <option value="">All statuses</option>
+                  <option value="pending">Pending</option>
+                  <option value="applied">Applied</option>
+                  <option value="failed">Failed</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="batch-mode-filter" className="sr-only">Batch mode filter</label>
+                <select
+                  id="batch-mode-filter"
+                  value={batchModeFilter}
+                  onChange={(e) => setBatchModeFilter(e.target.value)}
+                  className="border rounded px-2 py-1 text-sm"
+                >
+                  <option value="">All modes</option>
+                  <option value="dry_run">Dry Run</option>
+                  <option value="apply">Apply</option>
+                  <option value="create_manifest">Create Manifest</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="batch-limit" className="sr-only">Rows per page</label>
+                <select
+                  id="batch-limit"
+                  value={batchLimit}
+                  onChange={(e) => setBatchLimit(Number(e.target.value))}
+                  className="border rounded px-2 py-1 text-sm"
+                >
+                  {[25, 50, 100].map((n) => (
+                    <option key={n} value={n}>
+                      {n} rows
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
-            <table className="w-full text-xs">
+            <table aria-label="Apply batches" className="w-full text-xs">
               <thead>
                 <tr className="text-left text-gray-500 border-b">
                   <th className="pb-1 pr-2">Batch ID</th>
@@ -241,26 +261,34 @@ function HistoryContent() {
         {tab === "audit" && (
           <>
             <div className="flex gap-3 mb-4">
-              <input
-                type="text"
-                placeholder="Filter by event type"
-                value={eventTypeFilter}
-                onChange={(e) => setEventTypeFilter(e.target.value)}
-                className="border rounded px-2 py-1 text-sm w-48"
-              />
-              <select
-                value={auditLimit}
-                onChange={(e) => setAuditLimit(Number(e.target.value))}
-                className="border rounded px-2 py-1 text-sm"
-              >
-                {[25, 50, 100].map((n) => (
-                  <option key={n} value={n}>
-                    {n} rows
-                  </option>
-                ))}
-              </select>
+              <div>
+                <label htmlFor="audit-event-type" className="sr-only">Event type filter</label>
+                <input
+                  id="audit-event-type"
+                  type="text"
+                  placeholder="Filter by event type"
+                  value={eventTypeFilter}
+                  onChange={(e) => setEventTypeFilter(e.target.value)}
+                  className="border rounded px-2 py-1 text-sm w-48"
+                />
+              </div>
+              <div>
+                <label htmlFor="audit-limit" className="sr-only">Rows per page</label>
+                <select
+                  id="audit-limit"
+                  value={auditLimit}
+                  onChange={(e) => setAuditLimit(Number(e.target.value))}
+                  className="border rounded px-2 py-1 text-sm"
+                >
+                  {[25, 50, 100].map((n) => (
+                    <option key={n} value={n}>
+                      {n} rows
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
-            <table className="w-full text-xs">
+            <table aria-label="Audit events" className="w-full text-xs">
               <thead>
                 <tr className="text-left text-gray-500 border-b">
                   <th className="pb-1 pr-2">ID</th>
