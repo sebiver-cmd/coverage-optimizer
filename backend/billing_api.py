@@ -245,6 +245,12 @@ async def billing_webhook(request: Request) -> Response:
             result.get("handled"),
             result.get("event_type"),
         )
+        # Record metric (Task 9.1)
+        try:
+            from backend.metrics import record_billing_webhook
+            record_billing_webhook(result.get("event_type", "unknown"))
+        except Exception:  # pragma: no cover
+            pass
         return Response(status_code=200, content="ok")
     finally:
         try:

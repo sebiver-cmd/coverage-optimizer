@@ -19,3 +19,4 @@ passlib[bcrypt]
 python-jose[cryptography]
 cryptography
 stripe
+prometheus_client

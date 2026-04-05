@@ -223,6 +223,12 @@ def check_quota(
             limit=limit,
             reset_at=reset_at,
         )
+        # Record metric (Task 9.1)
+        try:
+            from backend.metrics import record_quota_exceeded
+            record_quota_exceeded(action)
+        except Exception:  # pragma: no cover
+            pass
         raise QuotaExceeded(
             action=action,
             used=used,
