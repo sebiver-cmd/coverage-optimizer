@@ -61,6 +61,9 @@ ADMIN_ENDPOINTS = [
     ("GET", "/tenants/00000000-0000-4000-a000-000000000002"),
     ("POST", "/tenants/00000000-0000-4000-a000-000000000002/users"),
     ("GET", "/tenants/00000000-0000-4000-a000-000000000002/users"),
+    ("POST", "/credentials/"),
+    ("GET", "/credentials/"),
+    ("DELETE", "/credentials/00000000-0000-4000-a000-000000000003"),
 ]
 
 # Auth endpoints: /auth/me requires viewer when auth is enabled.
@@ -177,6 +180,8 @@ def _request(client: TestClient, method: str, path: str, headers: dict | None = 
         return client.get(path, headers=headers)
     elif method == "POST":
         return client.post(path, json={}, headers=headers)
+    elif method == "DELETE":
+        return client.delete(path, headers=headers)
     raise ValueError(f"Unsupported method: {method}")
 
 
