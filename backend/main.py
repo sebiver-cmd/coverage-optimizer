@@ -34,7 +34,14 @@ from backend.plan_api import router as plan_router
 from backend.billing_api import router as billing_router
 from backend.config import get_settings
 from backend.db import check_db, init_engine
+from backend.logging_config import setup_logging
+from backend.metrics import get_metrics_router
+from backend.middleware.request_id import RequestIDMiddleware
+from backend.middleware.access_log import AccessLogMiddleware
 from backend.rbac import require_role
+
+# Activate structured JSON logging as early as possible.
+setup_logging()
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +109,15 @@ app.include_router(audit_router)
 app.include_router(usage_router)
 app.include_router(plan_router)
 app.include_router(billing_router)
+app.include_router(get_metrics_router())
+
+# -- Observability middleware (Task 9.1) --------------------------------
+# Order matters: RequestIDMiddleware must wrap AccessLogMiddleware so that
+# the request_id is available when the access log line is emitted.
+# Starlette processes middleware in reverse registration order (last added
+# is outermost), so we add AccessLog first, then RequestID.
+app.add_middleware(AccessLogMiddleware)
+app.add_middleware(RequestIDMiddleware)
 
 # -- CORS middleware (only when origins are configured) ------------------
 _cors_origins = get_settings().get_cors_origins_list()

@@ -159,6 +159,15 @@ class Settings(BaseSettings):
         ),
     )
 
+    # -- Observability (Task 9.1) -----------------------------------------
+    metrics_enabled: bool = Field(
+        default=False,
+        description=(
+            "When True, expose a /metrics endpoint (Prometheus format). "
+            "The endpoint requires admin+ role when auth is enabled."
+        ),
+    )
+
     # -- Stripe / Billing (Task 8.1) --------------------------------------
     stripe_secret_key: Optional[str] = Field(
         default=None,

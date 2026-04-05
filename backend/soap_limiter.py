@@ -109,6 +109,12 @@ def soap_limit(caller_key: str | None = None) -> Iterator[None]:
         yield
     finally:
         sem.release()
+        # Record the SOAP call for metrics (Task 9.1)
+        try:
+            from backend.metrics import record_soap_call
+            record_soap_call()
+        except Exception:  # pragma: no cover — metrics must never break SOAP calls
+            pass
 
 
 # ---------------------------------------------------------------------------
