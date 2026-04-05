@@ -375,7 +375,7 @@ def _persist_apply_batch_to_db(
                 "skipped_count": skipped_count,
                 "failed_count": failed_count,
             }
-            status = "completed" if failed_count == 0 else "completed"
+            status = "completed" if failed_count == 0 else "completed_with_errors"
             batches_repo.update_batch_status(
                 db,
                 batch_id=_uuid.UUID(batch_id),
