@@ -3,7 +3,7 @@
 import RequireAuth from "@/components/RequireAuth";
 import PageShell from "@/components/PageShell";
 import { useAuth } from "@/lib/auth-context";
-import { useEffect, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   listJobs,
   listBatches,
@@ -12,70 +12,69 @@ import {
   type BatchListItem,
   type AuditEvent,
 } from "@/lib/api";
+import { useCachedFetch } from "@/lib/use-cached-fetch";
+import { SkeletonTable } from "@/components/Skeleton";
+import VirtualTable, { type ColumnDef } from "@/components/VirtualTable";
 
 type Tab = "jobs" | "batches" | "audit";
 
 function HistoryContent() {
   const { token } = useAuth();
   const [tab, setTab] = useState<Tab>("jobs");
-  const [error, setError] = useState<string | null>(null);
 
   /* ---- Jobs ---- */
-  const [jobs, setJobs] = useState<JobListItem[]>([]);
   const [jobStatusFilter, setJobStatusFilter] = useState("");
   const [jobLimit, setJobLimit] = useState(50);
+  const jobsFetcher = useCallback(
+    () => listJobs(token!, { status: jobStatusFilter || undefined, limit: jobLimit }),
+    [token, jobStatusFilter, jobLimit],
+  );
+  const { data: jobs, loading: jobsLoading, error: jobsError } = useCachedFetch<JobListItem[]>(
+    jobsFetcher,
+    `/jobs?status=${jobStatusFilter}&limit=${jobLimit}`,
+    token,
+    { ttl: 30_000, skip: tab !== "jobs" },
+  );
 
   /* ---- Batches ---- */
-  const [batches, setBatches] = useState<BatchListItem[]>([]);
   const [batchStatusFilter, setBatchStatusFilter] = useState("");
   const [batchModeFilter, setBatchModeFilter] = useState("");
   const [batchLimit, setBatchLimit] = useState(50);
-
-  /* ---- Audit ---- */
-  const [audit, setAudit] = useState<AuditEvent[]>([]);
-  const [eventTypeFilter, setEventTypeFilter] = useState("");
-  const [auditLimit, setAuditLimit] = useState(50);
-
-  /* Fetch on tab/filter change */
-  useEffect(() => {
-    if (!token) return;
-    if (tab === "jobs") {
-      setError(null);
-      listJobs(token, {
-        status: jobStatusFilter || undefined,
-        limit: jobLimit,
-      })
-        .then(setJobs)
-        .catch((e) => setError(e instanceof Error ? e.message : "Failed to load jobs"));
-    }
-  }, [token, tab, jobStatusFilter, jobLimit]);
-
-  useEffect(() => {
-    if (!token) return;
-    if (tab === "batches") {
-      setError(null);
-      listBatches(token, {
+  const batchesFetcher = useCallback(
+    () =>
+      listBatches(token!, {
         status: batchStatusFilter || undefined,
         mode: batchModeFilter || undefined,
         limit: batchLimit,
-      })
-        .then(setBatches)
-        .catch((e) => setError(e instanceof Error ? e.message : "Failed to load batches"));
-    }
-  }, [token, tab, batchStatusFilter, batchModeFilter, batchLimit]);
+      }),
+    [token, batchStatusFilter, batchModeFilter, batchLimit],
+  );
+  const { data: batches, loading: batchesLoading, error: batchesError } = useCachedFetch<BatchListItem[]>(
+    batchesFetcher,
+    `/batches?status=${batchStatusFilter}&mode=${batchModeFilter}&limit=${batchLimit}`,
+    token,
+    { ttl: 30_000, skip: tab !== "batches" },
+  );
 
-  useEffect(() => {
-    if (!token) return;
-    if (tab === "audit") {
-      setError(null);
-      listAuditEvents(token, {
+  /* ---- Audit ---- */
+  const [eventTypeFilter, setEventTypeFilter] = useState("");
+  const [auditLimit, setAuditLimit] = useState(50);
+  const auditFetcher = useCallback(
+    () =>
+      listAuditEvents(token!, {
         event_type: eventTypeFilter || undefined,
         limit: auditLimit,
-      })
-        .then(setAudit)
-        .catch((e) => setError(e instanceof Error ? e.message : "Failed to load audit events"));
-    }
-  }, [token, tab, eventTypeFilter, auditLimit]);
+      }),
+    [token, eventTypeFilter, auditLimit],
+  );
+  const { data: audit, loading: auditLoading, error: auditError } = useCachedFetch<AuditEvent[]>(
+    auditFetcher,
+    `/audit?event_type=${eventTypeFilter}&limit=${auditLimit}`,
+    token,
+    { ttl: 30_000, skip: tab !== "audit" },
+  );
+
+  const error = (tab === "jobs" && jobsError) || (tab === "batches" && batchesError) || (tab === "audit" && auditError) || null;
 
   return (
     <PageShell title="History">
@@ -141,37 +140,17 @@ function HistoryContent() {
                 </select>
               </div>
             </div>
-            <table aria-label="Optimisation jobs" className="w-full text-xs">
-              <thead>
-                <tr className="text-left text-gray-500 border-b">
-                  <th className="pb-1 pr-2">Job ID</th>
-                  <th className="pb-1 pr-2">Status</th>
-                  <th className="pb-1 pr-2">Created</th>
-                  <th className="pb-1 pr-2">Finished</th>
-                  <th className="pb-1">Error</th>
-                </tr>
-              </thead>
-              <tbody>
-                {jobs.map((j) => (
-                  <tr key={j.job_id} className="border-b last:border-0">
-                    <td className="py-1 pr-2 font-mono">{j.job_id.slice(0, 8)}…</td>
-                    <td className="py-1 pr-2">
-                      <StatusBadge status={j.status} />
-                    </td>
-                    <td className="py-1 pr-2 text-gray-500">{fmtDate(j.created_at)}</td>
-                    <td className="py-1 pr-2 text-gray-500">{j.finished_at ? fmtDate(j.finished_at) : "—"}</td>
-                    <td className="py-1 text-red-500 truncate max-w-[200px]">{j.error ?? ""}</td>
-                  </tr>
-                ))}
-                {jobs.length === 0 && (
-                  <tr>
-                    <td colSpan={5} className="py-4 text-center text-gray-400">
-                      No jobs found
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+            {jobsLoading ? (
+              <SkeletonTable rows={5} cols={5} />
+            ) : (
+              <VirtualTable
+                rows={jobs ?? []}
+                columns={jobColumns}
+                ariaLabel="Optimisation jobs"
+                getRowKey={(j) => j.job_id}
+                emptyMessage="No jobs found"
+              />
+            )}
           </>
         )}
 
@@ -223,37 +202,17 @@ function HistoryContent() {
                 </select>
               </div>
             </div>
-            <table aria-label="Apply batches" className="w-full text-xs">
-              <thead>
-                <tr className="text-left text-gray-500 border-b">
-                  <th className="pb-1 pr-2">Batch ID</th>
-                  <th className="pb-1 pr-2">Mode</th>
-                  <th className="pb-1 pr-2">Status</th>
-                  <th className="pb-1 pr-2">Created</th>
-                  <th className="pb-1">Finished</th>
-                </tr>
-              </thead>
-              <tbody>
-                {batches.map((b) => (
-                  <tr key={b.batch_id} className="border-b last:border-0">
-                    <td className="py-1 pr-2 font-mono">{b.batch_id.slice(0, 8)}…</td>
-                    <td className="py-1 pr-2">{b.mode}</td>
-                    <td className="py-1 pr-2">
-                      <StatusBadge status={b.status} />
-                    </td>
-                    <td className="py-1 pr-2 text-gray-500">{fmtDate(b.created_at)}</td>
-                    <td className="py-1 text-gray-500">{b.finished_at ? fmtDate(b.finished_at) : "—"}</td>
-                  </tr>
-                ))}
-                {batches.length === 0 && (
-                  <tr>
-                    <td colSpan={5} className="py-4 text-center text-gray-400">
-                      No batches found
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+            {batchesLoading ? (
+              <SkeletonTable rows={5} cols={5} />
+            ) : (
+              <VirtualTable
+                rows={batches ?? []}
+                columns={batchColumns}
+                ariaLabel="Apply batches"
+                getRowKey={(b) => b.batch_id}
+                emptyMessage="No batches found"
+              />
+            )}
           </>
         )}
 
@@ -288,39 +247,17 @@ function HistoryContent() {
                 </select>
               </div>
             </div>
-            <table aria-label="Audit events" className="w-full text-xs">
-              <thead>
-                <tr className="text-left text-gray-500 border-b">
-                  <th className="pb-1 pr-2">ID</th>
-                  <th className="pb-1 pr-2">Event Type</th>
-                  <th className="pb-1 pr-2">Created</th>
-                  <th className="pb-1">Meta</th>
-                </tr>
-              </thead>
-              <tbody>
-                {audit.map((a) => (
-                  <tr key={a.id} className="border-b last:border-0">
-                    <td className="py-1 pr-2 font-mono">{a.id.slice(0, 8)}…</td>
-                    <td className="py-1 pr-2">{a.event_type}</td>
-                    <td className="py-1 pr-2 text-gray-500">{fmtDate(a.created_at)}</td>
-                    <td className="py-1 text-gray-400 truncate max-w-[300px]">
-                      {a.meta
-                        ? Object.entries(a.meta)
-                            .map(([k, v]) => `${k}=${v}`)
-                            .join(", ")
-                        : ""}
-                    </td>
-                  </tr>
-                ))}
-                {audit.length === 0 && (
-                  <tr>
-                    <td colSpan={4} className="py-4 text-center text-gray-400">
-                      No audit events found
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+            {auditLoading ? (
+              <SkeletonTable rows={5} cols={4} />
+            ) : (
+              <VirtualTable
+                rows={audit ?? []}
+                columns={auditColumns}
+                ariaLabel="Audit events"
+                getRowKey={(a) => a.id}
+                emptyMessage="No audit events found"
+              />
+            )}
           </>
         )}
       </div>
@@ -353,6 +290,40 @@ function fmtDate(iso: string): string {
     return iso;
   }
 }
+
+/* Column definitions for VirtualTable */
+
+const jobColumns: ColumnDef<JobListItem>[] = [
+  { header: "Job ID", cellClassName: "font-mono", render: (j) => `${j.job_id.slice(0, 8)}…` },
+  { header: "Status", render: (j) => <StatusBadge status={j.status} /> },
+  { header: "Created", cellClassName: "text-gray-500", render: (j) => fmtDate(j.created_at) },
+  { header: "Finished", cellClassName: "text-gray-500", render: (j) => (j.finished_at ? fmtDate(j.finished_at) : "—") },
+  { header: "Error", cellClassName: "text-red-500 truncate max-w-[200px]", render: (j) => j.error ?? "" },
+];
+
+const batchColumns: ColumnDef<BatchListItem>[] = [
+  { header: "Batch ID", cellClassName: "font-mono", render: (b) => `${b.batch_id.slice(0, 8)}…` },
+  { header: "Mode", render: (b) => b.mode },
+  { header: "Status", render: (b) => <StatusBadge status={b.status} /> },
+  { header: "Created", cellClassName: "text-gray-500", render: (b) => fmtDate(b.created_at) },
+  { header: "Finished", cellClassName: "text-gray-500", render: (b) => (b.finished_at ? fmtDate(b.finished_at) : "—") },
+];
+
+const auditColumns: ColumnDef<AuditEvent>[] = [
+  { header: "ID", cellClassName: "font-mono", render: (a) => `${a.id.slice(0, 8)}…` },
+  { header: "Event Type", render: (a) => a.event_type },
+  { header: "Created", cellClassName: "text-gray-500", render: (a) => fmtDate(a.created_at) },
+  {
+    header: "Meta",
+    cellClassName: "text-gray-400 truncate max-w-[300px]",
+    render: (a) =>
+      a.meta
+        ? Object.entries(a.meta)
+            .map(([k, v]) => `${k}=${v}`)
+            .join(", ")
+        : "",
+  },
+];
 
 export default function HistoryPage() {
   return (

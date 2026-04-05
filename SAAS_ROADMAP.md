@@ -1288,7 +1288,7 @@ every push/PR; add a production-ready frontend Docker image.
 ## Phase 13 — Frontend Polish & Performance
 
 ### Task 13.1 — Data caching, loading skeletons, and password validation
-- [ ] Task 13.1
+- [x] Task 13.1
 
 **Objective**: Improve UX by adding client-side data caching to avoid redundant
 fetches, replace "Loading…" text with skeleton placeholders, and add password
@@ -1314,16 +1314,16 @@ strength validation on the signup form.
   available when images are added.
 
 **Acceptance criteria**:
-- [ ] `use-cached-fetch` hook exists and is used on ≥3 pages.
-- [ ] Dashboard, History, Billing show skeleton loaders instead of "Loading…".
-- [ ] Signup page shows password strength indicator; submit disabled when weak.
-- [ ] `images.unoptimized` removed or set to `false` in `next.config.ts`.
-- [ ] `npm run build` succeeds.
+- [x] `use-cached-fetch` hook exists and is used on ≥3 pages.
+- [x] Dashboard, History, Billing show skeleton loaders instead of "Loading…".
+- [x] Signup page shows password strength indicator; submit disabled when weak.
+- [x] `images.unoptimized` removed or set to `false` in `next.config.ts`.
+- [x] `npm run build` succeeds.
 
 ---
 
 ### Task 13.2 — Table virtualization + billing history
-- [ ] Task 13.2
+- [x] Task 13.2
 
 **Objective**: Handle large datasets efficiently with virtualized table
 rendering, and surface billing history / invoice data on the Billing page.
@@ -1346,13 +1346,13 @@ rendering, and surface billing history / invoice data on the Billing page.
   message.
 
 **Acceptance criteria**:
-- [ ] `VirtualTable` component exists and renders only visible rows.
-- [ ] Optimizer page uses `VirtualTable` with no 500-row slice limit.
-- [ ] History page tables use `VirtualTable`.
-- [ ] Billing page shows billing history section (or "not available" when
+- [x] `VirtualTable` component exists and renders only visible rows.
+- [x] Optimizer page uses `VirtualTable` with no 500-row slice limit.
+- [x] History page tables use `VirtualTable`.
+- [x] Billing page shows billing history section (or "not available" when
       Stripe disabled).
-- [ ] `npm run build` succeeds.
-- [ ] No performance regressions (page load stays under 3s for 1000+ rows).
+- [x] `npm run build` succeeds.
+- [x] No performance regressions (page load stays under 3s for 1000+ rows).
 
 ---
 
@@ -1386,14 +1386,14 @@ rendering, and surface billing history / invoice data on the Billing page.
 | 9 | 9.2 — Operational safety | ✅ | Admin diagnostics/tenants endpoints, migration tests, ops docs (25 tests) |
 | 10 | 10.1 — Security hardening | ✅ | CORS, security headers, HSTS, request size limits (13 tests) |
 | 10 | 10.2 — Data retention + export | ✅ | Retention pruning, CLI script, tenant export endpoint (17 tests) |
-| 11 | 11.1 — Error boundaries + error/404 pages | ⛔ | Error boundaries, global error.tsx/not-found.tsx, fix silent catches |
-| 11 | 11.2 — Accessibility (semantic HTML + ARIA) | ⛔ | Nav/main semantics, ARIA labels, focus styles, skip-to-content |
-| 12 | 12.1 — Frontend test suite | ⛔ | Vitest + RTL, ≥15 tests (API client, auth, login, dashboard) |
-| 12 | 12.2 — CI/CD + frontend Dockerfile | ⛔ | GitHub Actions, Dockerfile.frontend, docker-compose frontend service |
-| 13 | 13.1 — Caching, skeletons, password validation | ⛔ | Client-side cache hook, skeleton loaders, password strength, image config |
-| 13 | 13.2 — Table virtualization + billing history | ⛔ | VirtualTable component, remove 500-row limit, billing history display |
+| 11 | 11.1 — Error boundaries + error/404 pages | ✅ | Error boundaries, global error.tsx/not-found.tsx, fix silent catches |
+| 11 | 11.2 — Accessibility (semantic HTML + ARIA) | ✅ | Nav/main semantics, ARIA labels, focus styles, skip-to-content |
+| 12 | 12.1 — Frontend test suite | ✅ | Vitest + RTL, 22 tests (API client, auth, login, dashboard) |
+| 12 | 12.2 — CI/CD + frontend Dockerfile | ✅ | GitHub Actions, Dockerfile.frontend, docker-compose frontend service |
+| 13 | 13.1 — Caching, skeletons, password validation | ✅ | `use-cached-fetch` hook (3 pages), skeleton loaders, password strength, image config removed |
+| 13 | 13.2 — Table virtualization + billing history | ✅ | `VirtualTable` + `@tanstack/react-virtual`, no 500-row limit, `GET /billing/invoices`, billing history |
 
-**Total**: 24 ✅ · 0 🟡 · 6 ⛔
+**Total**: 30 ✅ · 0 🟡 · 0 ⛔
 
 ---
 

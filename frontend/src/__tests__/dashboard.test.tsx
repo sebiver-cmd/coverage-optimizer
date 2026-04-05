@@ -42,6 +42,9 @@ vi.mock("@/lib/api", () => ({
   listCredentials: vi.fn(),
 }));
 
+// Clear the in-memory cache between tests to avoid stale data
+import { clearCache } from "@/lib/use-cached-fetch";
+
 import { getTenantPlan, getUsage, listCredentials } from "@/lib/api";
 const mockGetPlan = vi.mocked(getTenantPlan);
 const mockGetUsage = vi.mocked(getUsage);
@@ -51,6 +54,7 @@ beforeEach(() => {
   mockGetPlan.mockReset();
   mockGetUsage.mockReset();
   mockListCreds.mockReset();
+  clearCache();
 });
 
 /* ------------------------------------------------------------------ */
@@ -64,10 +68,12 @@ describe("DashboardPage", () => {
     mockGetUsage.mockReturnValue(new Promise(() => {}));
     mockListCreds.mockReturnValue(new Promise(() => {}));
 
-    render(<DashboardPage />);
+    const { container } = render(<DashboardPage />);
 
     expect(screen.getByText("Dashboard")).toBeInTheDocument();
-    expect(screen.getAllByText("Loading…").length).toBeGreaterThan(0);
+    // Skeleton loaders are rendered instead of "Loading…" text
+    const skeletons = container.querySelectorAll('[aria-hidden="true"]');
+    expect(skeletons.length).toBeGreaterThan(0);
   });
 
   it("displays plan, usage, and user data after API calls resolve", async () => {

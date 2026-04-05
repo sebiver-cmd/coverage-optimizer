@@ -20,6 +20,7 @@ import {
   type ApplyResponse,
   ApiError,
 } from "@/lib/api";
+import VirtualTable, { type ColumnDef } from "@/components/VirtualTable";
 
 /* ------------------------------------------------------------------ */
 /*  Sub-components                                                     */
@@ -125,35 +126,35 @@ function RiskView({ products }: { products: ProductRow[] }) {
 }
 
 function MiniTable({ rows }: { rows: ProductRow[] }) {
+  const cols = useMemo<ColumnDef<ProductRow>[]>(
+    () => [
+      { header: "Product", cellClassName: "font-mono", render: (r) => r.PRODUCT_NUMBER },
+      { header: "Name", cellClassName: "truncate max-w-[200px]", render: (r) => r.PRODUCT_NAME },
+      { header: "Old Price", headerClassName: "text-right", cellClassName: "text-right", render: (r) => r.PRICE_EX_VAT.toFixed(2) },
+      { header: "New Price", headerClassName: "text-right", cellClassName: "text-right", render: (r) => r.SUGGESTED_PRICE_EX_VAT.toFixed(2) },
+      {
+        header: "Change %",
+        headerClassName: "text-right",
+        cellClassName: "text-right font-medium",
+        render: (r) => (
+          <span className={r.CHANGE_PERCENT < 0 ? "text-red-600" : "text-green-600"}>
+            {(r.CHANGE_PERCENT * 100).toFixed(1)}%
+          </span>
+        ),
+      },
+    ],
+    [],
+  );
+
   return (
-    <div className="overflow-x-auto">
-      <table aria-label="Risk view products" className="w-full text-xs">
-        <thead>
-          <tr className="text-left text-gray-500 border-b">
-            <th className="pb-1 pr-2">Product</th>
-            <th className="pb-1 pr-2">Name</th>
-            <th className="pb-1 pr-2 text-right">Old Price</th>
-            <th className="pb-1 pr-2 text-right">New Price</th>
-            <th className="pb-1 text-right">Change %</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.PRODUCT_NUMBER + (r.VARIANT_ITEMNUMBER ?? "")} className="border-b last:border-0">
-              <td className="py-1 pr-2 font-mono">{r.PRODUCT_NUMBER}</td>
-              <td className="py-1 pr-2 truncate max-w-[200px]">{r.PRODUCT_NAME}</td>
-              <td className="py-1 pr-2 text-right">{r.PRICE_EX_VAT.toFixed(2)}</td>
-              <td className="py-1 pr-2 text-right">{r.SUGGESTED_PRICE_EX_VAT.toFixed(2)}</td>
-              <td
-                className={`py-1 text-right font-medium ${r.CHANGE_PERCENT < 0 ? "text-red-600" : "text-green-600"}`}
-              >
-                {(r.CHANGE_PERCENT * 100).toFixed(1)}%
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <VirtualTable
+      rows={rows}
+      columns={cols}
+      ariaLabel="Risk view products"
+      maxHeight={300}
+      getRowKey={(r) => r.PRODUCT_NUMBER + (r.VARIANT_ITEMNUMBER ?? "")}
+      emptyMessage="No products in this category."
+    />
   );
 }
 
@@ -691,62 +692,47 @@ function ApplySection({
   );
 }
 
-/* ---- Product Table ---- */
+/* ---- Product Table (virtualized) ---- */
+
+const productColumns: ColumnDef<ProductRow>[] = [
+  { header: "Product #", cellClassName: "font-mono", render: (r) => r.PRODUCT_NUMBER },
+  { header: "Name", cellClassName: "truncate max-w-[200px]", render: (r) => r.PRODUCT_NAME },
+  { header: "Brand", cellClassName: "text-gray-500", render: (r) => r.BRAND_NAME ?? "—" },
+  { header: "Buy Price", headerClassName: "text-right", cellClassName: "text-right", render: (r) => r.BUY_PRICE?.toFixed(2) ?? "—" },
+  { header: "Current Price", headerClassName: "text-right", cellClassName: "text-right", render: (r) => r.PRICE_EX_VAT.toFixed(2) },
+  { header: "Suggested Price", headerClassName: "text-right", cellClassName: "text-right", render: (r) => r.SUGGESTED_PRICE_EX_VAT.toFixed(2) },
+  { header: "Coverage Before", headerClassName: "text-right", cellClassName: "text-right", render: (r) => `${(r.CURRENT_COVERAGE_RATE * 100).toFixed(1)}%` },
+  { header: "Coverage After", headerClassName: "text-right", cellClassName: "text-right", render: (r) => `${(r.NEW_COVERAGE_RATE * 100).toFixed(1)}%` },
+  {
+    header: "Change %",
+    headerClassName: "text-right",
+    cellClassName: "text-right font-medium",
+    render: (r) => (
+      <span
+        className={
+          r.CHANGE_PERCENT < 0
+            ? "text-red-600"
+            : r.CHANGE_PERCENT > 0
+              ? "text-green-600"
+              : "text-gray-400"
+        }
+      >
+        {(r.CHANGE_PERCENT * 100).toFixed(1)}%
+      </span>
+    ),
+  },
+];
 
 function ProductTable({ rows }: { rows: ProductRow[] }) {
-  if (rows.length === 0) {
-    return <p className="text-sm text-gray-400">No products to display.</p>;
-  }
-
   return (
-    <div className="overflow-x-auto max-h-[500px]">
-      <table aria-label="Optimised products" className="w-full text-xs">
-        <thead className="sticky top-0 bg-white">
-          <tr className="text-left text-gray-500 border-b">
-            <th className="pb-1 pr-2">Product #</th>
-            <th className="pb-1 pr-2">Name</th>
-            <th className="pb-1 pr-2">Brand</th>
-            <th className="pb-1 pr-2 text-right">Buy Price</th>
-            <th className="pb-1 pr-2 text-right">Current Price</th>
-            <th className="pb-1 pr-2 text-right">Suggested Price</th>
-            <th className="pb-1 pr-2 text-right">Coverage Before</th>
-            <th className="pb-1 pr-2 text-right">Coverage After</th>
-            <th className="pb-1 text-right">Change %</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.slice(0, 500).map((r, i) => (
-            <tr
-              key={r.PRODUCT_NUMBER + (r.VARIANT_ITEMNUMBER ?? "") + i}
-              className="border-b last:border-0 hover:bg-gray-50"
-            >
-              <td className="py-1 pr-2 font-mono">{r.PRODUCT_NUMBER}</td>
-              <td className="py-1 pr-2 truncate max-w-[200px]">{r.PRODUCT_NAME}</td>
-              <td className="py-1 pr-2 text-gray-500">{r.BRAND_NAME ?? "—"}</td>
-              <td className="py-1 pr-2 text-right">{r.BUY_PRICE?.toFixed(2) ?? "—"}</td>
-              <td className="py-1 pr-2 text-right">{r.PRICE_EX_VAT.toFixed(2)}</td>
-              <td className="py-1 pr-2 text-right">{r.SUGGESTED_PRICE_EX_VAT.toFixed(2)}</td>
-              <td className="py-1 pr-2 text-right">{(r.CURRENT_COVERAGE_RATE * 100).toFixed(1)}%</td>
-              <td className="py-1 pr-2 text-right">{(r.NEW_COVERAGE_RATE * 100).toFixed(1)}%</td>
-              <td
-                className={`py-1 text-right font-medium ${
-                  r.CHANGE_PERCENT < 0
-                    ? "text-red-600"
-                    : r.CHANGE_PERCENT > 0
-                      ? "text-green-600"
-                      : "text-gray-400"
-                }`}
-              >
-                {(r.CHANGE_PERCENT * 100).toFixed(1)}%
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {rows.length > 500 && (
-        <p className="text-xs text-gray-400 mt-2">Showing first 500 of {rows.length} products</p>
-      )}
-    </div>
+    <VirtualTable
+      rows={rows}
+      columns={productColumns}
+      ariaLabel="Optimised products"
+      maxHeight={500}
+      getRowKey={(r, i) => r.PRODUCT_NUMBER + (r.VARIANT_ITEMNUMBER ?? "") + i}
+      emptyMessage="No products to display."
+    />
   );
 }
 

@@ -3,29 +3,53 @@
 import RequireAuth from "@/components/RequireAuth";
 import PageShell from "@/components/PageShell";
 import { useAuth } from "@/lib/auth-context";
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   getBillingStatus,
+  getBillingInvoices,
   getTenantPlan,
   createCheckout,
   type BillingStatus,
   type TenantPlan,
+  type InvoicesResponse,
   ApiError,
 } from "@/lib/api";
+import { useCachedFetch } from "@/lib/use-cached-fetch";
+import { SkeletonText, SkeletonTable } from "@/components/Skeleton";
+import VirtualTable, { type ColumnDef } from "@/components/VirtualTable";
+import type { InvoiceItem } from "@/lib/api";
+
+const invoiceColumns: ColumnDef<InvoiceItem>[] = [
+  { header: "Date", cellClassName: "text-gray-500", render: (i) => fmtDate(i.created_at) },
+  { header: "Description", render: (i) => i.description },
+  { header: "Event Type", cellClassName: "text-gray-500", render: (i) => i.event_type },
+];
+
+function fmtDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
+}
 
 function BillingContent() {
   const { token, user } = useAuth();
-  const [plan, setPlan] = useState<TenantPlan | null>(null);
-  const [billing, setBilling] = useState<BillingStatus | null>(null);
+
+  const planFetcher = useCallback(() => getTenantPlan(token!), [token]);
+  const billingFetcher = useCallback(() => getBillingStatus(token!), [token]);
+  const invoiceFetcher = useCallback(() => getBillingInvoices(token!, { limit: 50 }), [token]);
+
+  const { data: plan, loading: planLoading } =
+    useCachedFetch<TenantPlan>(planFetcher, "/tenant/plan", token);
+  const { data: billing, loading: billingLoading } =
+    useCachedFetch<BillingStatus>(billingFetcher, "/billing/status", token);
+  const { data: invoices, loading: invoicesLoading, error: invoicesError } =
+    useCachedFetch<InvoicesResponse>(invoiceFetcher, "/billing/invoices", token);
+
   const [selectedPlan, setSelectedPlan] = useState("pro");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (!token) return;
-    getTenantPlan(token).then(setPlan).catch((e) => setError(e instanceof Error ? e.message : "Failed to load plan"));
-    getBillingStatus(token).then(setBilling).catch((e) => setError(e instanceof Error ? e.message : "Failed to load billing status"));
-  }, [token]);
 
   async function handleUpgrade() {
     if (!token) return;
@@ -52,7 +76,9 @@ function BillingContent() {
         {/* Plan Info */}
         <div className="bg-white rounded-lg shadow p-6">
           <h2 className="text-sm font-medium text-gray-500 mb-3">Current Plan</h2>
-          {plan ? (
+          {planLoading ? (
+            <SkeletonText lines={3} />
+          ) : plan ? (
             <>
               <p className="text-2xl font-bold capitalize mb-2">{plan.plan}</p>
               <div className="space-y-1 text-sm text-gray-600">
@@ -61,15 +87,15 @@ function BillingContent() {
                 <p>Daily sync optimizations: {plan.limits.daily_optimize_sync_limit}</p>
               </div>
             </>
-          ) : (
-            <p className="text-sm text-gray-400">Loading…</p>
-          )}
+          ) : null}
         </div>
 
         {/* Billing Status */}
         <div className="bg-white rounded-lg shadow p-6">
           <h2 className="text-sm font-medium text-gray-500 mb-3">Billing Status</h2>
-          {billing ? (
+          {billingLoading ? (
+            <SkeletonText lines={3} />
+          ) : billing ? (
             billing.billing_enabled ? (
               <div className="space-y-2 text-sm">
                 <p>
@@ -98,9 +124,7 @@ function BillingContent() {
                 Billing is not enabled for this instance.
               </p>
             )
-          ) : (
-            <p className="text-sm text-gray-400">Loading…</p>
-          )}
+          ) : null}
         </div>
       </div>
 
@@ -138,6 +162,40 @@ function BillingContent() {
           </div>
         </div>
       )}
+
+      {/* Billing History */}
+      <div className="bg-white rounded-lg shadow p-6 mt-6">
+        <h2 className="text-lg font-semibold mb-3">Billing History</h2>
+        {billing && !billing.billing_enabled ? (
+          <p className="text-sm text-gray-500">
+            Billing history is not available when billing is disabled.
+          </p>
+        ) : invoicesLoading ? (
+          <SkeletonTable rows={4} cols={3} />
+        ) : invoicesError ? (
+          <p className="text-sm text-gray-500">
+            Billing history is not available.
+          </p>
+        ) : invoices && invoices.items.length > 0 ? (
+          <>
+            <VirtualTable
+              rows={invoices.items}
+              columns={invoiceColumns}
+              ariaLabel="Billing history"
+              getRowKey={(i) => i.id}
+              maxHeight={400}
+              emptyMessage="No billing history"
+            />
+            {invoices.total > invoices.items.length && (
+              <p className="text-xs text-gray-400 mt-2">
+                Showing {invoices.items.length} of {invoices.total} events
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="text-sm text-gray-500">No billing events yet.</p>
+        )}
+      </div>
     </PageShell>
   );
 }
