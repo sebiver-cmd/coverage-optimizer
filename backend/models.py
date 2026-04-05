@@ -115,6 +115,9 @@ class Tenant(Base):
 
     # Relationships
     users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
+    credentials = relationship(
+        "HostedShopCredential", back_populates="tenant", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Tenant id={self.id!r} name={self.name!r}>"
@@ -159,3 +162,45 @@ class User(Base):
 
     def __repr__(self) -> str:
         return f"<User id={self.id!r} email={self.email!r} role={self.role!r}>"
+
+
+# ---------------------------------------------------------------------------
+# HostedShop credential model (Task 5.1 — Credential Vault)
+# ---------------------------------------------------------------------------
+
+
+class HostedShopCredential(Base):
+    """Encrypted HostedShop SOAP credentials scoped to a tenant."""
+
+    __tablename__ = "hostedshop_credentials"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_creds_tenant_name"),
+    )
+
+    id = Column(_GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(
+        _GUID(),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name = Column(String(255), nullable=False)
+    site_id = Column(String(50), nullable=False)
+    api_username_enc = Column(String(1024), nullable=False)
+    api_password_enc = Column(String(1024), nullable=False)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("(CURRENT_TIMESTAMP)"),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("(CURRENT_TIMESTAMP)"),
+    )
+
+    # Relationships
+    tenant = relationship("Tenant", back_populates="credentials")
+
+    def __repr__(self) -> str:
+        return f"<HostedShopCredential id={self.id!r} name={self.name!r}>"

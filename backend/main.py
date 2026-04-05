@@ -27,6 +27,7 @@ from backend.catalog_api import router as catalog_router
 from backend.jobs_api import router as jobs_router
 from backend.tenant_api import router as tenant_router
 from backend.auth_api import router as auth_router
+from backend.credentials_api import router as credentials_router
 from backend.config import get_settings
 from backend.db import check_db, init_engine
 from backend.rbac import require_role
@@ -92,6 +93,7 @@ app.include_router(catalog_router)
 app.include_router(jobs_router)
 app.include_router(tenant_router)
 app.include_router(auth_router)
+app.include_router(credentials_router)
 
 # -- CORS middleware (only when origins are configured) ------------------
 _cors_origins = get_settings().get_cors_origins_list()

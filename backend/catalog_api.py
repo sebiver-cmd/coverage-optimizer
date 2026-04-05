@@ -16,6 +16,7 @@ products directly via the SOAP client.
 from __future__ import annotations
 
 import logging
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -40,12 +41,16 @@ class CatalogRequest(BaseModel):
     """Parameters accepted by ``POST /catalog/products``."""
 
     api_username: str = Field(
-        ..., description="DanDomain API employee username (email)."
+        default="", description="DanDomain API employee username (email)."
     )
     api_password: str = Field(
-        ..., description="DanDomain API employee password."
+        default="", description="DanDomain API employee password."
     )
     site_id: int = Field(default=1, description="Site / shop ID (default 1).")
+    credential_id: UUID | None = Field(
+        default=None,
+        description="UUID of a stored vault credential (used when auth is enabled).",
+    )
     include_offline: bool = Field(
         default=False,
         description=(
