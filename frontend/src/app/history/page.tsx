@@ -18,6 +18,7 @@ type Tab = "jobs" | "batches" | "audit";
 function HistoryContent() {
   const { token } = useAuth();
   const [tab, setTab] = useState<Tab>("jobs");
+  const [error, setError] = useState<string | null>(null);
 
   /* ---- Jobs ---- */
   const [jobs, setJobs] = useState<JobListItem[]>([]);
@@ -39,42 +40,50 @@ function HistoryContent() {
   useEffect(() => {
     if (!token) return;
     if (tab === "jobs") {
+      setError(null);
       listJobs(token, {
         status: jobStatusFilter || undefined,
         limit: jobLimit,
       })
         .then(setJobs)
-        .catch(() => {});
+        .catch((e) => setError(e instanceof Error ? e.message : "Failed to load jobs"));
     }
   }, [token, tab, jobStatusFilter, jobLimit]);
 
   useEffect(() => {
     if (!token) return;
     if (tab === "batches") {
+      setError(null);
       listBatches(token, {
         status: batchStatusFilter || undefined,
         mode: batchModeFilter || undefined,
         limit: batchLimit,
       })
         .then(setBatches)
-        .catch(() => {});
+        .catch((e) => setError(e instanceof Error ? e.message : "Failed to load batches"));
     }
   }, [token, tab, batchStatusFilter, batchModeFilter, batchLimit]);
 
   useEffect(() => {
     if (!token) return;
     if (tab === "audit") {
+      setError(null);
       listAuditEvents(token, {
         event_type: eventTypeFilter || undefined,
         limit: auditLimit,
       })
         .then(setAudit)
-        .catch(() => {});
+        .catch((e) => setError(e instanceof Error ? e.message : "Failed to load audit events"));
     }
   }, [token, tab, eventTypeFilter, auditLimit]);
 
   return (
     <PageShell title="History">
+      {error && (
+        <div role="alert" aria-live="polite" className="bg-red-50 text-red-700 border border-red-200 rounded p-3 mb-4 text-sm">
+          {error}
+        </div>
+      )}
       {/* Tabs */}
       <div className="flex gap-1 mb-4">
         {(

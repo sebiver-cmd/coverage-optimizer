@@ -18,16 +18,34 @@ function DashboardContent() {
   const [plan, setPlan] = useState<TenantPlan | null>(null);
   const [usage, setUsage] = useState<UsageInfo | null>(null);
   const [creds, setCreds] = useState<Credential[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadData = () => {
+    if (!token) return;
+    setError(null);
+    getTenantPlan(token).then(setPlan).catch((e) => setError(e instanceof Error ? e.message : "Failed to load plan"));
+    getUsage(token).then(setUsage).catch((e) => setError(e instanceof Error ? e.message : "Failed to load usage"));
+    listCredentials(token).then(setCreds).catch((e) => setError(e instanceof Error ? e.message : "Failed to load credentials"));
+  };
 
   useEffect(() => {
-    if (!token) return;
-    getTenantPlan(token).then(setPlan).catch(() => {});
-    getUsage(token).then(setUsage).catch(() => {});
-    listCredentials(token).then(setCreds).catch(() => {});
+    loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   return (
     <PageShell title="Dashboard">
+      {error && (
+        <div role="alert" aria-live="polite" className="bg-red-50 text-red-700 border border-red-200 rounded p-3 mb-4 text-sm flex items-center justify-between">
+          <span>{error}</span>
+          <button
+            onClick={loadData}
+            className="ml-4 text-red-700 underline text-sm font-medium hover:text-red-800 focus:outline-none focus:ring-2 focus:ring-red-500"
+          >
+            Retry
+          </button>
+        </div>
+      )}
       {/* User info card */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <Card title="Account">

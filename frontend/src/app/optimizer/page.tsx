@@ -199,13 +199,13 @@ function OptimizerContent() {
     listCredentials(token).then((c) => {
       setCredentials(c);
       if (c.length > 0) setSelectedCred(c[0].id);
-    }).catch(() => {});
+    }).catch((e) => setError(e instanceof Error ? e.message : "Failed to load credentials"));
   }, [token]);
 
   /* Load brands when a credential is selected */
   useEffect(() => {
     if (!token || !selectedCred) return;
-    listBrands(token).then(setBrands).catch(() => {});
+    listBrands(token).then(setBrands).catch((e) => setError(e instanceof Error ? e.message : "Failed to load brands"));
   }, [token, selectedCred]);
 
   /* Poll job status */

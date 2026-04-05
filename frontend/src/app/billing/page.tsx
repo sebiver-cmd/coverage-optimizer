@@ -23,8 +23,8 @@ function BillingContent() {
 
   useEffect(() => {
     if (!token) return;
-    getTenantPlan(token).then(setPlan).catch(() => {});
-    getBillingStatus(token).then(setBilling).catch(() => {});
+    getTenantPlan(token).then(setPlan).catch((e) => setError(e instanceof Error ? e.message : "Failed to load plan"));
+    getBillingStatus(token).then(setBilling).catch((e) => setError(e instanceof Error ? e.message : "Failed to load billing status"));
   }, [token]);
 
   async function handleUpgrade() {
