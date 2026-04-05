@@ -27,6 +27,7 @@ from backend.auth import (
 from backend.config import Settings, get_settings
 from backend.db import get_db
 from backend.models import Role, Tenant, User
+from backend.rbac import require_role
 
 logger = logging.getLogger(__name__)
 
@@ -200,7 +201,7 @@ def refresh_token(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/me", response_model=UserMeResponse)
+@router.get("/me", response_model=UserMeResponse, dependencies=[Depends(require_role("viewer"))])
 def me(current_user: User = Depends(get_current_user)):
     """Return the currently authenticated user.
 

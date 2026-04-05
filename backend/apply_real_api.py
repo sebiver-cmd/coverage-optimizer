@@ -30,13 +30,14 @@ import math
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from dandomain_api import DanDomainClient
 from backend.apply_constants import BATCH_DIR, UUID_RE, AUDIT_LOG
 from backend.cache import build_caller_key, invalidate_products_cache
 from backend.config import get_settings
+from backend.rbac import require_role
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +151,7 @@ def is_apply_enabled() -> bool:
 router = APIRouter(tags=["apply-prices"])
 
 
-@router.get("/apply-prices/status")
+@router.get("/apply-prices/status", dependencies=[Depends(require_role("viewer"))])
 def apply_status() -> dict[str, bool]:
     """Report whether the apply endpoint is currently enabled.
 
@@ -160,7 +161,7 @@ def apply_status() -> dict[str, bool]:
     return {"enabled": is_apply_enabled()}
 
 
-@router.post("/apply-prices/apply", response_model=ApplyResponse)
+@router.post("/apply-prices/apply", response_model=ApplyResponse, dependencies=[Depends(require_role("admin"))])
 def apply_prices(payload: ApplyRequest) -> ApplyResponse:
     """Apply a previously created batch manifest to the webshop.
 

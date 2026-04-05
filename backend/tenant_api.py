@@ -22,8 +22,9 @@ from sqlalchemy.orm import Session
 
 from backend.db import get_db
 from backend.models import Role, Tenant, User
+from backend.rbac import require_role
 
-router = APIRouter(tags=["tenants"])
+router = APIRouter(tags=["tenants"], dependencies=[Depends(require_role("admin"))])
 
 
 # ---------------------------------------------------------------------------

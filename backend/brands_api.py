@@ -13,10 +13,11 @@ from __future__ import annotations
 import logging
 from enum import Enum
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from dandomain_api import DanDomainClient, DanDomainAPIError
+from backend.rbac import require_role
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ class SortOrder(str, Enum):
 # Router
 # ---------------------------------------------------------------------------
 
-router = APIRouter(tags=["brands"])
+router = APIRouter(tags=["brands"], dependencies=[Depends(require_role("viewer"))])
 
 
 @router.get("/brands", response_model=list[BrandItem])

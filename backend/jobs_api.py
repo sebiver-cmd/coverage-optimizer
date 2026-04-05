@@ -20,11 +20,12 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from backend.config import get_settings
 from backend.optimizer_api import OptimizeRequest
+from backend.rbac import require_role
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +163,7 @@ def build_job_record(
 # Router
 # ---------------------------------------------------------------------------
 
-router = APIRouter(prefix="/jobs", tags=["jobs"])
+router = APIRouter(prefix="/jobs", tags=["jobs"], dependencies=[Depends(require_role("operator"))])
 
 
 @router.post("/optimize", response_model=EnqueueResponse)
