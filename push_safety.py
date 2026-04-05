@@ -9,8 +9,8 @@ HostedShop API:
    (sales price or buying price) are included; unchanged products
    are always blocked.
 
-The module is intentionally free of Streamlit imports so that its
-logic can be unit-tested without mocking the UI framework.
+The module is intentionally free of UI imports so that its logic can
+be unit-tested without mocking any frontend framework.
 """
 
 from __future__ import annotations

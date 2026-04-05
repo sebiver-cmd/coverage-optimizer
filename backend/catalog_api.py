@@ -9,8 +9,8 @@ param ``string $ItemNumber``, returns ``ProductVariant[]``).
 
 This endpoint is **read-only** — it never writes to the webshop.
 
-The Streamlit UI should call this endpoint instead of fetching
-products directly via the SOAP client.
+The frontend should call this endpoint instead of fetching products
+directly via the SOAP client.
 """
 
 from __future__ import annotations

@@ -3,7 +3,7 @@
 Returns the list of brands (producers) available in the DanDomain webshop,
 each with its ``ProducerId`` and display name.  The IDs correspond to the
 ``PRODUCER_ID`` column used for filtering in the ``/optimize`` endpoint and
-the Streamlit Price Optimizer UI.
+the Price Optimizer UI.
 
 No data is written to the webshop — this endpoint is strictly read-only.
 """

@@ -12,7 +12,7 @@ are sent so that other product data is never accidentally overwritten:
     ``ProductVariantUpdate`` object (``Id`` + price fields only).
 
 Credentials are **never** logged or hard-coded — they must be supplied
-via Streamlit secrets, environment variables, or a secure input field.
+via the credential vault, environment variables, or a secure input field.
 
 Security layers
 ---------------

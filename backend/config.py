@@ -76,10 +76,10 @@ class Settings(BaseSettings):
         ),
     )
 
-    # -- Backend URL (consumed by Streamlit, declared here for docs) ------
+    # -- Backend URL (consumed by the frontend, declared here for docs) ---
     sb_optima_backend_url: str = Field(
         default="http://localhost:8000",
-        description="URL the Streamlit frontend uses to reach the backend.",
+        description="URL the frontend uses to reach the backend.",
     )
 
     # -- Postgres (consumed by Docker Compose, declared for completeness) -

@@ -1,4 +1,4 @@
-"""Shared product-loading pipeline for the Streamlit UI and REST API.
+"""Shared product-loading pipeline for the REST API.
 
 Centralises the logic to fetch products from the DanDomain SOAP API,
 resolve brand names, expand variants into individual rows, and apply
@@ -14,15 +14,14 @@ can call the exact subset it needs:
 Brand filtering
 ---------------
 Brand IDs are **integer** ``ProducerId`` values stored in the
-``PRODUCER_ID`` column of the product DataFrame.  The Streamlit
-multiselect stores these integers (with a ``format_func`` that
-displays the brand name), and the ``/optimize`` endpoint accepts
-them via ``brand_ids``.  Filtering is a simple ``isin`` check::
+``PRODUCER_ID`` column of the product DataFrame.  The ``/optimize``
+endpoint accepts them via ``brand_ids``.  Filtering is a simple
+``isin`` check::
 
     df[df["PRODUCER_ID"].isin(brand_ids)]
 
-When ``brand_ids`` is ``None`` or empty, all brands are included —
-matching the Streamlit default of *"All brands (no filter)"*.
+When ``brand_ids`` is ``None`` or empty, all brands are included
+(i.e. *"All brands — no filter"*).
 """
 
 from __future__ import annotations
@@ -301,18 +300,12 @@ def filter_products(
 ) -> pd.DataFrame:
     """Apply online/offline and brand filters to a product DataFrame.
 
-    The filter semantics exactly match the Streamlit Price Optimizer
-    (``ui/pages/price_optimizer.py``):
-
     *  **Online filter** — when *include_offline* is ``False`` (the
-       default), only rows with ``ONLINE == True`` are kept.  This
-       corresponds to the *"Only active (online) products"* checkbox
-       in the Streamlit UI, which defaults to checked.
+       default), only rows with ``ONLINE == True`` are kept.
     *  **Brand filter** — when *brand_ids* is a non-empty list of
        integer ``ProducerId`` values, only rows whose ``PRODUCER_ID``
-       is in the list are kept.  This corresponds to the brand
-       multiselect in the Streamlit UI.  When ``None`` or empty, all
-       brands are included.
+       is in the list are kept.  When ``None`` or empty, all brands
+       are included.
 
     Parameters
     ----------
@@ -352,9 +345,8 @@ def load_products_for_optimization(
 ) -> pd.DataFrame:
     """Fetch, convert, and filter products — the complete pipeline.
 
-    Returns the same DataFrame that the Streamlit Price Optimizer uses:
-    same variant expansion, same online/offline behaviour, and same
-    brand filtering.
+    Returns a DataFrame with variant expansion, online/offline filtering,
+    and brand filtering applied.
 
     Parameters
     ----------

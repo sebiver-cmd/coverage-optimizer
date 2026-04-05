@@ -1,4 +1,4 @@
-"""Risk analysis helpers — pure computation, no Streamlit dependency.
+"""Risk analysis helpers — pure computation, no UI dependency.
 
 Provides functions that identify pricing risk from an optimisation
 result set:

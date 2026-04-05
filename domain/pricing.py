@@ -1,4 +1,4 @@
-"""Pure pricing computation — no Streamlit dependency.
+"""Pure pricing computation — no UI dependency.
 
 Contains coverage-rate calculation, price beautification, Danish
 number formatting, and the main ``optimize_prices`` pipeline.
