@@ -1,6 +1,6 @@
 # SB-Optima — SaaS Migration Roadmap
 
-> Last updated: 2026-04-05 — automated codebase audit with per-task evidence.
+> Last updated: 2026-04-05 — full codebase re-audit with per-task evidence and next-tasks refresh.
 
 This roadmap migrates **SB-Optima / Coverage Optimizer** from a single-tenant
 Streamlit + FastAPI tool into a **multi-tenant, paid SaaS web application**
@@ -12,7 +12,9 @@ for DanDomain price optimisation.
 
 1. **One task per message** — Claude must complete exactly one task, then stop.
 2. Claude must end with: **"Say 'Next' to continue."**
-3. Only mark checkboxes when you say: **"Mark Task X.Y complete"**.
+3. **Checkbox rule** — Mark `[x]` when (a) the user says "Mark Task X.Y
+   complete", or (b) an automated codebase audit proves all acceptance criteria
+   are met with evidence. Never mark a checkbox without proof.
 4. **Security** — never log secrets; redact credentials in errors; encrypt at rest.
 5. **HostedShop authority** — the single source of truth for the SOAP API is
    `data/hostedshop_docs/hostedshop_api_docs_full.md`. Do not infer
@@ -59,7 +61,7 @@ for DanDomain price optimisation.
 | **Domain layer** | `domain/pricing.py`, `domain/product_loader.py`, `domain/risk_analysis.py`, `domain/invoice_ean.py`, `domain/supplier.py` | Pure business logic: pricing/coverage computation, product loading + variant expansion, risk analysis, invoice parsing, supplier parsing, EAN/SKU matching, LLM-assisted column mapping |
 | **SOAP client** | `dandomain_api.py` | `DanDomainClient` — read (`Product_GetAll`, `get_all_brands`, `Product_GetVariantsByItemNumber`) + write (`Product_Update`, `Product_UpdateVariant` via `update_prices_batch`). HTTPS, retry, credential scrubbing. |
 | **Push safety** | `push_safety.py` | `build_push_updates()` — explicit-selection gate + computed-diff gate for the Streamlit direct-push path |
-| **Tests** | `tests/` (660+ tests) | Coverage of backend endpoints, domain logic, apply guardrails, push safety, invoice/supplier matching |
+| **Tests** | `tests/` (1303 tests as of 2026-04-05) | Coverage of backend endpoints, domain logic, apply guardrails, push safety, invoice/supplier matching, auth, RBAC, billing, quotas, observability, security hardening, retention, admin API |
 | **Persistence** | `data/apply_batches/{batch_id}.json`, `data/apply_batches/{batch_id}.applied`, `data/apply_audit.log` | File-based batch manifests, idempotency markers, JSONL audit log |
 
 ## Data flow
@@ -799,7 +801,7 @@ Streamlit History page added for tenant-scoped job/batch/audit history.
 **Scope**:
 - Stripe checkout session endpoint.
 - Webhook handler (subscription created/updated/cancelled).
-- `tenants.stripe_customer_id`, `tenants.plan`, `tenants.plan_status`.
+- `tenants.stripe_customer_id`, `tenants.stripe_subscription_id`, `tenants.billing_status`.
 - Billing gate middleware: non-active tenants get 402 on `/optimize` and `/apply`.
 
 **Acceptance criteria**:
@@ -826,21 +828,41 @@ Streamlit History page added for tenant-scoped job/batch/audit history.
 
 **Remaining work**:
 - Implement billing gate middleware: check `tenant.billing_status` before `/optimize`, `/apply-prices/apply`, `/jobs/optimize`; return 402 for inactive/canceled/past_due subscriptions.
-- Add billing gate test (parameterised by billing_status × endpoint).
+- Gate should be skipped when `BILLING_ENABLED=false`.
+- Add billing gate test (parameterised by `billing_status` × endpoint).
+- **Files likely to change**: `backend/middleware/billing_gate.py` (new), `backend/main.py` (mount), `backend/config.py` (ensure `billing_enabled` is used).
+- **Security**: 402 response must not leak billing details.
 
-### Task 7.2 — Plans + billing scaffolding (Stripe-ready) 🟡
+### Task 7.2 — Plans + quotas + usage tracking (Stripe-ready) 🟡
 - [ ] Task 7.2 — Updated: 2026-04-05
 
-**Objective**: Track optimisation runs and applies per tenant for usage-based
-billing.
+**Objective**: Define plan tiers with per-tenant quota enforcement and usage
+visibility, ready for Stripe metered billing.
 
-**Scope**:
-- `usage_events` table (tenant_id, event_type, timestamp, metadata).
-- Report to Stripe usage records (if metered plan).
+**Scope (implemented)**:
+- `backend/plans.py`: `Plan` dataclass, `PLANS` dict (free/pro/enterprise),
+  `get_plan()`, `list_plans()`.
+- `backend/plan_api.py`: `GET /plans` (viewer+), `GET /tenant/plan` (viewer+),
+  `PUT /tenant/plan` (admin+ with audit).
+- `backend/quotas.py`: `check_quota()`, `get_usage()`, `get_limits()`.
+  Counts `OptimizationJob` / `ApplyBatch` rows per day. Raises 429
+  `QuotaExceeded` when limit hit.
+- `backend/usage_api.py`: `GET /usage` (viewer+) returns daily usage vs limits.
+- `alembic/versions/0004_add_tenant_limits.py`: `daily_optimize_jobs_limit`,
+  `daily_apply_limit`, `daily_optimize_sync_limit` on tenants table.
 
-**Acceptance criteria**: usage events recorded for every optimize + apply call.
+**Scope (remaining)**:
+- Dedicated `usage_events` table for explicit event recording.
+- Stripe `UsageRecord` reporting for metered plans.
 
-**Tests**: unit test for event recording.
+**Acceptance criteria**:
+- ✅ Plans defined with limits (free/pro/enterprise).
+- ✅ Quota enforcement works (429 on limit exceed).
+- ✅ `GET /usage` returns daily usage vs limits.
+- ❌ `usage_events` table exists and records events for every optimize + apply.
+- ❌ Stripe usage records reported for metered plans.
+
+**Tests**: `tests/test_plans.py`, `tests/test_quotas.py` (existing — cover plan/quota logic).
 
 **Evidence**:
 - `backend/plans.py` — `Plan` dataclass, `PLANS` dict (free/pro/enterprise), `get_plan()`, `list_plans()`.
@@ -848,16 +870,14 @@ billing.
 - `backend/quotas.py` — `check_quota()`, `get_usage()`, `get_limits()`. Counts existing `OptimizationJob` / `ApplyBatch` rows (not separate usage_events table). Raises 429 `QuotaExceeded`.
 - `backend/usage_api.py` — `GET /usage` (viewer+) returns daily usage vs limits.
 - `alembic/versions/0004_add_tenant_limits.py` — Adds `daily_*_limit` columns to tenants.
-- ✅ Plans defined with limits (free/pro/enterprise).
-- ✅ Quota enforcement works via existing operational tables.
-- ❌ **Missing**: Dedicated `usage_events` table (roadmap requirement).
-- ❌ **Missing**: Stripe usage record reporting (metered plan integration).
 
 **Remaining work**:
-- Create `usage_events` table (tenant_id, event_type, timestamp, metadata) via Alembic migration.
-- Record explicit usage events for every optimize + apply call.
+- Create `usage_events` table (`tenant_id`, `event_type`, `timestamp`, `metadata` JSONB) via Alembic migration.
+- Record explicit usage events for every optimize + apply call (emit from `backend/jobs_api.py` and `backend/apply_real_api.py`).
 - Add Stripe usage record reporting (`stripe.UsageRecord.create()`) for metered plans.
-- Tests: `tests/test_plans.py`, `tests/test_quotas.py` (existing, covering current implementation).
+- Add tests for usage event recording and Stripe reporting (mock Stripe API).
+- **Files likely to change**: `alembic/versions/0006_*.py` (new), `backend/models.py` (UsageEvent), `backend/repositories/usage_repo.py` (new), `backend/jobs_api.py`, `backend/apply_real_api.py`, `backend/stripe_billing.py`.
+- **Security**: no PII in usage events; tenant-scoped queries only.
 
 ---
 
@@ -1133,7 +1153,7 @@ row caps.
 | 6 | 6.1 — Batch + audit tables | ✅ | Migration 0003, repos |
 | 6 | 6.2 — DB apply + dashboards | ✅ | List endpoints, History page |
 | 7 | 7.1 — Stripe integration | 🟡 | Checkout + webhook work; **billing gate missing** |
-| 7 | 7.2 — Plans + billing scaffolding | 🟡 | Plans + quotas work; **`usage_events` table + Stripe usage missing** |
+| 7 | 7.2 — Plans + quotas + usage | 🟡 | Plans + quotas work; **`usage_events` table + Stripe usage missing** |
 | 8 | 8.1 — Next.js scaffold | ⛔ | No `frontend/` directory |
 | 8 | 8.2 — Price Optimizer (web) | ⛔ | Depends on 8.1 |
 | 8 | 8.3 — Deprecate Streamlit | ⛔ | Depends on 8.1 + 8.2 |
@@ -1146,33 +1166,133 @@ row caps.
 
 ---
 
-# Section D — First 2 Weeks Execution Plan
+# Section D — First 2 Weeks Execution Plan (✅ Complete)
 
-| Order | Task | Why first | Definition of Done |
+> All initial tasks are complete. This section is preserved for historical reference.
+
+| Order | Task | Status | Definition of Done |
 |---|---|---|---|
-| 1 | **0.1** — ADR | Locks all tech decisions so subsequent tasks don't conflict. | `docs/adr/0001-saas-architecture.md` exists and is reviewed. |
-| 2 | **1.1** — Retire Streamlit direct SOAP writes | Eliminates the highest-risk safety gap before any SaaS work. | `grep -rn "DanDomainClient" ui/` returns 0 results (excl. tests); all tests pass. |
-| 3 | **1.2** — Backend sole fetcher | Completes the "backend-as-gateway" principle. | `from dandomain_api import` absent from `ui/`; Streamlit works via backend HTTP. |
-| 4 | **2.1** — Docker Compose | Enables consistent local dev and prepares for Postgres/Redis. | `docker compose up` starts API + Postgres + Redis; `/health` returns 200. |
-| 5 | **2.2** — Postgres + Alembic | DB ready for models; no tables yet but migration framework in place. | `alembic upgrade head` succeeds; `GET /health` reports `db: ok`. |
+| 1 | **0.1** — ADR | ✅ | `docs/adr/0001-saas-architecture.md` exists and is reviewed. |
+| 2 | **1.1** — Retire Streamlit direct SOAP writes | ✅ | `grep -rn "DanDomainClient" ui/` returns 0 results; all tests pass. |
+| 3 | **1.2** — Backend sole fetcher | ✅ | `from dandomain_api import` absent from `ui/`; Streamlit works via backend HTTP. |
+| 4 | **2.1** — Docker Compose | ✅ | `docker compose up` starts API + Postgres + Redis; `/health` returns 200. |
+| 5 | **2.2** — Postgres + Alembic | ✅ | `alembic upgrade head` succeeds; `GET /health` reports `db: ok`. |
 
 ---
 
 # Section E — Non-Goals & Deferred Items
 
-The following are explicitly **out of scope for the first month**:
+The following are explicitly **out of scope** for current sprints:
 
-- **Next.js frontend** (Phase 8) — Streamlit remains the UI during migration.
-- **Stripe billing** (Phase 7) — no payment gates until auth + vault are stable.
+- **Next.js frontend** (Phase 8) — Streamlit remains the UI. Not started.
 - **Monorepo restructure** (`apps/web`, `apps/api`, `packages/shared`) — do NOT
   move files into a monorepo layout. Keep the current flat structure; add
   `frontend/` alongside `backend/` when the time comes.
 - **DNS / SSL setup** for sboptima.dk — document intended use; do not configure.
 - **KMS-based encryption** — Fernet is acceptable for MVP; document upgrade path.
-- **Per-tenant LLM keys** — use server-managed key with usage tracking for now.
+- **Per-tenant LLM keys** — use server-managed key; add usage tracking first
+  (Task 5.3).
 - **Invoice/supplier matching migration** — these features keep working as-is via
   Streamlit; no SaaS-specific changes until frontend migration.
 - **Variant matching improvements** — paused per project decision.
-- **CI/CD pipeline** — defer until Docker Compose is stable.
 - **Post-apply verification** (re-fetch and confirm) — nice-to-have; schedule
-  after Phase 6.
+  after billing gate is in place.
+
+---
+
+# Section F — Next 3 Tasks
+
+> Updated: 2026-04-05 — based on unfinished tasks in the roadmap, ordered by
+> priority (billing gate first, then usage tracking, then LLM management).
+
+---
+
+### Next 1: Task 7.1 — Billing gate middleware (finish Stripe integration)
+
+**Current status**: 🟡 — Checkout + webhook + billing status all work, but no
+gate prevents inactive/expired tenants from using paid endpoints.
+
+**Acceptance criteria**:
+- Middleware checks `tenant.billing_status` on `POST /optimize`,
+  `POST /apply-prices/apply`, `POST /jobs/optimize`.
+- Tenants with `billing_status` in (`canceled`, `past_due`, `inactive`, `NULL`)
+  receive **402 Payment Required** with JSON error body.
+- Tenants with `billing_status = "active"` pass through.
+- Billing gate is **skipped** when `BILLING_ENABLED=false` (dev/migration mode).
+- Billing gate is **skipped** for non-billing endpoints (health, auth, etc.).
+
+**Files likely to change**:
+- `backend/middleware/billing_gate.py` (new — middleware class)
+- `backend/main.py` (mount middleware)
+- `backend/config.py` (ensure `billing_enabled` is read)
+
+**Required tests** (add to `tests/test_billing.py` or new `tests/test_billing_gate.py`):
+- Parameterised: `billing_status` × endpoint → 402 or pass.
+- `BILLING_ENABLED=false` → gate disabled, all pass.
+- Free-tier tenants (no Stripe) are handled gracefully.
+
+**Security notes**: Do not leak billing details in 402 response; message should
+be generic ("Payment required — please update your subscription.").
+
+---
+
+### Next 2: Task 7.2 — Usage events table + Stripe metered billing (finish plans)
+
+**Current status**: 🟡 — Plans + quotas work via existing tables, but no
+explicit `usage_events` table exists and Stripe usage reporting is absent.
+
+**Acceptance criteria**:
+- `usage_events` table created via Alembic migration with columns: `id` (UUID),
+  `tenant_id` (FK), `event_type` (string), `timestamp` (UTC), `metadata` (JSONB).
+- Every `POST /jobs/optimize` emits a `job.optimize` usage event.
+- Every `POST /apply-prices/apply` emits a `batch.apply` usage event.
+- `stripe.UsageRecord.create()` called for metered-plan tenants on each event
+  (when `BILLING_ENABLED=true` and tenant has active Stripe subscription).
+- Usage events are tenant-scoped (no cross-tenant visibility).
+
+**Files likely to change**:
+- `alembic/versions/0006_add_usage_events.py` (new migration)
+- `backend/models.py` (add `UsageEvent` model)
+- `backend/repositories/usage_repo.py` (new — CRUD for usage events)
+- `backend/jobs_api.py` (emit usage event after job enqueue)
+- `backend/apply_real_api.py` (emit usage event after apply)
+- `backend/stripe_billing.py` (add `report_usage()` function)
+
+**Required tests**:
+- Usage event created on optimize/apply.
+- Stripe usage record created when billing enabled + active sub.
+- No Stripe call when billing disabled.
+- Tenant isolation for usage events.
+
+**Security notes**: No PII in usage event metadata; tenant_id scoping enforced.
+
+---
+
+### Next 3: Task 5.3 — LLM key management (tenant-aware usage tracking)
+
+**Current status**: ⛔ — Domain LLM functions (`domain/invoice_ean.py`,
+`domain/supplier.py`) have no tenant_id awareness; no usage tracking or limits.
+
+**Acceptance criteria**:
+- LLM call functions accept `tenant_id` parameter.
+- After each LLM call, log `{tenant_id, tokens_used, model}` via structured
+  logger (JSON format from Task 9.1).
+- `OPENAI_MONTHLY_TOKEN_LIMIT` config flag exists with enforcement (reject
+  calls above limit with clear error).
+- Per-tenant LLM usage visible via admin API (extend `GET /admin/tenant/{id}`
+  or add new endpoint).
+- No tenant can see another tenant's LLM usage.
+
+**Files likely to change**:
+- `domain/invoice_ean.py` (add `tenant_id` param to `_default_llm_call`)
+- `domain/supplier.py` (add `tenant_id` param to LLM call)
+- `backend/config.py` (add `openai_monthly_token_limit`)
+- `backend/admin_api.py` (extend tenant detail or add LLM usage endpoint)
+
+**Required tests**:
+- Unit test: LLM usage log contains `tenant_id`, `tokens_used`, `model`.
+- Unit test: calls rejected when monthly limit exceeded.
+- Unit test: tenant isolation for usage visibility.
+
+**Security notes**: Never log the LLM API key; only log usage metadata.
+`OPENAI_API_KEY` remains a server-level env var (not per-tenant for MVP).
