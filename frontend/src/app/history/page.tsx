@@ -3,7 +3,7 @@
 import RequireAuth from "@/components/RequireAuth";
 import PageShell from "@/components/PageShell";
 import { useAuth } from "@/lib/auth-context";
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   listJobs,
   listBatches,
@@ -12,70 +12,68 @@ import {
   type BatchListItem,
   type AuditEvent,
 } from "@/lib/api";
+import { useCachedFetch } from "@/lib/use-cached-fetch";
+import { SkeletonTable } from "@/components/Skeleton";
 
 type Tab = "jobs" | "batches" | "audit";
 
 function HistoryContent() {
   const { token } = useAuth();
   const [tab, setTab] = useState<Tab>("jobs");
-  const [error, setError] = useState<string | null>(null);
 
   /* ---- Jobs ---- */
-  const [jobs, setJobs] = useState<JobListItem[]>([]);
   const [jobStatusFilter, setJobStatusFilter] = useState("");
   const [jobLimit, setJobLimit] = useState(50);
+  const jobsFetcher = useCallback(
+    () => listJobs(token!, { status: jobStatusFilter || undefined, limit: jobLimit }),
+    [token, jobStatusFilter, jobLimit],
+  );
+  const { data: jobs, loading: jobsLoading, error: jobsError } = useCachedFetch<JobListItem[]>(
+    jobsFetcher,
+    `/jobs?status=${jobStatusFilter}&limit=${jobLimit}`,
+    token,
+    { ttl: 30_000, skip: tab !== "jobs" },
+  );
 
   /* ---- Batches ---- */
-  const [batches, setBatches] = useState<BatchListItem[]>([]);
   const [batchStatusFilter, setBatchStatusFilter] = useState("");
   const [batchModeFilter, setBatchModeFilter] = useState("");
   const [batchLimit, setBatchLimit] = useState(50);
-
-  /* ---- Audit ---- */
-  const [audit, setAudit] = useState<AuditEvent[]>([]);
-  const [eventTypeFilter, setEventTypeFilter] = useState("");
-  const [auditLimit, setAuditLimit] = useState(50);
-
-  /* Fetch on tab/filter change */
-  useEffect(() => {
-    if (!token) return;
-    if (tab === "jobs") {
-      setError(null);
-      listJobs(token, {
-        status: jobStatusFilter || undefined,
-        limit: jobLimit,
-      })
-        .then(setJobs)
-        .catch((e) => setError(e instanceof Error ? e.message : "Failed to load jobs"));
-    }
-  }, [token, tab, jobStatusFilter, jobLimit]);
-
-  useEffect(() => {
-    if (!token) return;
-    if (tab === "batches") {
-      setError(null);
-      listBatches(token, {
+  const batchesFetcher = useCallback(
+    () =>
+      listBatches(token!, {
         status: batchStatusFilter || undefined,
         mode: batchModeFilter || undefined,
         limit: batchLimit,
-      })
-        .then(setBatches)
-        .catch((e) => setError(e instanceof Error ? e.message : "Failed to load batches"));
-    }
-  }, [token, tab, batchStatusFilter, batchModeFilter, batchLimit]);
+      }),
+    [token, batchStatusFilter, batchModeFilter, batchLimit],
+  );
+  const { data: batches, loading: batchesLoading, error: batchesError } = useCachedFetch<BatchListItem[]>(
+    batchesFetcher,
+    `/batches?status=${batchStatusFilter}&mode=${batchModeFilter}&limit=${batchLimit}`,
+    token,
+    { ttl: 30_000, skip: tab !== "batches" },
+  );
 
-  useEffect(() => {
-    if (!token) return;
-    if (tab === "audit") {
-      setError(null);
-      listAuditEvents(token, {
+  /* ---- Audit ---- */
+  const [eventTypeFilter, setEventTypeFilter] = useState("");
+  const [auditLimit, setAuditLimit] = useState(50);
+  const auditFetcher = useCallback(
+    () =>
+      listAuditEvents(token!, {
         event_type: eventTypeFilter || undefined,
         limit: auditLimit,
-      })
-        .then(setAudit)
-        .catch((e) => setError(e instanceof Error ? e.message : "Failed to load audit events"));
-    }
-  }, [token, tab, eventTypeFilter, auditLimit]);
+      }),
+    [token, eventTypeFilter, auditLimit],
+  );
+  const { data: audit, loading: auditLoading, error: auditError } = useCachedFetch<AuditEvent[]>(
+    auditFetcher,
+    `/audit?event_type=${eventTypeFilter}&limit=${auditLimit}`,
+    token,
+    { ttl: 30_000, skip: tab !== "audit" },
+  );
+
+  const error = (tab === "jobs" && jobsError) || (tab === "batches" && batchesError) || (tab === "audit" && auditError) || null;
 
   return (
     <PageShell title="History">
@@ -141,6 +139,9 @@ function HistoryContent() {
                 </select>
               </div>
             </div>
+            {jobsLoading ? (
+              <SkeletonTable rows={5} cols={5} />
+            ) : (
             <table aria-label="Optimisation jobs" className="w-full text-xs">
               <thead>
                 <tr className="text-left text-gray-500 border-b">
@@ -152,7 +153,7 @@ function HistoryContent() {
                 </tr>
               </thead>
               <tbody>
-                {jobs.map((j) => (
+                {(jobs ?? []).map((j) => (
                   <tr key={j.job_id} className="border-b last:border-0">
                     <td className="py-1 pr-2 font-mono">{j.job_id.slice(0, 8)}…</td>
                     <td className="py-1 pr-2">
@@ -163,7 +164,7 @@ function HistoryContent() {
                     <td className="py-1 text-red-500 truncate max-w-[200px]">{j.error ?? ""}</td>
                   </tr>
                 ))}
-                {jobs.length === 0 && (
+                {(jobs ?? []).length === 0 && (
                   <tr>
                     <td colSpan={5} className="py-4 text-center text-gray-400">
                       No jobs found
@@ -172,6 +173,7 @@ function HistoryContent() {
                 )}
               </tbody>
             </table>
+            )}
           </>
         )}
 
@@ -223,6 +225,9 @@ function HistoryContent() {
                 </select>
               </div>
             </div>
+            {batchesLoading ? (
+              <SkeletonTable rows={5} cols={5} />
+            ) : (
             <table aria-label="Apply batches" className="w-full text-xs">
               <thead>
                 <tr className="text-left text-gray-500 border-b">
@@ -234,7 +239,7 @@ function HistoryContent() {
                 </tr>
               </thead>
               <tbody>
-                {batches.map((b) => (
+                {(batches ?? []).map((b) => (
                   <tr key={b.batch_id} className="border-b last:border-0">
                     <td className="py-1 pr-2 font-mono">{b.batch_id.slice(0, 8)}…</td>
                     <td className="py-1 pr-2">{b.mode}</td>
@@ -245,7 +250,7 @@ function HistoryContent() {
                     <td className="py-1 text-gray-500">{b.finished_at ? fmtDate(b.finished_at) : "—"}</td>
                   </tr>
                 ))}
-                {batches.length === 0 && (
+                {(batches ?? []).length === 0 && (
                   <tr>
                     <td colSpan={5} className="py-4 text-center text-gray-400">
                       No batches found
@@ -254,6 +259,7 @@ function HistoryContent() {
                 )}
               </tbody>
             </table>
+            )}
           </>
         )}
 
@@ -288,6 +294,9 @@ function HistoryContent() {
                 </select>
               </div>
             </div>
+            {auditLoading ? (
+              <SkeletonTable rows={5} cols={4} />
+            ) : (
             <table aria-label="Audit events" className="w-full text-xs">
               <thead>
                 <tr className="text-left text-gray-500 border-b">
@@ -298,7 +307,7 @@ function HistoryContent() {
                 </tr>
               </thead>
               <tbody>
-                {audit.map((a) => (
+                {(audit ?? []).map((a) => (
                   <tr key={a.id} className="border-b last:border-0">
                     <td className="py-1 pr-2 font-mono">{a.id.slice(0, 8)}…</td>
                     <td className="py-1 pr-2">{a.event_type}</td>
@@ -312,7 +321,7 @@ function HistoryContent() {
                     </td>
                   </tr>
                 ))}
-                {audit.length === 0 && (
+                {(audit ?? []).length === 0 && (
                   <tr>
                     <td colSpan={4} className="py-4 text-center text-gray-400">
                       No audit events found
@@ -321,6 +330,7 @@ function HistoryContent() {
                 )}
               </tbody>
             </table>
+            )}
           </>
         )}
       </div>

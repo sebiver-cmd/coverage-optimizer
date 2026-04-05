@@ -3,7 +3,7 @@
 import RequireAuth from "@/components/RequireAuth";
 import PageShell from "@/components/PageShell";
 import { useAuth } from "@/lib/auth-context";
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   getBillingStatus,
   getTenantPlan,
@@ -12,20 +12,23 @@ import {
   type TenantPlan,
   ApiError,
 } from "@/lib/api";
+import { useCachedFetch } from "@/lib/use-cached-fetch";
+import { SkeletonText } from "@/components/Skeleton";
 
 function BillingContent() {
   const { token, user } = useAuth();
-  const [plan, setPlan] = useState<TenantPlan | null>(null);
-  const [billing, setBilling] = useState<BillingStatus | null>(null);
+
+  const planFetcher = useCallback(() => getTenantPlan(token!), [token]);
+  const billingFetcher = useCallback(() => getBillingStatus(token!), [token]);
+
+  const { data: plan, loading: planLoading } =
+    useCachedFetch<TenantPlan>(planFetcher, "/tenant/plan", token);
+  const { data: billing, loading: billingLoading } =
+    useCachedFetch<BillingStatus>(billingFetcher, "/billing/status", token);
+
   const [selectedPlan, setSelectedPlan] = useState("pro");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (!token) return;
-    getTenantPlan(token).then(setPlan).catch((e) => setError(e instanceof Error ? e.message : "Failed to load plan"));
-    getBillingStatus(token).then(setBilling).catch((e) => setError(e instanceof Error ? e.message : "Failed to load billing status"));
-  }, [token]);
 
   async function handleUpgrade() {
     if (!token) return;
@@ -52,7 +55,9 @@ function BillingContent() {
         {/* Plan Info */}
         <div className="bg-white rounded-lg shadow p-6">
           <h2 className="text-sm font-medium text-gray-500 mb-3">Current Plan</h2>
-          {plan ? (
+          {planLoading ? (
+            <SkeletonText lines={3} />
+          ) : plan ? (
             <>
               <p className="text-2xl font-bold capitalize mb-2">{plan.plan}</p>
               <div className="space-y-1 text-sm text-gray-600">
@@ -61,15 +66,15 @@ function BillingContent() {
                 <p>Daily sync optimizations: {plan.limits.daily_optimize_sync_limit}</p>
               </div>
             </>
-          ) : (
-            <p className="text-sm text-gray-400">Loading…</p>
-          )}
+          ) : null}
         </div>
 
         {/* Billing Status */}
         <div className="bg-white rounded-lg shadow p-6">
           <h2 className="text-sm font-medium text-gray-500 mb-3">Billing Status</h2>
-          {billing ? (
+          {billingLoading ? (
+            <SkeletonText lines={3} />
+          ) : billing ? (
             billing.billing_enabled ? (
               <div className="space-y-2 text-sm">
                 <p>
@@ -98,9 +103,7 @@ function BillingContent() {
                 Billing is not enabled for this instance.
               </p>
             )
-          ) : (
-            <p className="text-sm text-gray-400">Loading…</p>
-          )}
+          ) : null}
         </div>
       </div>
 

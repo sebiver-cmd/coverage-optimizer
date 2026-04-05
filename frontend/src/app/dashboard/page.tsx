@@ -3,7 +3,7 @@
 import RequireAuth from "@/components/RequireAuth";
 import PageShell from "@/components/PageShell";
 import { useAuth } from "@/lib/auth-context";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback } from "react";
 import {
   getTenantPlan,
   getUsage,
@@ -12,26 +12,29 @@ import {
   type UsageInfo,
   type Credential,
 } from "@/lib/api";
+import { useCachedFetch } from "@/lib/use-cached-fetch";
+import { SkeletonCard, SkeletonText } from "@/components/Skeleton";
 
 function DashboardContent() {
   const { token, user } = useAuth();
-  const [plan, setPlan] = useState<TenantPlan | null>(null);
-  const [usage, setUsage] = useState<UsageInfo | null>(null);
-  const [creds, setCreds] = useState<Credential[]>([]);
-  const [error, setError] = useState<string | null>(null);
 
+  const planFetcher = useCallback(() => getTenantPlan(token!), [token]);
+  const usageFetcher = useCallback(() => getUsage(token!), [token]);
+  const credsFetcher = useCallback(() => listCredentials(token!), [token]);
+
+  const { data: plan, loading: planLoading, error: planErr, refetch: refetchPlan } =
+    useCachedFetch<TenantPlan>(planFetcher, "/tenant/plan", token);
+  const { data: usage, loading: usageLoading, error: usageErr, refetch: refetchUsage } =
+    useCachedFetch<UsageInfo>(usageFetcher, "/usage", token, { ttl: 30_000 });
+  const { data: creds, loading: credsLoading, error: credsErr, refetch: refetchCreds } =
+    useCachedFetch<Credential[]>(credsFetcher, "/credentials", token);
+
+  const error = planErr ?? usageErr ?? credsErr;
   const loadData = useCallback(() => {
-    if (!token) return;
-    setError(null);
-    const setFirstError = (msg: string) => setError((prev) => prev ?? msg);
-    getTenantPlan(token).then(setPlan).catch((e) => setFirstError(e instanceof Error ? e.message : "Failed to load plan"));
-    getUsage(token).then(setUsage).catch((e) => setFirstError(e instanceof Error ? e.message : "Failed to load usage"));
-    listCredentials(token).then(setCreds).catch((e) => setFirstError(e instanceof Error ? e.message : "Failed to load credentials"));
-  }, [token]);
-
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+    refetchPlan();
+    refetchUsage();
+    refetchCreds();
+  }, [refetchPlan, refetchUsage, refetchCreds]);
 
   return (
     <PageShell title="Dashboard">
@@ -58,7 +61,9 @@ function DashboardContent() {
         </Card>
 
         <Card title="Plan">
-          {plan ? (
+          {planLoading ? (
+            <SkeletonText lines={2} />
+          ) : plan ? (
             <>
               <p className="text-lg font-semibold capitalize">{plan.plan}</p>
               <p className="text-xs text-gray-500 mt-1">
@@ -66,13 +71,13 @@ function DashboardContent() {
                 Applies: {plan.limits.daily_apply_limit}/day
               </p>
             </>
-          ) : (
-            <p className="text-sm text-gray-400">Loading…</p>
-          )}
+          ) : null}
         </Card>
 
         <Card title="Today&rsquo;s Usage">
-          {usage ? (
+          {usageLoading ? (
+            <SkeletonText lines={2} />
+          ) : usage ? (
             <div className="space-y-1 text-sm">
               <UsageBar
                 label="Optimize jobs"
@@ -85,16 +90,16 @@ function DashboardContent() {
                 limit={usage.limits.daily_apply_limit}
               />
             </div>
-          ) : (
-            <p className="text-sm text-gray-400">Loading…</p>
-          )}
+          ) : null}
         </Card>
       </div>
 
       {/* Credentials */}
       <div className="bg-white rounded-lg shadow p-6">
         <h2 className="text-lg font-semibold mb-3">Credential Profiles</h2>
-        {creds.length === 0 ? (
+        {credsLoading ? (
+          <SkeletonText lines={3} />
+        ) : creds && creds.length === 0 ? (
           <p className="text-sm text-gray-500">
             No credentials stored. Add one in the Price Optimizer to connect to DanDomain.
           </p>
@@ -108,7 +113,7 @@ function DashboardContent() {
               </tr>
             </thead>
             <tbody>
-              {creds.map((c) => (
+              {(creds ?? []).map((c) => (
                 <tr key={c.id} className="border-b last:border-0">
                   <td className="py-2">{c.label}</td>
                   <td className="py-2 text-gray-600">{c.api_username}</td>
