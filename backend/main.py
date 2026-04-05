@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -29,6 +29,7 @@ from backend.tenant_api import router as tenant_router
 from backend.auth_api import router as auth_router
 from backend.config import get_settings
 from backend.db import check_db, init_engine
+from backend.rbac import require_role
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,7 @@ if _cors_origins:
 # ---------------------------------------------------------------------------
 
 
-@app.get("/health")
+@app.get("/health", dependencies=[Depends(require_role("viewer"))])
 def health_check() -> dict[str, str]:
     """Liveness probe — returns basic status plus optional DB ping.
 

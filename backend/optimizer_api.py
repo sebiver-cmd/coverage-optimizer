@@ -36,7 +36,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from dandomain_api import DanDomainClient, DanDomainAPIError
@@ -52,6 +52,7 @@ from backend.cache import (
     get_cached_products,
     set_cached_products,
 )
+from backend.rbac import require_role
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +169,7 @@ class OptimizeResponse(BaseModel):
 # Router
 # ---------------------------------------------------------------------------
 
-router = APIRouter(prefix="/optimize", tags=["optimize"])
+router = APIRouter(prefix="/optimize", tags=["optimize"], dependencies=[Depends(require_role("viewer"))])
 
 
 @router.post("/", response_model=OptimizeResponse)

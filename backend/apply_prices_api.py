@@ -16,10 +16,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.optimizer_api import OptimizeRequest, run_optimization
+from backend.rbac import require_role
 from backend.apply_constants import BATCH_DIR, UUID_RE
 
 logger = logging.getLogger(__name__)
@@ -128,7 +129,7 @@ class CreateManifestResponse(BaseModel):
 router = APIRouter(tags=["apply-prices"])
 
 
-@router.post("/apply-prices/dry-run", response_model=DryRunResponse)
+@router.post("/apply-prices/dry-run", response_model=DryRunResponse, dependencies=[Depends(require_role("operator"))])
 def dry_run_apply(payload: DryRunRequest) -> DryRunResponse:
     """Compute a dry-run change set without writing to the webshop.
 
@@ -206,7 +207,7 @@ def dry_run_apply(payload: DryRunRequest) -> DryRunResponse:
     )
 
 
-@router.get("/apply-prices/batch/{batch_id}")
+@router.get("/apply-prices/batch/{batch_id}", dependencies=[Depends(require_role("viewer"))])
 def get_batch(batch_id: str) -> dict:
     """Return a previously persisted dry-run manifest.
 
@@ -223,7 +224,7 @@ def get_batch(batch_id: str) -> dict:
     return json.loads(manifest_path.read_text(encoding="utf-8"))
 
 
-@router.post("/apply-prices/create-manifest", response_model=CreateManifestResponse)
+@router.post("/apply-prices/create-manifest", response_model=CreateManifestResponse, dependencies=[Depends(require_role("operator"))])
 def create_manifest(payload: CreateManifestRequest) -> CreateManifestResponse:
     """Persist a pre-computed change set as a batch manifest.
 

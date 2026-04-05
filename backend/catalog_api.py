@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from dandomain_api import DanDomainClient, DanDomainAPIError
@@ -27,6 +27,7 @@ from backend.cache import (
     get_cached_enriched_products,
     set_cached_enriched_products,
 )
+from backend.rbac import require_role
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ class CatalogRequest(BaseModel):
 # Router
 # ---------------------------------------------------------------------------
 
-router = APIRouter(prefix="/catalog", tags=["catalog"])
+router = APIRouter(prefix="/catalog", tags=["catalog"], dependencies=[Depends(require_role("viewer"))])
 
 
 @router.post("/products")
