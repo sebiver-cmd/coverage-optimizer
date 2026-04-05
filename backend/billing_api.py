@@ -240,7 +240,11 @@ async def billing_webhook(request: Request) -> Response:
     db = next(db_gen)
     try:
         result = handle_webhook_event(event, db=db, settings=settings)
-        logger.info("Stripe webhook processed: %s", result)
+        logger.info(
+            "Stripe webhook processed: handled=%s event_type=%s",
+            result.get("handled"),
+            result.get("event_type"),
+        )
         return Response(status_code=200, content="ok")
     finally:
         try:
