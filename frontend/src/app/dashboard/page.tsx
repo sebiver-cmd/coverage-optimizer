@@ -3,7 +3,7 @@
 import RequireAuth from "@/components/RequireAuth";
 import PageShell from "@/components/PageShell";
 import { useAuth } from "@/lib/auth-context";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   getTenantPlan,
   getUsage,
@@ -20,18 +20,18 @@ function DashboardContent() {
   const [creds, setCreds] = useState<Credential[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const loadData = () => {
+  const loadData = useCallback(() => {
     if (!token) return;
     setError(null);
-    getTenantPlan(token).then(setPlan).catch((e) => setError(e instanceof Error ? e.message : "Failed to load plan"));
-    getUsage(token).then(setUsage).catch((e) => setError(e instanceof Error ? e.message : "Failed to load usage"));
-    listCredentials(token).then(setCreds).catch((e) => setError(e instanceof Error ? e.message : "Failed to load credentials"));
-  };
+    const setFirstError = (msg: string) => setError((prev) => prev ?? msg);
+    getTenantPlan(token).then(setPlan).catch((e) => setFirstError(e instanceof Error ? e.message : "Failed to load plan"));
+    getUsage(token).then(setUsage).catch((e) => setFirstError(e instanceof Error ? e.message : "Failed to load usage"));
+    listCredentials(token).then(setCreds).catch((e) => setFirstError(e instanceof Error ? e.message : "Failed to load credentials"));
+  }, [token]);
 
   useEffect(() => {
     loadData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, [loadData]);
 
   return (
     <PageShell title="Dashboard">
