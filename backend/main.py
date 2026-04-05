@@ -31,6 +31,7 @@ from backend.credentials_api import router as credentials_router
 from backend.audit_api import router as audit_router
 from backend.usage_api import router as usage_router
 from backend.plan_api import router as plan_router
+from backend.billing_api import router as billing_router
 from backend.config import get_settings
 from backend.db import check_db, init_engine
 from backend.rbac import require_role
@@ -100,6 +101,7 @@ app.include_router(credentials_router)
 app.include_router(audit_router)
 app.include_router(usage_router)
 app.include_router(plan_router)
+app.include_router(billing_router)
 
 # -- CORS middleware (only when origins are configured) ------------------
 _cors_origins = get_settings().get_cors_origins_list()

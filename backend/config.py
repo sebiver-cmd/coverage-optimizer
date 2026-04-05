@@ -159,6 +159,31 @@ class Settings(BaseSettings):
         ),
     )
 
+    # -- Stripe / Billing (Task 8.1) --------------------------------------
+    stripe_secret_key: Optional[str] = Field(
+        default=None,
+        description="Stripe secret key (server-side only, never expose to UI).",
+    )
+    stripe_webhook_secret: Optional[str] = Field(
+        default=None,
+        description="Stripe webhook signing secret (whsec_…).",
+    )
+    stripe_price_id_pro: Optional[str] = Field(
+        default=None,
+        description="Stripe Price ID for the Pro plan.",
+    )
+    stripe_price_id_enterprise: Optional[str] = Field(
+        default=None,
+        description="Stripe Price ID for the Enterprise plan.",
+    )
+    billing_enabled: bool = Field(
+        default=True,
+        description=(
+            "Master switch for billing features.  When False or when Stripe "
+            "keys are missing, billing endpoints return 503."
+        ),
+    )
+
     # -----------------------------------------------------------------
     # Validators
     # -----------------------------------------------------------------
@@ -223,6 +248,8 @@ class Settings(BaseSettings):
             "encryption_key",
             "jwt_secret",
             "cache_key_salt",
+            "stripe_secret_key",
+            "stripe_webhook_secret",
         }
     )
 
