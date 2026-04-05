@@ -93,108 +93,107 @@ automatically without manual `alembic` commands.
 
 ---
 
-## Phase 15 — Choose and Set Up Hosting
+## Phase 15 — Set Up Hetzner VPS Hosting
 
-> You need a server to run your Docker containers. Smarty (your domain
-> registrar) does NOT provide application hosting — it only manages DNS.
+> All services run on a single **Hetzner CX22 VPS** (~€7/mo).
+> Postgres and Redis run as Docker containers on the same server.
 
-### Task 15.1 — Pick a Hosting Platform
+### Task 15.1 — Set Up Hetzner VPS
 
-**What**: Choose where to run the 5 Docker services.
+**Choice**: **Hetzner VPS** — CX22 (2 vCPU, 4 GB RAM, ~€7/mo).
 
-**Options** (pick one):
-
-| Option | Cost | Difficulty | Best for |
-|--------|------|------------|----------|
-| **Hetzner VPS** | ~€5-10/mo | Medium | Cheapest, full control |
-| **DigitalOcean Droplet** | ~$12-24/mo | Medium | Good docs, easy UI |
-| **Railway** | ~$5-20/mo | Easy | Auto-deploys from GitHub |
-| **Fly.io** | ~$5-15/mo | Easy | Fast global deployment |
-| **Render** | ~$7-25/mo | Easy | Simple, GitHub integration |
+**Why Hetzner**: Cheapest option with full control. Datacenters in Germany
+give ~10ms latency to Denmark. A single VPS runs all 6 Docker services
+(api, worker, frontend, postgres, redis, caddy) via `docker compose` —
+no per-service charges like PaaS platforms. The deploy workflow
+(`.github/workflows/deploy.yml`) works out of the box with SSH access.
 
 **Steps**:
 
-1. **If you pick a VPS** (Hetzner / DigitalOcean):
-   - Create an account.
-   - Create a new server (Ubuntu 24.04, at least 2 GB RAM, 2 vCPU).
-   - Note down the server's **IP address** (e.g., `123.45.67.89`).
-   - SSH into the server: `ssh root@123.45.67.89`.
-   - Install Docker:
-     ```bash
-     curl -fsSL https://get.docker.com | sh
-     ```
-   - Install Docker Compose:
-     ```bash
-     apt install docker-compose-plugin
-     ```
+1. Create an account at [hetzner.com](https://www.hetzner.com/).
+2. Go to **Cloud Console** → **Add Server**.
+3. Location: **Falkenstein** or **Nuremberg** (closest to Denmark).
+4. Image: **Ubuntu 24.04**.
+5. Type: **CX22** (2 vCPU, 4 GB RAM, 40 GB SSD) — ~€7/mo.
+6. Add your **SSH key** (or create one).
+7. Click **Create & Buy Now**.
+8. Note down the server's **IP address** (e.g., `123.45.67.89`).
+9. SSH into the server:
+   ```bash
+   ssh root@123.45.67.89
+   ```
+10. Install Docker:
+    ```bash
+    curl -fsSL https://get.docker.com | sh
+    ```
+11. Install Docker Compose:
+    ```bash
+    apt install docker-compose-plugin
+    ```
+12. Verify:
+    ```bash
+    docker --version && docker compose version
+    ```
 
-2. **If you pick a PaaS** (Railway / Fly.io / Render):
-   - Create an account.
-   - Connect your GitHub repository (`sebiver-cmd/coverage-optimizer`).
-   - Follow their guide to deploy a Docker Compose project.
+**Done when**: You can SSH into the Hetzner server and `docker compose version`
+returns a version number.
 
-**Done when**: You have a server with Docker installed, or a PaaS account
-connected to your GitHub repo.
-
-- [ ] Task 15.1 — Pick and set up hosting platform
-
----
-
-### Task 15.2 — Set Up a Production Database (PostgreSQL)
-
-**What**: Your production database should be reliable with automatic backups.
-You can use the Docker Compose Postgres container on a VPS, or a managed
-database service.
-
-**Option A — Use Docker Compose Postgres (simplest)**:
-- The Postgres container in `docker-compose.yml` already works.
-- Make sure the `pgdata` volume is on a persistent disk.
-- Set up a cron job for backups (see `docs/ops/backups.md`).
-
-**Option B — Use a managed database (recommended for production)**:
-
-| Service | Free tier | Paid |
-|---------|-----------|------|
-| **Neon** | 0.5 GB free | $19/mo |
-| **Supabase** | 500 MB free | $25/mo |
-| **DigitalOcean Managed DB** | — | $15/mo |
-
-Steps for managed DB:
-1. Create a Postgres database on your chosen provider.
-2. Copy the connection string (looks like:
-   `postgresql+psycopg2://user:password@host:5432/dbname`).
-3. Save it — you'll use it as `DATABASE_URL` in Task 16.1.
-
-**Done when**: You have a working Postgres database (either Docker or managed)
-with a connection string ready.
-
-- [ ] Task 15.2 — Set up production PostgreSQL
+- [ ] Task 15.1 — Set up Hetzner VPS
 
 ---
 
-### Task 15.3 — Set Up Production Redis
+### Task 15.2 — Use Docker Compose PostgreSQL
 
-**What**: Redis is used for background job queues and caching.
+**Choice**: **Docker Compose Postgres** (Option A — self-hosted on VPS).
 
-**Option A — Use Docker Compose Redis (simplest)**:
-- The Redis container in `docker-compose.yml` already works.
-- Fine for a VPS deployment.
+**Why**: Zero extra cost — the Postgres container in `docker-compose.yml`
+already works. For an early-stage SaaS with a small number of tenants this
+is perfectly fine. When you have paying customers and downtime cost matters,
+switch to a managed database (Neon ~$19/mo or DigitalOcean ~$15/mo) by
+changing `DATABASE_URL` in your `.env`.
 
-**Option B — Use a managed Redis**:
+**Steps**:
 
-| Service | Free tier | Paid |
-|---------|-----------|------|
-| **Upstash** | 10K cmds/day free | $10/mo |
-| **Redis Cloud** | 30 MB free | $7/mo |
+1. The Postgres service is already defined in `infra/docker-compose.yml`.
+   No changes needed.
+2. The `pgdata` Docker volume persists data across restarts.
+3. **Set up daily backups** — follow the guide in `docs/ops/backups.md`:
+   ```bash
+   # Example cron job (on the Hetzner VPS):
+   crontab -e
+   # Add this line — daily backup at 3 AM:
+   0 3 * * * docker exec sboptima-postgres pg_dump -U sboptima sboptima | gzip > /root/backups/sboptima-$(date +\%Y\%m\%d).sql.gz
+   ```
+4. Store backups off-server (e.g., Hetzner Storage Box or an S3 bucket)
+   for disaster recovery.
 
-Steps for managed Redis:
-1. Create a Redis instance on your chosen provider.
-2. Copy the connection string (looks like: `redis://default:password@host:6379`).
-3. Save it — you'll use it as `REDIS_URL` in Task 16.1.
+**Done when**: Postgres is running via Docker Compose and a daily backup
+cron job is configured.
 
-**Done when**: You have a working Redis instance with a connection string ready.
+- [ ] Task 15.2 — Set up Docker Compose PostgreSQL with backups
 
-- [ ] Task 15.3 — Set up production Redis
+---
+
+### Task 15.3 — Use Docker Compose Redis
+
+**Choice**: **Docker Compose Redis** (Option A — self-hosted on VPS).
+
+**Why**: Redis is only used for Arq job queues, not as a primary data
+store. If Redis restarts, pending jobs re-queue automatically (Arq handles
+this). Zero extra cost, already configured. Managed Redis (Upstash/Redis
+Cloud) would add latency and cost for no benefit in a single-VPS setup.
+
+**Steps**:
+
+1. The Redis service is already defined in `infra/docker-compose.yml`.
+   No changes needed.
+2. The `redisdata` Docker volume persists data across restarts.
+3. Redis data is ephemeral (job queues) — no backup needed.
+
+**Done when**: Redis is running via Docker Compose (it already is after
+`docker compose up`).
+
+- [ ] Task 15.3 — Confirm Docker Compose Redis is running
 
 ---
 
@@ -393,9 +392,9 @@ the Caddy service with ports 80 and 443.
 > DNS tells the internet where to find sboptima.dk. You do this in Smarty
 > (your domain registrar).
 
-### Task 18.1 — Point sboptima.dk to Your Server
+### Task 18.1 — Point sboptima.dk to Your Hetzner Server
 
-**What**: Create DNS records so your domains point to your hosting server.
+**What**: Create DNS records so your domains point to your Hetzner VPS.
 
 **Steps**:
 
@@ -403,14 +402,14 @@ the Caddy service with ports 80 and 443.
 
 2. Go to **DNS settings** for `sboptima.dk`.
 
-3. **Add these DNS records** (replace `123.45.67.89` with your real
-   server IP from Task 15.1):
+3. **Add these DNS records** (replace `YOUR_SERVER_IP` with your real
+   Hetzner IP from Task 15.1):
 
    | Type | Name | Value | TTL |
    |------|------|-------|-----|
-   | A | `@` | `123.45.67.89` | 300 |
-   | A | `www` | `123.45.67.89` | 300 |
-   | A | `api` | `123.45.67.89` | 300 |
+   | A | `@` | `YOUR_SERVER_IP` | 300 |
+   | A | `www` | `YOUR_SERVER_IP` | 300 |
+   | A | `api` | `YOUR_SERVER_IP` | 300 |
 
 4. Go to **DNS settings** for `sboptima.com`.
 
@@ -418,8 +417,8 @@ the Caddy service with ports 80 and 443.
 
    | Type | Name | Value | TTL |
    |------|------|-------|-----|
-   | A | `@` | `123.45.67.89` | 300 |
-   | A | `www` | `123.45.67.89` | 300 |
+   | A | `@` | `YOUR_SERVER_IP` | 300 |
+   | A | `www` | `YOUR_SERVER_IP` | 300 |
 
 6. **Wait 5–30 minutes** for DNS to update (can take up to 48 hours in
    rare cases).
@@ -432,26 +431,26 @@ the Caddy service with ports 80 and 443.
    ```
    Each should return your server's IP address.
 
-> **If you're using a PaaS** (Railway, Render, Fly.io): follow their
-> custom domain instructions instead — they may use CNAME records.
+> **If you're using a PaaS** in the future: follow their custom domain
+> instructions instead — they may use CNAME records.
 
-**Done when**: `nslookup sboptima.dk` returns your server's IP address.
+**Done when**: `nslookup sboptima.dk` returns your Hetzner server's IP address.
 
-- [ ] Task 18.1 — Point DNS to your server
+- [ ] Task 18.1 — Point DNS to Hetzner server
 
 ---
 
 ## Phase 19 — Deploy and Launch
 
-### Task 19.1 — Deploy to Your Server
+### Task 19.1 — Deploy to Hetzner VPS
 
-**What**: Upload the code and start all services on your production server.
+**What**: Upload the code and start all services on your Hetzner server.
 
-**For a VPS (Hetzner / DigitalOcean)**:
+**Steps**:
 
 1. SSH into your server:
    ```bash
-   ssh root@123.45.67.89
+   ssh root@YOUR_SERVER_IP
    ```
 
 2. Clone the repository:
@@ -467,35 +466,33 @@ the Caddy service with ports 80 and 443.
    Paste in all the values from Task 16.1 and 16.2. Save and exit
    (Ctrl+O, Enter, Ctrl+X).
 
-4. Start all services:
+4. Uncomment the Caddy service and volumes in `infra/docker-compose.yml`:
+   - Uncomment the `caddy:` service block.
+   - Uncomment `caddy_data:` and `caddy_config:` in the `volumes:` section.
+
+5. Start all services:
    ```bash
    docker compose -f infra/docker-compose.yml up -d --build
    ```
    The `-d` flag runs everything in the background.
 
-5. Check that all services are running:
+6. Check that all services are running:
    ```bash
    docker compose -f infra/docker-compose.yml ps
    ```
    You should see 6 services: `api`, `frontend`, `postgres`, `redis`,
    `worker`, `caddy` — all with status "Up".
 
-6. Check the API health:
+7. Check the API health:
    ```bash
    curl http://localhost:8000/health
    ```
    Should return `{"status":"ok","db":"ok"}`.
 
-7. **Wait 1–2 minutes** for Caddy to automatically get SSL certificates.
+8. **Wait 1–2 minutes** for Caddy to automatically get SSL certificates.
 
-8. Open your browser and go to **https://sboptima.dk** — you should see
+9. Open your browser and go to **https://sboptima.dk** — you should see
    the login page! 🎉
-
-**For a PaaS (Railway / Render / Fly.io)**:
-
-1. Push your code to GitHub (the PaaS auto-deploys).
-2. Set environment variables in the PaaS dashboard.
-3. The platform handles SSL and deployment automatically.
 
 **Done when**: https://sboptima.dk loads the login page, and
 https://api.sboptima.dk/health returns `{"status":"ok","db":"ok"}`.
@@ -552,10 +549,10 @@ https://api.sboptima.dk/health returns `{"status":"ok","db":"ok"}`.
 
 ### Task 20.1 — Auto-Deploy from GitHub
 
-**What**: Every time you push code to the `main` branch, the server
+**What**: Every time you push code to the `main` branch, the Hetzner server
 automatically pulls the new code and restarts the services.
 
-**For a VPS — use a GitHub Actions deploy workflow**:
+**Steps**:
 
 1. **On your server**, create a deploy script:
    ```bash
@@ -611,10 +608,7 @@ automatically pulls the new code and restarts the services.
 5. Push to `main` and watch the deploy happen automatically in the
    **Actions** tab on GitHub.
 
-**For a PaaS**: This usually works out of the box — Railway, Render,
-and Fly.io auto-deploy on push to `main`.
-
-**Done when**: Pushing to `main` automatically deploys to production.
+**Done when**: Pushing to `main` automatically deploys to Hetzner.
 
 - [x] Task 20.1 — Set up automatic deployment from GitHub
 
@@ -648,12 +642,23 @@ and Fly.io auto-deploy on push to `main`.
 
 | Phase | What | Tasks |
 |-------|------|-------|
-| **14** | Fix Docker Compose | 14.1 Add worker, 14.2 Auto-migrate |
-| **15** | Choose hosting | 15.1 Platform, 15.2 Postgres, 15.3 Redis |
+| **14** | Fix Docker Compose | 14.1 Add worker ✅, 14.2 Auto-migrate ✅ |
+| **15** | Hetzner VPS hosting | 15.1 Create Hetzner VPS, 15.2 Postgres (Docker), 15.3 Redis (Docker) |
 | **16** | Production config | 16.1 Secrets, 16.2 Stripe |
-| **17** | HTTPS & routing | 17.1 Caddy reverse proxy |
-| **18** | DNS | 18.1 Point domains to server |
-| **19** | Deploy & verify | 19.1 Deploy, 19.2 Test everything |
-| **20** | Auto-deploy | 20.1 CI/CD pipeline |
+| **17** | HTTPS & routing | 17.1 Caddy reverse proxy ✅ |
+| **18** | DNS | 18.1 Point domains to Hetzner |
+| **19** | Deploy & verify | 19.1 Deploy to Hetzner, 19.2 Test everything |
+| **20** | Auto-deploy | 20.1 CI/CD pipeline ✅ |
 
-**Total**: 10 tasks across 7 phases. Do them in order, top to bottom.
+**Total**: 10 tasks across 7 phases. 4 done (code changes), 6 remaining (manual setup).
+
+### Chosen Stack
+
+| Component | Choice | Cost |
+|-----------|--------|------|
+| **Hosting** | Hetzner CX22 VPS (2 vCPU, 4 GB RAM) | ~€7/mo |
+| **PostgreSQL** | Docker Compose (self-hosted on VPS) | $0 |
+| **Redis** | Docker Compose (self-hosted on VPS) | $0 |
+| **SSL/HTTPS** | Caddy (auto Let's Encrypt) | $0 |
+| **Domains** | sboptima.dk + sboptima.com (already owned) | Existing |
+| **Total** | | **~€7/mo** |
