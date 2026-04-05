@@ -40,7 +40,6 @@ ALL_ROLES = ["viewer", "operator", "admin", "owner"]
 # For POST endpoints that need a body, we send an empty or minimal body — the
 # auth layer should reject *before* validation when role is insufficient.
 VIEWER_ENDPOINTS = [
-    ("GET", "/health"),
     ("GET", "/brands?api_username=x&api_password=y"),
     ("POST", "/optimize"),
     ("POST", "/catalog/products"),
@@ -419,7 +418,7 @@ def test_auth_off_apply_status(client_auth_off):
 def test_invalid_token_returns_401(client_auth_required):
     """A garbage token must produce 401, not 403 or 500."""
     resp = client_auth_required.get(
-        "/health",
+        "/apply-prices/status",
         headers={"Authorization": "Bearer garbage.token.here"},
     )
     assert resp.status_code == 401
@@ -435,7 +434,7 @@ def test_expired_token_returns_401(db_session, client_auth_required):
         expires_delta=timedelta(seconds=-1),
     )
     resp = client_auth_required.get(
-        "/health",
+        "/apply-prices/status",
         headers=_auth_header(expired),
     )
     assert resp.status_code == 401
@@ -448,7 +447,7 @@ def test_deleted_user_returns_401(db_session, client_auth_required):
     db_session.delete(user)
     db_session.commit()
     resp = client_auth_required.get(
-        "/health",
+        "/apply-prices/status",
         headers=_auth_header(token),
     )
     assert resp.status_code == 401
