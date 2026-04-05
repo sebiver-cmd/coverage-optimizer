@@ -102,6 +102,7 @@ class TenantDetailResponse(BaseModel):
     usage: dict[str, int]
     user_count: int = 0
     credential_count: int = 0
+    llm_usage: Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +297,13 @@ def admin_get_tenant(
             .count()
         )
 
+        # LLM usage (Task 5.3)
+        try:
+            from backend.llm_usage import get_monthly_llm_usage
+            llm_data = get_monthly_llm_usage(tenant_id=str(tenant.id))
+        except Exception:
+            llm_data = None
+
         return TenantDetailResponse(
             id=str(tenant.id),
             name=tenant.name,
@@ -309,6 +317,7 @@ def admin_get_tenant(
             usage=usage,
             user_count=user_count,
             credential_count=cred_count,
+            llm_usage=llm_data,
         )
     finally:
         _close_db(db_gen)
