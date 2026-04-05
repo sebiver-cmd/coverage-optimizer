@@ -7,6 +7,8 @@ pdfplumber
 python-barcode
 Pillow
 fpdf2
+fastapi
+uvicorn
 psycopg2-binary
 redis
 sqlalchemy
