@@ -152,3 +152,21 @@ def test_healthz_returns_ok(monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body == {"status": "ok"}
+
+
+def test_root_returns_api_info(monkeypatch):
+    """GET / returns 200 with basic API identity (no auth required)."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    _reset_db_module()
+
+    from fastapi.testclient import TestClient
+    from backend.main import app
+
+    client = TestClient(app)
+    resp = client.get("/")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["name"] == "SB-Optima API"
+    assert "version" in body
+    assert body["docs"] == "/docs"
+    assert body["health"] == "/healthz"

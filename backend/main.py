@@ -147,6 +147,21 @@ if _cors_origins or _cors_regex:
 # ---------------------------------------------------------------------------
 
 
+@app.get("/")
+def root() -> dict[str, str]:
+    """Public root endpoint — returns basic API identity.
+
+    No authentication required.  Useful as a quick smoke-test to confirm
+    the service is reachable (e.g. ``curl http://localhost:8000/``).
+    """
+    return {
+        "name": app.title,
+        "version": app.version,
+        "docs": "/docs",
+        "health": "/healthz",
+    }
+
+
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     """Unauthenticated liveness probe for container orchestrators.
