@@ -20,6 +20,14 @@ import numpy as np
 from push_safety import build_push_updates
 from ui.backend_url import normalize_backend_url, normalize_base_url
 from ui.backend_client import create_manifest, apply_batch
+from ui.vault_helpers import (
+    build_optimize_payload,
+    build_catalog_payload,
+    build_apply_payload,
+    build_brands_params,
+    build_test_connection_payload,
+    get_auth_headers,
+)
 from domain.risk_analysis import (
     compute_largest_decreases,
     compute_near_cost_warnings,
@@ -79,8 +87,10 @@ _normalize_base_url = normalize_base_url
 
 def _fetch_brands_from_backend(
     backend_url: str,
-    api_username: str,
-    api_password: str,
+    api_username: str = "",
+    api_password: str = "",
+    token: str | None = None,
+    credential_id: str | None = None,
 ) -> list[dict]:
     """Fetch brands from ``GET /brands`` on the FastAPI backend.
 
@@ -89,13 +99,18 @@ def _fetch_brands_from_backend(
     """
     base = _normalize_base_url(backend_url)
     url = f"{base}/brands"
+    params = build_brands_params(
+        credential_id=credential_id,
+        token_present=bool(token),
+        api_username=api_username,
+        api_password=api_password,
+    )
+    headers = get_auth_headers(token)
     try:
         resp = requests.get(
             url,
-            params={
-                "api_username": api_username,
-                "api_password": api_password,
-            },
+            params=params,
+            headers=headers,
             timeout=_BACKEND_TIMEOUT,
         )
         resp.raise_for_status()
@@ -107,12 +122,14 @@ def _fetch_brands_from_backend(
 
 def _fetch_catalog_products(
     backend_url: str,
-    api_username: str,
-    api_password: str,
+    api_username: str = "",
+    api_password: str = "",
     site_id: int = 1,
     include_offline: bool = False,
     include_variants: bool = True,
     brand_ids: list[int] | None = None,
+    token: str | None = None,
+    credential_id: str | None = None,
 ) -> pd.DataFrame:
     """Fetch variant-enriched product catalogue from ``POST /catalog/products``.
 
@@ -124,18 +141,20 @@ def _fetch_catalog_products(
     """
     base = _normalize_base_url(backend_url)
     url = f"{base}/catalog/products"
-    payload: dict = {
-        "api_username": api_username,
-        "api_password": api_password,
-        "site_id": site_id,
-        "include_offline": include_offline,
-        "include_variants": include_variants,
-    }
-    if brand_ids:
-        payload["brand_ids"] = brand_ids
+    payload = build_catalog_payload(
+        site_id=site_id,
+        include_offline=include_offline,
+        include_variants=include_variants,
+        brand_ids=brand_ids,
+        credential_id=credential_id,
+        token_present=bool(token),
+        api_username=api_username,
+        api_password=api_password,
+    )
+    headers = get_auth_headers(token)
 
     try:
-        resp = requests.post(url, json=payload, timeout=_BACKEND_TIMEOUT)
+        resp = requests.post(url, json=payload, headers=headers, timeout=_BACKEND_TIMEOUT)
         resp.raise_for_status()
         data = resp.json()
         if not data:
@@ -148,31 +167,35 @@ def _fetch_catalog_products(
 
 def _run_backend_optimization(
     backend_url: str,
-    api_username: str,
-    api_password: str,
-    site_id: int,
-    brand_ids: list[int] | None,
-    include_offline: bool,
-    include_variants: bool,
-    price_pct: float,
-    beautify_digit: int,
+    api_username: str = "",
+    api_password: str = "",
+    site_id: int = 1,
+    brand_ids: list[int] | None = None,
+    include_offline: bool = False,
+    include_variants: bool = True,
+    price_pct: float = 0.0,
+    beautify_digit: int = 9,
+    token: str | None = None,
+    credential_id: str | None = None,
 ) -> dict | None:
     """Call ``POST /optimize/`` on the FastAPI backend.
 
     Returns the parsed JSON response (with ``summary`` and ``rows`` keys),
     or *None* on error.  Errors are reported via :func:`st.error`.
     """
-    payload: dict = {
-        "api_username": api_username,
-        "api_password": api_password,
-        "site_id": site_id,
-        "price_pct": price_pct,
-        "beautify_digit": beautify_digit,
-        "include_offline": include_offline,
-        "include_variants": include_variants,
-    }
-    if brand_ids:
-        payload["brand_ids"] = brand_ids
+    payload = build_optimize_payload(
+        site_id=site_id,
+        price_pct=price_pct,
+        beautify_digit=beautify_digit,
+        include_offline=include_offline,
+        include_variants=include_variants,
+        brand_ids=brand_ids,
+        credential_id=credential_id,
+        token_present=bool(token),
+        api_username=api_username,
+        api_password=api_password,
+    )
+    headers = get_auth_headers(token)
 
     base = _normalize_base_url(backend_url)
     url = f"{base}/optimize/"
@@ -181,6 +204,7 @@ def _run_backend_optimization(
         resp = requests.post(
             url,
             json=payload,
+            headers=headers,
             timeout=_BACKEND_TIMEOUT,
         )
         resp.raise_for_status()
@@ -362,18 +386,23 @@ def _run_dry_run_preview(
 
 
 def render(
-    api_username: str,
-    api_password: str,
-    api_ready: bool,
-    site_id: int,
-    dry_run: bool,
+    api_username: str = "",
+    api_password: str = "",
+    api_ready: bool = False,
+    site_id: int = 1,
+    dry_run: bool = True,
     backend_url: str = "http://127.0.0.1:8000",
+    token: str | None = None,
+    credential_id: str | None = None,
 ) -> None:
     """Render the full Price Optimizer page.
 
     Fetches brands and runs the pricing optimisation via the FastAPI
     backend (``GET /brands``, ``POST /optimize``).  Push-to-shop
     behaviour is unchanged.
+
+    When *token* and *credential_id* are provided (vault mode),
+    plaintext credentials are omitted from backend requests.
     """
 
     st.markdown(
@@ -441,6 +470,7 @@ def render(
         with st.spinner("Loading brands from backend..."):
             brands = _fetch_brands_from_backend(
                 backend_url, api_username, api_password,
+                token=token, credential_id=credential_id,
             )
             st.session_state["_backend_brands"] = brands
 
@@ -462,6 +492,8 @@ def render(
                 include_variants=True,
                 price_pct=price_pct,
                 beautify_digit=beautify_digit,
+                token=token,
+                credential_id=credential_id,
             )
             if response is not None:
                 (
@@ -483,6 +515,8 @@ def render(
                     "include_offline": include_offline,
                     "include_variants": True,
                     "brand_ids": selected_brands,
+                    "token": token,
+                    "credential_id": credential_id,
                 }
                 # Clear stale data-editor edits from previous runs
                 for k in ("_ed_all", "_ed_adj", "_ed_imp"):
@@ -516,6 +550,8 @@ def render(
             include_buy_price,
             beautify_digit,
             backend_url=backend_url,
+            token=token,
+            credential_id=credential_id,
         )
     elif "_opt_response" not in st.session_state:
         st.markdown(
@@ -592,9 +628,11 @@ def _render_filters(
 def _apply_batch(
     backend_url: str,
     batch_id: str,
-    api_username: str,
-    api_password: str,
+    api_username: str = "",
+    api_password: str = "",
     site_id: int = 1,
+    token: str | None = None,
+    credential_id: str | None = None,
 ) -> dict | None:
     """Call ``POST /apply-prices/apply`` on the FastAPI backend.
 
@@ -602,15 +640,17 @@ def _apply_batch(
     """
     base = _normalize_base_url(backend_url)
     url = f"{base}/apply-prices/apply"
-    body = {
-        "batch_id": batch_id,
-        "confirm": True,
-        "api_username": api_username,
-        "api_password": api_password,
-        "site_id": site_id,
-    }
+    body = build_apply_payload(
+        batch_id=batch_id,
+        site_id=site_id,
+        credential_id=credential_id,
+        token_present=bool(token),
+        api_username=api_username,
+        api_password=api_password,
+    )
+    headers = get_auth_headers(token)
     try:
-        resp = requests.post(url, json=body, timeout=_BACKEND_TIMEOUT)
+        resp = requests.post(url, json=body, headers=headers, timeout=_BACKEND_TIMEOUT)
         resp.raise_for_status()
         return resp.json()
     except requests.HTTPError as exc:
@@ -937,6 +977,8 @@ def _render_apply_section(
                 api_username=opt_params.get("api_username", ""),
                 api_password=opt_params.get("api_password", ""),
                 site_id=opt_params.get("site_id", 1),
+                token=opt_params.get("token"),
+                credential_id=opt_params.get("credential_id"),
             )
             if result is not None:
                 st.session_state["_apply_result"] = result
@@ -1163,6 +1205,8 @@ def _render_analysis(
     include_buy_price: bool,
     beautify_digit: int,
     backend_url: str = "http://127.0.0.1:8000",
+    token: str | None = None,
+    credential_id: str | None = None,
 ) -> None:
     """Render analysis results, data tabs, downloads, and push-to-shop.
 
@@ -1420,6 +1464,8 @@ def _render_analysis(
             site_id,
             dry_run,
             backend_url=backend_url,
+            token=token,
+            credential_id=credential_id,
         )
 
 
@@ -1461,6 +1507,8 @@ def _enrich_work_df_with_catalog(
             include_offline=opt_params.get("include_offline", False),
             include_variants=True,
             brand_ids=opt_params.get("brand_ids"),
+            token=opt_params.get("token"),
+            credential_id=opt_params.get("credential_id"),
         )
         st.session_state["_catalog_df"] = cat_df
 
@@ -2521,6 +2569,8 @@ def _render_push_to_shop(
     site_id,
     dry_run,
     backend_url: str = "http://127.0.0.1:8000",
+    token: str | None = None,
+    credential_id: str | None = None,
 ):
     """Render the push-to-shop section with safety gates."""
     st.divider()
@@ -2649,6 +2699,7 @@ def _render_push_to_shop(
             ):
                 _test_connection_via_backend(
                     backend_url, api_username, api_password, site_id,
+                    token=token, credential_id=credential_id,
                 )
 
         with push_col:
@@ -2674,6 +2725,7 @@ def _render_push_to_shop(
         ):
             _handle_live_push_confirmation(
                 api_username, api_password, site_id, backend_url,
+                token=token, credential_id=credential_id,
             )
 
 
@@ -2708,6 +2760,7 @@ def _handle_dry_run(selected_updates, n_selected):
 
 def _handle_live_push_confirmation(
     api_username, api_password, site_id, backend_url: str = "http://127.0.0.1:8000",
+    token: str | None = None, credential_id: str | None = None,
 ):
     """Handle the two-step live push confirmation."""
     pending_updates = st.session_state.get("_push_updates", [])
@@ -2752,11 +2805,13 @@ def _handle_live_push_confirmation(
     if confirmed:
         _execute_backend_push(
             pending_updates, api_username, api_password, site_id, backend_url,
+            token=token, credential_id=credential_id,
         )
 
 
 def _execute_backend_push(
     pending_updates, api_username, api_password, site_id, backend_url,
+    token: str | None = None, credential_id: str | None = None,
 ):
     """Execute the live push via the backend apply endpoints.
 
@@ -2791,6 +2846,7 @@ def _execute_backend_push(
         with st.spinner("Applying prices via backend…"):
             apply_result, apply_err = apply_batch(
                 backend_url, batch_id, api_username, api_password, site_id,
+                token=token, credential_id=credential_id,
             )
 
         if apply_err:
@@ -2830,15 +2886,27 @@ def _execute_backend_push(
         st.session_state.pop("_push_updates", None)
 
 
-def _test_connection_via_backend(backend_url, api_username, api_password, site_id):
+def _test_connection_via_backend(
+    backend_url, api_username, api_password, site_id,
+    token: str | None = None, credential_id: str | None = None,
+):
     """Test DanDomain API connectivity via the backend /test-connection endpoint."""
     from ui.backend_url import normalize_base_url as _norm  # local import to keep module-level clean
 
     url = f"{_norm(backend_url)}/test-connection"
+    payload = build_test_connection_payload(
+        site_id=site_id,
+        credential_id=credential_id,
+        token_present=bool(token),
+        api_username=api_username,
+        api_password=api_password,
+    )
+    headers = get_auth_headers(token)
     try:
         resp = requests.post(
             url,
-            json={"api_username": api_username, "api_password": api_password, "site_id": site_id},
+            json=payload,
+            headers=headers,
             timeout=_BACKEND_TIMEOUT,
         )
         resp.raise_for_status()
