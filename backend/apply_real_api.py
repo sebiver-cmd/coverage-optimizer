@@ -190,6 +190,11 @@ def apply_prices(payload: ApplyRequest, request: Request) -> ApplyResponse:
             ),
         )
 
+    # -0.5. Quota enforcement (Task 7.1) — only when auth enabled --------
+    settings = get_settings()
+    if settings.sboptima_auth_required:
+        _check_apply_quota(request)
+
     started_at = datetime.now(timezone.utc).isoformat()
 
     # 0. confirm must be true -------------------------------------------
@@ -321,6 +326,41 @@ def apply_prices(payload: ApplyRequest, request: Request) -> ApplyResponse:
         started_at=started_at,
         finished_at=finished_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# Quota enforcement helper for real apply (Task 7.1)
+# ---------------------------------------------------------------------------
+
+
+def _check_apply_quota(request: Request) -> None:
+    """Enforce daily apply quota (raises HTTPException 429 on limit)."""
+    try:
+        from backend.db import get_db
+        from backend.models import Tenant
+        from backend.quotas import check_quota
+
+        tenant_id = getattr(request.state, "tenant_id", None)
+        if tenant_id is None:
+            return
+
+        get_db_fn = request.app.dependency_overrides.get(get_db, get_db)
+        db_gen = get_db_fn()
+        db = next(db_gen)
+        try:
+            tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+            if tenant is None:
+                return
+            check_quota(db, tenant, "apply")
+        finally:
+            try:
+                next(db_gen, None)
+            except StopIteration:
+                pass
+    except HTTPException:
+        raise
+    except Exception:
+        logger.debug("Quota check failed (non-fatal)", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
