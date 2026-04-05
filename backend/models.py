@@ -110,8 +110,10 @@ class Tenant(Base):
         server_default=sa.text("(CURRENT_TIMESTAMP)"),
     )
     stripe_customer_id = Column(String(255), nullable=True)
+    stripe_subscription_id = Column(String(255), nullable=True)
     plan = Column(String(50), nullable=True)
     status = Column(String(50), nullable=True)
+    billing_status = Column(String(50), nullable=True)
 
     # Usage limits (Task 7.1) — NULL means unlimited
     daily_optimize_jobs_limit = Column(sa.Integer, nullable=True, default=None)

@@ -18,3 +18,4 @@ email-validator
 passlib[bcrypt]
 python-jose[cryptography]
 cryptography
+stripe
