@@ -67,6 +67,7 @@ def detect_invoice_columns(
     api_key: str | None = None,
     model: str = 'gpt-4o-mini',
     llm_call: 'LLMCallFn | None' = None,
+    tenant_id: str | None = None,
 ) -> dict[str, str | None]:
     """Auto-detect SKU, quantity, and description columns in an invoice.
 
@@ -81,6 +82,7 @@ def detect_invoice_columns(
     try:
         mapping = suggest_column_mapping(
             df, api_key=api_key, model=model, llm_call=llm_call,
+            tenant_id=tenant_id,
         )
     except Exception:
         mapping = None
@@ -1861,11 +1863,19 @@ def _build_mapping_prompt(df: pd.DataFrame) -> str:
     )
 
 
-def _default_llm_call(prompt: str, api_key: str, model: str) -> str | None:
+def _default_llm_call(
+    prompt: str, api_key: str, model: str, *, tenant_id: str | None = None,
+) -> str | None:
     """OpenAI-compatible ``/v1/chat/completions`` call using ``requests``.
 
     Reads ``OPENAI_BASE_URL`` from the environment to allow pointing at
     compatible providers.  Defaults to ``https://api.openai.com``.
+
+    Parameters
+    ----------
+    tenant_id : str or None
+        Optional tenant identifier for usage logging (Task 5.3).
+        Keyword-only to preserve backward compatibility with existing callers.
     """
     import requests as _requests
 
@@ -1889,7 +1899,25 @@ def _default_llm_call(prompt: str, api_key: str, model: str) -> str | None:
         )
         resp.raise_for_status()
         data = resp.json()
-        return data['choices'][0]['message']['content']
+        content = data['choices'][0]['message']['content']
+
+        # Log LLM usage with tenant_id (Task 5.3)
+        # Token estimate: ~4 chars per token; actual counts may differ for non-ASCII.
+        try:
+            prompt_tokens = len(prompt) // 4
+            response_tokens = len(content) // 4 if content else 0
+            _log.info(
+                "LLM call completed",
+                extra={
+                    "tenant_id": tenant_id,
+                    "tokens_used": prompt_tokens + response_tokens,
+                    "model": model,
+                },
+            )
+        except Exception:
+            pass
+
+        return content
     except Exception:
         _log.exception("LLM call failed")
         return None
@@ -1964,6 +1992,7 @@ def suggest_column_mapping(
     api_key: str | None = None,
     model: str = 'gpt-4o-mini',
     llm_call: LLMCallFn | None = None,
+    tenant_id: str | None = None,
 ) -> dict[str, str | None] | None:
     """Primary column-mapping mechanism for supplier/invoice DataFrames.
 
@@ -1997,6 +2026,8 @@ def suggest_column_mapping(
         ``(prompt: str, api_key: str, model: str) -> str | None``.
         Defaults to :func:`_default_llm_call` which uses the OpenAI-
         compatible REST API.
+    tenant_id : str or None
+        Optional tenant identifier for LLM usage tracking (Task 5.3).
 
     Returns
     -------
@@ -2022,7 +2053,12 @@ def suggest_column_mapping(
 
     prompt = _build_mapping_prompt(df)
     caller = llm_call or _default_llm_call
-    raw_response = caller(prompt, key, model)
+
+    # Pass tenant_id as keyword when using the default LLM caller (Task 5.3)
+    if caller is _default_llm_call:
+        raw_response = caller(prompt, key, model, tenant_id=tenant_id)
+    else:
+        raw_response = caller(prompt, key, model)
     mapping = _parse_llm_mapping_response(raw_response, list(df.columns))
 
     if mapping is None:

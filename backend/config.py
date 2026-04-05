@@ -225,6 +225,15 @@ class Settings(BaseSettings):
         ),
     )
 
+    # -- OpenAI / LLM usage limit (Task 5.3) ---------------------------------
+    openai_monthly_token_limit: int = Field(
+        default=0,
+        description=(
+            "Monthly token limit across all tenants. "
+            "0 means unlimited. When exceeded, LLM calls are rejected."
+        ),
+    )
+
     # -- Stripe / Billing (Task 8.1) --------------------------------------
     stripe_secret_key: Optional[str] = Field(
         default=None,

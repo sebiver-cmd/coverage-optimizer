@@ -639,6 +639,7 @@ def _parse_pdf_line_items_llm(
     api_key: str | None = None,
     model: str = 'gpt-4o-mini',
     llm_call=None,
+    tenant_id: str | None = None,
 ) -> pd.DataFrame | None:
     """LLM-assisted PDF line-item extraction.
 
@@ -655,6 +656,8 @@ def _parse_pdf_line_items_llm(
         Model name.
     llm_call : callable or None
         Injectable LLM call function.
+    tenant_id : str or None
+        Optional tenant identifier for LLM usage tracking (Task 5.3).
     """
     key = api_key or os.environ.get('OPENAI_API_KEY')
     if not key:
@@ -678,6 +681,22 @@ def _parse_pdf_line_items_llm(
     raw_response = caller(prompt, key, model)
     if not raw_response:
         return None
+
+    # Log LLM usage (Task 5.3)
+    # Token estimate: ~4 chars per token; actual counts may differ for non-ASCII.
+    try:
+        prompt_tokens = len(prompt) // 4
+        response_tokens = len(raw_response) // 4 if raw_response else 0
+        _log.info(
+            "LLM call completed",
+            extra={
+                "tenant_id": tenant_id,
+                "tokens_used": prompt_tokens + response_tokens,
+                "model": model,
+            },
+        )
+    except Exception:
+        pass
 
     # Parse the JSON array from the response
     text = raw_response.strip()
