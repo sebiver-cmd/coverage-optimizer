@@ -1,6 +1,7 @@
 # SB-Optima — SaaS Migration Roadmap
 
-> Last updated: 2026-04-05 — All tasks complete including Phase 8 (Next.js frontend).
+> Last updated: 2026-04-05 — Phases 0–10 complete. Phases 11–13 added for
+> production-readiness (frontend resilience, testing/CI, polish/performance).
 
 This roadmap migrates **SB-Optima / Coverage Optimizer** from a single-tenant
 Streamlit + FastAPI tool into a **multi-tenant, paid SaaS web application**
@@ -1154,6 +1155,207 @@ row caps.
 
 ---
 
+## Phase 11 — Frontend Resilience & Error Handling
+
+### Task 11.1 — React error boundaries + global error/not-found pages
+- [ ] Task 11.1
+
+**Objective**: Prevent white-screen crashes by adding React error boundaries and
+Next.js App Router error/not-found handlers, and fix silent error swallowing on
+Dashboard and History pages so users always see feedback when something fails.
+
+**Scope**:
+- `frontend/src/app/error.tsx` — global error boundary page (App Router
+  convention); renders a user-friendly "Something went wrong" message with a
+  "Try again" button that calls `reset()`. Logs error to console.
+- `frontend/src/app/not-found.tsx` — custom 404 page with link back to
+  dashboard.
+- `frontend/src/components/ErrorBoundary.tsx` — reusable React class-component
+  error boundary wrapping `children`; used inside `providers.tsx` around
+  page content.
+- **Fix silent error handling**: Dashboard page (`dashboard/page.tsx`) and
+  History page (`history/page.tsx`) currently use `.catch(() => {})`. Replace
+  with proper error state: add `error` state variable, display a red banner
+  with the error message and a "Retry" button, matching the pattern already
+  used in Login/Signup pages.
+- Ensure all pages surface API errors visibly.
+
+**Acceptance criteria**:
+- [ ] `frontend/src/app/error.tsx` exists and renders error UI with reset action.
+- [ ] `frontend/src/app/not-found.tsx` exists and renders 404 UI.
+- [ ] `ErrorBoundary` component wraps app content in `providers.tsx`.
+- [ ] Dashboard page shows red error banner on API failure (not silent).
+- [ ] History page shows red error banner on API failure (not silent).
+- [ ] `npm run build` succeeds with zero errors.
+
+---
+
+### Task 11.2 — Accessibility improvements (semantic HTML + ARIA)
+- [ ] Task 11.2
+
+**Objective**: Bring the frontend to baseline WCAG 2.1 Level A compliance by
+adding semantic HTML elements, ARIA labels, and focus management.
+
+**Scope**:
+- `Navbar.tsx` — wrap in `<nav aria-label="Main navigation">` element; add
+  `aria-current="page"` on active link.
+- `PageShell.tsx` — wrap children in `<main>` element.
+- All `<table>` elements — add `<caption>` or `aria-label` describing the
+  table content.
+- All form `<input>` elements — ensure each has an associated `<label>` with
+  `htmlFor` (Login, Signup, Optimizer controls, History filters).
+- Add `aria-live="polite"` on status/error banners so screen readers announce
+  them.
+- Add visible focus styles (`focus:ring-2 focus:ring-blue-500`) on all
+  interactive elements (buttons, links, inputs).
+- Skip-to-content link at top of `layout.tsx`.
+
+**Acceptance criteria**:
+- [ ] `<nav>` wraps navbar; `<main>` wraps page content.
+- [ ] All form inputs have associated `<label>` elements.
+- [ ] All tables have `aria-label` or `<caption>`.
+- [ ] Status/error banners have `aria-live="polite"`.
+- [ ] Visible focus indicators on all interactive elements.
+- [ ] Skip-to-content link present.
+- [ ] `npm run build` succeeds.
+
+---
+
+## Phase 12 — Frontend Testing & CI/CD Pipeline
+
+### Task 12.1 — Frontend test infrastructure + initial test suite
+- [ ] Task 12.1
+
+**Objective**: Set up a frontend test framework and write initial unit/component
+tests for critical paths (auth, API client, key pages).
+
+**Scope**:
+- Install and configure **Vitest** + **React Testing Library** +
+  **@testing-library/jest-dom** in `frontend/`.
+- `frontend/vitest.config.ts` — configure jsdom environment, path aliases.
+- `frontend/src/__tests__/api.test.ts` — unit tests for `api.ts`: verify
+  `authHeaders()`, `ApiError` construction, request builder (mock `fetch`).
+- `frontend/src/__tests__/auth-context.test.tsx` — test `AuthProvider`:
+  initial state, `setToken()`, `logout()`, localStorage interaction.
+- `frontend/src/__tests__/login.test.tsx` — render Login page, simulate form
+  submission, verify API call, verify error display on failure.
+- `frontend/src/__tests__/dashboard.test.tsx` — render Dashboard, verify
+  loading state, verify data display after mock API response.
+- Add `"test": "vitest run"` script to `frontend/package.json`.
+- Target: ≥15 frontend tests passing.
+
+**Acceptance criteria**:
+- [ ] `cd frontend && npm test` runs Vitest and passes ≥15 tests.
+- [ ] Tests cover: API client, auth context, login page, dashboard page.
+- [ ] No new runtime dependencies added (test deps are devDependencies only).
+- [ ] `npm run build` still succeeds.
+
+---
+
+### Task 12.2 — CI/CD pipeline (GitHub Actions) + frontend Dockerfile
+- [ ] Task 12.2
+
+**Objective**: Automate build, lint, and test for both backend and frontend on
+every push/PR; add a production-ready frontend Docker image.
+
+**Scope**:
+- `.github/workflows/ci.yml` — GitHub Actions workflow triggered on
+  `push` (main) and `pull_request`:
+  - **Backend job**: Python 3.11+, `pip install` deps, `python -m pytest tests/ -v`.
+  - **Frontend job**: Node 20+, `npm ci`, `npm run lint`, `npm run build`,
+    `npm test`.
+  - Both jobs run in parallel.
+- `infra/Dockerfile.frontend` — multi-stage Docker build:
+  - Stage 1 (builder): `node:20-alpine`, `npm ci`, `npm run build`.
+  - Stage 2 (runner): `node:20-alpine`, copy `.next/standalone` + `.next/static`
+    + `public/`, expose port 3000, `CMD ["node", "server.js"]`.
+  - `next.config.ts` — set `output: "standalone"` for Docker support.
+- Update `infra/docker-compose.yml` — add `frontend` service, port 3000,
+  depends on `api`.
+- Update README.md with updated `docker compose up` instructions that include
+  frontend.
+
+**Acceptance criteria**:
+- [ ] `.github/workflows/ci.yml` exists and defines backend + frontend jobs.
+- [ ] `infra/Dockerfile.frontend` builds a runnable Next.js image.
+- [ ] `next.config.ts` has `output: "standalone"`.
+- [ ] `docker-compose.yml` includes `frontend` service on port 3000.
+- [ ] README updated with full-stack docker compose instructions.
+- [ ] CI workflow passes (backend tests + frontend lint/build/test).
+
+---
+
+## Phase 13 — Frontend Polish & Performance
+
+### Task 13.1 — Data caching, loading skeletons, and password validation
+- [ ] Task 13.1
+
+**Objective**: Improve UX by adding client-side data caching to avoid redundant
+fetches, replace "Loading…" text with skeleton placeholders, and add password
+strength validation on the signup form.
+
+**Scope**:
+- **Data caching**: Create `frontend/src/lib/use-cached-fetch.ts` — a custom
+  React hook that wraps `fetch` calls with a simple in-memory cache
+  (Map-based, keyed by URL + token, with configurable TTL; default 60s).
+  Apply to Dashboard (plan/usage/credentials), History (jobs/batches/audit),
+  and Billing (status/plan) pages to avoid re-fetching on every mount.
+- **Loading skeletons**: Create `frontend/src/components/Skeleton.tsx` —
+  reusable animated skeleton components (SkeletonCard, SkeletonTable,
+  SkeletonText). Replace "Loading…" text on Dashboard, History, Billing,
+  and Optimizer pages with appropriate skeleton layouts.
+- **Password strength**: On Signup page, add a password strength indicator
+  below the password field. Rules: minimum 8 chars (already enforced),
+  at least one uppercase, one lowercase, one digit. Display strength as
+  "Weak" / "Medium" / "Strong" with colour coding. Disable submit when
+  strength < Medium.
+- **Next.js image config**: Remove `images: { unoptimized: true }` from
+  `next.config.ts` (or set to `false`) so Next.js image optimization is
+  available when images are added.
+
+**Acceptance criteria**:
+- [ ] `use-cached-fetch` hook exists and is used on ≥3 pages.
+- [ ] Dashboard, History, Billing show skeleton loaders instead of "Loading…".
+- [ ] Signup page shows password strength indicator; submit disabled when weak.
+- [ ] `images.unoptimized` removed or set to `false` in `next.config.ts`.
+- [ ] `npm run build` succeeds.
+
+---
+
+### Task 13.2 — Table virtualization + billing history
+- [ ] Task 13.2
+
+**Objective**: Handle large datasets efficiently with virtualized table
+rendering, and surface billing history / invoice data on the Billing page.
+
+**Scope**:
+- **Table virtualization**: Install `@tanstack/react-virtual` (or similar
+  lightweight virtualizer). Create
+  `frontend/src/components/VirtualTable.tsx` — a generic virtualized table
+  component that renders only visible rows. Apply to:
+  - Optimizer results table (currently sliced to 500 rows; virtualizer
+    removes the slice limit).
+  - History tables (Jobs, Batches, Audit Events).
+  - Risk view tables (largest decreases, near-cost products).
+- **Billing history**: Add a "Billing History" section to
+  `frontend/src/app/billing/page.tsx`. Backend already tracks
+  `usage_events` — add `GET /billing/invoices` endpoint (or reuse Stripe
+  API data via backend proxy) that returns recent invoice line items.
+  Display in a table with date, description, amount, status columns.
+  If Stripe billing is disabled, show "Billing history is not available"
+  message.
+
+**Acceptance criteria**:
+- [ ] `VirtualTable` component exists and renders only visible rows.
+- [ ] Optimizer page uses `VirtualTable` with no 500-row slice limit.
+- [ ] History page tables use `VirtualTable`.
+- [ ] Billing page shows billing history section (or "not available" when
+      Stripe disabled).
+- [ ] `npm run build` succeeds.
+- [ ] No performance regressions (page load stays under 3s for 1000+ rows).
+
+---
+
 ## Audit Summary (2026-04-05)
 
 | Phase | Task | Status | Notes |
@@ -1184,8 +1386,14 @@ row caps.
 | 9 | 9.2 — Operational safety | ✅ | Admin diagnostics/tenants endpoints, migration tests, ops docs (25 tests) |
 | 10 | 10.1 — Security hardening | ✅ | CORS, security headers, HSTS, request size limits (13 tests) |
 | 10 | 10.2 — Data retention + export | ✅ | Retention pruning, CLI script, tenant export endpoint (17 tests) |
+| 11 | 11.1 — Error boundaries + error/404 pages | ⛔ | Error boundaries, global error.tsx/not-found.tsx, fix silent catches |
+| 11 | 11.2 — Accessibility (semantic HTML + ARIA) | ⛔ | Nav/main semantics, ARIA labels, focus styles, skip-to-content |
+| 12 | 12.1 — Frontend test suite | ⛔ | Vitest + RTL, ≥15 tests (API client, auth, login, dashboard) |
+| 12 | 12.2 — CI/CD + frontend Dockerfile | ⛔ | GitHub Actions, Dockerfile.frontend, docker-compose frontend service |
+| 13 | 13.1 — Caching, skeletons, password validation | ⛔ | Client-side cache hook, skeleton loaders, password strength, image config |
+| 13 | 13.2 — Table virtualization + billing history | ⛔ | VirtualTable component, remove 500-row limit, billing history display |
 
-**Total**: 24 ✅ · 0 🟡 · 0 ⛔ (All tasks complete)
+**Total**: 24 ✅ · 0 🟡 · 6 ⛔
 
 ---
 
@@ -1207,7 +1415,7 @@ row caps.
 
 The following are explicitly **out of scope** for current sprints:
 
-- **Next.js frontend** (Phase 8) — Streamlit remains the UI. Not started.
+- ~~**Next.js frontend** (Phase 8)~~ — ✅ Complete (Phase 8.1–8.3).
 - **Monorepo restructure** (`apps/web`, `apps/api`, `packages/shared`) — do NOT
   move files into a monorepo layout. Keep the current flat structure; add
   `frontend/` alongside `backend/` when the time comes.
@@ -1225,29 +1433,27 @@ The following are explicitly **out of scope** for current sprints:
 
 # Section F — Next 3 Tasks
 
-> Updated: 2026-04-05 — All three previously-next tasks are now complete.
-> The only remaining tasks are Phase 8 (Next.js frontend), which is deferred.
+> Updated: 2026-04-05 — Production-readiness tasks queued.
 
-### ✅ Completed: Task 7.1 — Billing gate middleware
+### 🔜 Next: Task 11.1 — Error boundaries + error/not-found pages
 
-Implemented in `backend/billing_gate.py`. 32 tests in `tests/test_billing_gate.py`.
+Add `error.tsx`, `not-found.tsx`, reusable `ErrorBoundary` component, and fix
+silent `.catch(() => {})` on Dashboard/History pages to show user-visible error
+banners.
 
-### ✅ Completed: Task 7.2 — Usage events table + Stripe metered billing
+### 🔜 Then: Task 11.2 — Accessibility improvements
 
-Implemented: migration `0006_add_usage_events.py`, `UsageEvent` model,
-`backend/repositories/usage_repo.py`, `report_usage_to_stripe()`.
-17 tests in `tests/test_usage_events.py`.
+Semantic HTML (`<nav>`, `<main>`), ARIA labels on tables/forms, `aria-live` on
+status banners, visible focus styles, skip-to-content link.
 
-### ✅ Completed: Task 5.3 — LLM key management (tenant-aware usage tracking)
+### 🔜 Then: Task 12.1 — Frontend test infrastructure + initial tests
 
-Implemented: `backend/llm_usage.py`, `openai_monthly_token_limit` config,
-`_default_llm_call(*, tenant_id=None)` in `domain/invoice_ean.py`,
-LLM usage in admin tenant detail. 10 tests in `tests/test_llm_usage.py`.
+Vitest + React Testing Library setup. ≥15 tests covering API client, auth
+context, Login page, Dashboard page.
 
 ---
 
-### Next (deferred): Phase 8 — Next.js Frontend
+### After that: Tasks 12.2, 13.1, 13.2
 
-The only remaining roadmap tasks are Phase 8 (Tasks 8.1, 8.2, 8.3) which
-require scaffolding a Next.js frontend. These are explicitly deferred in
-Section E — Streamlit remains the UI until the frontend migration is scheduled.
+CI/CD pipeline (GitHub Actions) + frontend Dockerfile, then client-side caching
+/ skeletons / password validation, then table virtualization + billing history.
