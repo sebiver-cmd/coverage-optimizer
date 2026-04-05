@@ -11,7 +11,7 @@ import streamlit as st
 
 from domain.pricing import MIN_COVERAGE_RATE, BEAUTIFY_LAST_DIGIT
 from ui.styles import DASHBOARD_CSS
-from ui.pages import home, price_optimizer, history
+from ui.pages import home, price_optimizer, history, billing
 from ui.backend_url import normalize_base_url, check_backend_connected
 from ui.vault_helpers import (
     login as vault_login,
@@ -19,6 +19,8 @@ from ui.vault_helpers import (
     list_credentials,
     create_credential,
     delete_credential,
+    decode_token_role,
+    get_billing_status,
 )
 
 # --- Page Configuration ---
@@ -35,6 +37,7 @@ _PAGES = [
     "Dashboard",
     "Price Optimizer",
     "History",
+    "Billing",
 ]
 
 # ---------------------------------------------------------------------------
@@ -89,6 +92,7 @@ with st.sidebar:
 
     token: str | None = st.session_state.get("token")
     credential_id: str | None = st.session_state.get("credential_id")
+    user_role: str | None = decode_token_role(token)
 
     if token:
         st.info("Signed in (vault mode)")
@@ -205,6 +209,11 @@ with st.sidebar:
     if token:
         st.divider()
         st.caption("PLAN & LIMITS")
+
+        # Detect whether Stripe billing is enabled on the backend
+        _billing_data, _billing_err = get_billing_status(backend_url, token)
+        _billing_enabled = _billing_err != "billing_not_enabled"
+
         try:
             import requests as _rq
 
@@ -225,37 +234,45 @@ with st.sidebar:
                 if _limit_lines:
                     st.markdown("**Daily limits:**\n" + "\n".join(_limit_lines))
 
-                # Admin/owner plan change
-                _plans_resp = _rq.get(
-                    f"{normalize_base_url(backend_url)}/plans",
-                    headers={"Authorization": f"Bearer {token}"},
-                    timeout=10,
-                )
-                if _plans_resp.status_code == 200:
-                    _avail_plans = _plans_resp.json().get("plans", [])
-                    _plan_names = [p["name"] for p in _avail_plans]
-                    _cur_idx = 0
-                    if _plan_data.get("plan") in _plan_names:
-                        _cur_idx = _plan_names.index(_plan_data["plan"])
-                    _chosen = st.selectbox(
-                        "Change plan (admin only)",
-                        options=_plan_names,
-                        index=_cur_idx,
-                        key="_plan_select",
+                # Manual plan change — hidden when billing is enabled,
+                # shown only in dev mode (SBOPTIMA_ENV=dev) otherwise.
+                _show_manual = False
+                if not _billing_enabled:
+                    _env = os.environ.get("SBOPTIMA_ENV", "").lower()
+                    if _env == "dev":
+                        _show_manual = True
+
+                if _show_manual:
+                    _plans_resp = _rq.get(
+                        f"{normalize_base_url(backend_url)}/plans",
+                        headers={"Authorization": f"Bearer {token}"},
+                        timeout=10,
                     )
-                    if st.button("Update plan", key="_btn_update_plan", use_container_width=True):
-                        _up_resp = _rq.put(
-                            f"{normalize_base_url(backend_url)}/tenant/plan",
-                            headers={"Authorization": f"Bearer {token}"},
-                            json={"plan": _chosen},
-                            timeout=10,
+                    if _plans_resp.status_code == 200:
+                        _avail_plans = _plans_resp.json().get("plans", [])
+                        _plan_names = [p["name"] for p in _avail_plans]
+                        _cur_idx = 0
+                        if _plan_data.get("plan") in _plan_names:
+                            _cur_idx = _plan_names.index(_plan_data["plan"])
+                        _chosen = st.selectbox(
+                            "Change plan (dev mode)",
+                            options=_plan_names,
+                            index=_cur_idx,
+                            key="_plan_select",
                         )
-                        if _up_resp.status_code == 200:
-                            st.success(f"Plan updated to **{_chosen}**.")
-                            st.rerun()
-                        else:
-                            _err_detail = _up_resp.json().get("detail", "Update failed")
-                            st.error(_err_detail)
+                        if st.button("Update plan", key="_btn_update_plan", use_container_width=True):
+                            _up_resp = _rq.put(
+                                f"{normalize_base_url(backend_url)}/tenant/plan",
+                                headers={"Authorization": f"Bearer {token}"},
+                                json={"plan": _chosen},
+                                timeout=10,
+                            )
+                            if _up_resp.status_code == 200:
+                                st.success(f"Plan updated to **{_chosen}**.")
+                                st.rerun()
+                            else:
+                                _err_detail = _up_resp.json().get("detail", "Update failed")
+                                st.error(_err_detail)
             else:
                 st.caption("Plan info unavailable.")
         except Exception:
@@ -346,4 +363,11 @@ elif page == "History":
     history.render(
         backend_url=backend_url,
         token=token,
+    )
+
+elif page == "Billing":
+    billing.render(
+        backend_url=backend_url,
+        token=token,
+        user_role=user_role,
     )

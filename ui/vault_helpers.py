@@ -358,6 +358,33 @@ def get_auth_headers(token: str | None) -> dict[str, str]:
     return {}
 
 
+def decode_token_role(token: str | None) -> str | None:
+    """Extract the ``role`` claim from a JWT **without** verifying the signature.
+
+    This is safe for UI display gating — the backend always re-verifies
+    the token on every request.  Returns ``None`` when the token is
+    missing or cannot be decoded.
+    """
+    if not token:
+        return None
+    import base64
+    import json as _json
+
+    try:
+        parts = token.split(".")
+        if len(parts) < 2:
+            return None
+        # JWT payload is base64url-encoded; add padding if needed
+        payload_b64 = parts[1]
+        padding = 4 - len(payload_b64) % 4
+        if padding != 4:
+            payload_b64 += "=" * padding
+        payload = _json.loads(base64.urlsafe_b64decode(payload_b64))
+        return payload.get("role")
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -516,3 +543,142 @@ def list_audit(
         return None, "Backend unreachable."
     except requests.RequestException as exc:
         return None, f"Request failed: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# Billing helpers (Task 8.2)
+# ---------------------------------------------------------------------------
+
+
+def get_billing_status(
+    backend_url: str,
+    token: str,
+    timeout: float = _AUTH_TIMEOUT,
+) -> tuple[dict | None, str | None]:
+    """Fetch billing status via ``GET /billing/status``.
+
+    Returns ``(status_dict, None)`` on success, ``(None, error_message)``
+    on failure.  A **503** is returned as a specific message so the UI
+    can show "Billing not enabled".
+    """
+    base = normalize_base_url(backend_url)
+    url = f"{base}/billing/status"
+    try:
+        resp = requests.get(
+            url,
+            headers=get_auth_headers(token),
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return resp.json(), None
+    except requests.HTTPError as exc:
+        status_code = exc.response.status_code
+        if status_code == 503:
+            return None, "billing_not_enabled"
+        if status_code in (401, 403):
+            return None, "Authentication required or insufficient permissions."
+        detail = _extract_detail(exc)
+        return None, f"Error {status_code}: {detail}"
+    except requests.ConnectionError:
+        return None, "Backend unreachable."
+    except requests.RequestException as exc:
+        return None, f"Request failed: {exc}"
+
+
+def get_tenant_plan(
+    backend_url: str,
+    token: str,
+    timeout: float = _AUTH_TIMEOUT,
+) -> tuple[dict | None, str | None]:
+    """Fetch tenant plan info via ``GET /tenant/plan``.
+
+    Returns ``(plan_dict, None)`` on success or
+    ``(None, error_message)`` on failure.
+    """
+    base = normalize_base_url(backend_url)
+    url = f"{base}/tenant/plan"
+    try:
+        resp = requests.get(
+            url,
+            headers=get_auth_headers(token),
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return resp.json(), None
+    except requests.HTTPError as exc:
+        status_code = exc.response.status_code
+        if status_code == 503:
+            return None, "Plan info unavailable (auth disabled)."
+        detail = _extract_detail(exc)
+        return None, f"Error {status_code}: {detail}"
+    except requests.ConnectionError:
+        return None, "Backend unreachable."
+    except requests.RequestException as exc:
+        return None, f"Request failed: {exc}"
+
+
+def build_checkout_payload(
+    plan: str,
+    success_url: str,
+    cancel_url: str,
+) -> dict[str, str]:
+    """Build the JSON payload for ``POST /billing/checkout``.
+
+    This is a pure function (no I/O) that is easy to unit-test.
+    It intentionally includes **only** the three required fields and
+    never any secret keys.
+    """
+    return {
+        "plan": plan,
+        "success_url": success_url,
+        "cancel_url": cancel_url,
+    }
+
+
+def create_checkout(
+    backend_url: str,
+    token: str,
+    plan: str,
+    success_url: str,
+    cancel_url: str,
+    timeout: float = _AUTH_TIMEOUT,
+) -> tuple[str | None, str | None]:
+    """Start a Stripe checkout via ``POST /billing/checkout``.
+
+    Returns ``(checkout_url, None)`` on success or
+    ``(None, error_message)`` on failure.
+    """
+    base = normalize_base_url(backend_url)
+    url = f"{base}/billing/checkout"
+    payload = build_checkout_payload(plan, success_url, cancel_url)
+    try:
+        resp = requests.post(
+            url,
+            headers=get_auth_headers(token),
+            json=payload,
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("checkout_url"), None
+    except requests.HTTPError as exc:
+        status_code = exc.response.status_code
+        if status_code == 503:
+            return None, "Billing is not enabled on this server."
+        if status_code in (401, 403):
+            return None, "Only admin/owner users can start a checkout."
+        detail = _extract_detail(exc)
+        return None, f"Checkout failed ({status_code}): {detail}"
+    except requests.ConnectionError:
+        return None, "Backend unreachable."
+    except requests.RequestException as exc:
+        return None, f"Checkout request failed: {exc}"
+
+
+def can_manage_billing(role: str | None) -> bool:
+    """Return ``True`` if *role* is allowed to start a Stripe checkout.
+
+    Only ``admin`` and ``owner`` roles can manage billing.
+    This is a pure helper used by the UI to gate checkout controls.
+    """
+    return role in ("admin", "owner")
