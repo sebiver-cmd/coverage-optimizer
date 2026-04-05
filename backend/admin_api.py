@@ -15,6 +15,7 @@ return **503** to prevent accidental exposure.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -333,7 +334,7 @@ _EXPORT_REDACT_FIELDS = frozenset(
 )
 
 
-def _safe_export_row(row: Any, *, allowed_keys: set[str] | None = None) -> dict:
+def _safe_export_row(row: Any) -> dict:
     """Convert a model instance to a JSON-safe dict, redacting secret fields."""
     d: dict[str, Any] = {}
     for col in row.__table__.columns:
@@ -359,9 +360,10 @@ def admin_export_tenant(
 ) -> dict[str, Any]:
     """Export a tenant's data (metadata only) as a JSON bundle.
 
-    Returns tenant info, users (no password hashes), jobs, batches, and
-    audit events.  Credentials are excluded entirely.  Each collection
-    is capped at 10 000 rows; if truncated a ``truncated`` flag is set.
+    Returns tenant info, users (no password hashes, no email/PII), jobs,
+    batches, and audit events.  Credentials are excluded entirely.  Each
+    collection is capped at 10 000 rows; if truncated a ``truncated`` flag
+    is set.
     """
     _require_auth_enabled()
 
@@ -444,15 +446,13 @@ def admin_export_tenant(
         audit = [_safe_export_row(a) for a in audit_rows[:_EXPORT_CAP]]
 
         # Emit audit event for the export action
-        import json as _json
-
         db.add(
             AuditEvent(
                 tenant_id=tenant_id,
                 user_id=None,
                 event_type="admin.tenant.exported",
                 created_at=datetime.now(timezone.utc),
-                meta_json=_json.dumps({"tenant_id": str(tenant_id)}),
+                meta_json=json.dumps({"tenant_id": str(tenant_id)}),
             )
         )
         db.commit()
