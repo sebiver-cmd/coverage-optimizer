@@ -1,0 +1,37 @@
+# ---------------------------------------------------------------------------
+# Deploy — SB-Optima Production
+# ---------------------------------------------------------------------------
+# Automatically deploys to the production server when code is pushed to main.
+# Requires the following repository secrets:
+#   DEPLOY_SSH_KEY  — SSH private key for the deploy user
+#   DEPLOY_HOST     — Server IP or hostname
+#   DEPLOY_USER     — SSH user (e.g., root)
+# ---------------------------------------------------------------------------
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: /root/deploy.sh

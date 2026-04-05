@@ -26,6 +26,23 @@ services:
       redis:
         condition: service_healthy
 
+  # ---- Arq background worker ----
+  worker:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    command: ["arq", "backend.worker.WorkerSettings"]
+    env_file:
+      - ../.env
+    environment:
+      - DATABASE_URL=postgresql+psycopg2://sboptima:sboptima@postgres:5432/sboptima
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   # ---- Next.js frontend ----
   frontend:
     build:
@@ -70,6 +87,24 @@ services:
       timeout: 3s
       retries: 5
 
+  # ---- Caddy reverse proxy (automatic HTTPS, production only) ----
+  # Uncomment the caddy service below when deploying to production.
+  # caddy:
+  #   image: caddy:2
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./Caddyfile:/etc/caddy/Caddyfile
+  #     - caddy_data:/data
+  #     - caddy_config:/config
+  #   depends_on:
+  #     - api
+  #     - frontend
+
 volumes:
   pgdata:
   redisdata:
+  # Uncomment for production Caddy deployment:
+  # caddy_data:
+  # caddy_config:
