@@ -561,7 +561,7 @@ for local dev / migration period.
 `key_version` column for future multi-key support.
 
 ### Task 5.2 — Remove credentials from request payloads
-- [ ] Task 5.2
+- [x] Task 5.2
 
 **Objective**: Backend reads credentials from vault instead of requiring them in
 every request body.

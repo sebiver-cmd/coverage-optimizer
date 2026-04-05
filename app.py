@@ -13,6 +13,13 @@ from domain.pricing import MIN_COVERAGE_RATE, BEAUTIFY_LAST_DIGIT
 from ui.styles import DASHBOARD_CSS
 from ui.pages import home, price_optimizer
 from ui.backend_url import normalize_base_url, check_backend_connected
+from ui.vault_helpers import (
+    login as vault_login,
+    signup as vault_signup,
+    list_credentials,
+    create_credential,
+    delete_credential,
+)
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -51,39 +58,9 @@ with st.sidebar:
         label_visibility="collapsed",
     )
 
-    st.divider()
-    st.caption("API CONNECTION")
-
-    try:
-        _dd_secrets = st.secrets.get("dandomain", {})
-    except Exception:
-        _dd_secrets = {}
-
-    api_username = st.text_input(
-        "API username",
-        value=_dd_secrets.get("username", os.environ.get("DANDOMAIN_API_USERNAME", "")),
-        placeholder="api-user@example.com",
-    )
-    api_password = st.text_input(
-        "API password",
-        value=_dd_secrets.get("password", os.environ.get("DANDOMAIN_API_PASSWORD", "")),
-        type="password",
-    )
-    site_id = st.number_input(
-        "Site ID",
-        min_value=1,
-        max_value=100,
-        value=_dd_secrets.get("site_id", 1),
-        help="Language / site ID in your webshop (default: 1).",
-    )
-    dry_run = st.checkbox(
-        "Dry-run (simulate only)",
-        value=True,
-        help="When checked, push-to-shop shows what would be sent but makes no API calls.",
-    )
-
-    api_ready = bool(api_username and api_password)
-
+    # ------------------------------------------------------------------
+    # Backend URL
+    # ------------------------------------------------------------------
     st.divider()
     st.caption("BACKEND")
     backend_url = st.text_input(
@@ -102,6 +79,172 @@ with st.sidebar:
         st.caption("Try http://127.0.0.1:8000")
         with st.expander("Details"):
             st.code(_msg)
+
+    # ------------------------------------------------------------------
+    # Auth section (sign in / sign up / sign out)
+    # ------------------------------------------------------------------
+    st.divider()
+    st.caption("AUTHENTICATION")
+
+    token: str | None = st.session_state.get("token")
+    credential_id: str | None = st.session_state.get("credential_id")
+
+    if token:
+        st.info("Signed in (vault mode)")
+        if st.button("Sign out", use_container_width=True):
+            for _k in ("token", "credential_id", "_vault_creds"):
+                st.session_state.pop(_k, None)
+            st.rerun()
+    else:
+        _auth_tab_login, _auth_tab_signup = st.tabs(["Sign in", "Create tenant"])
+
+        with _auth_tab_login:
+            _login_email = st.text_input("Email", key="_login_email", placeholder="user@example.com")
+            _login_pw = st.text_input("Password", key="_login_pw", type="password")
+            if st.button("Sign in", use_container_width=True, key="_btn_login"):
+                if _login_email and _login_pw:
+                    _tok, _err = vault_login(backend_url, _login_email, _login_pw)
+                    if _tok:
+                        st.session_state["token"] = _tok
+                        st.rerun()
+                    else:
+                        st.error(_err or "Login failed")
+                else:
+                    st.warning("Enter email and password.")
+
+        with _auth_tab_signup:
+            _su_tenant = st.text_input("Tenant name", key="_su_tenant", placeholder="My Shop")
+            _su_email = st.text_input("Email", key="_su_email", placeholder="user@example.com")
+            _su_pw = st.text_input("Password", key="_su_pw", type="password")
+            if st.button("Create tenant", use_container_width=True, key="_btn_signup"):
+                if _su_tenant and _su_email and _su_pw:
+                    _tok, _err = vault_signup(backend_url, _su_tenant, _su_email, _su_pw)
+                    if _tok:
+                        st.session_state["token"] = _tok
+                        st.rerun()
+                    else:
+                        st.error(_err or "Signup failed")
+                else:
+                    st.warning("Fill in all fields.")
+
+    # ------------------------------------------------------------------
+    # Credential profile management (when signed in)
+    # ------------------------------------------------------------------
+    if token:
+        st.divider()
+        st.caption("CREDENTIAL PROFILE")
+
+        # Fetch/cache credential list
+        if "_vault_creds" not in st.session_state:
+            _creds, _cerr = list_credentials(backend_url, token)
+            if _creds is not None:
+                st.session_state["_vault_creds"] = _creds
+            else:
+                st.session_state["_vault_creds"] = []
+                if _cerr:
+                    st.warning(_cerr)
+
+        _vault_creds: list[dict] = st.session_state.get("_vault_creds", [])
+
+        if _vault_creds:
+            _cred_options = {
+                str(c["id"]): f"{c['name']} (site {c['site_id']})"
+                for c in _vault_creds
+            }
+            _selected_cred = st.selectbox(
+                "Select profile",
+                options=list(_cred_options.keys()),
+                format_func=lambda k: _cred_options[k],
+                key="_sel_cred",
+            )
+            st.session_state["credential_id"] = _selected_cred
+            credential_id = _selected_cred
+
+            # Delete button
+            _confirm_del = st.checkbox("Confirm delete", key="_confirm_del_cred")
+            if st.button(
+                "Delete selected",
+                disabled=not _confirm_del,
+                use_container_width=True,
+                key="_btn_del_cred",
+            ):
+                _ok_d, _derr = delete_credential(backend_url, token, _selected_cred)
+                if _ok_d:
+                    st.session_state.pop("_vault_creds", None)
+                    st.session_state.pop("credential_id", None)
+                    st.rerun()
+                else:
+                    st.error(_derr or "Delete failed")
+        else:
+            st.info("No credential profiles yet.")
+
+        # Create new profile
+        with st.expander("Create new profile"):
+            _new_name = st.text_input("Name", key="_new_cred_name", placeholder="Main shop")
+            _new_site = st.text_input("Site ID", key="_new_cred_site", placeholder="1")
+            _new_user = st.text_input("API username", key="_new_cred_user")
+            _new_pass = st.text_input("API password", key="_new_cred_pass", type="password")
+            if st.button("Save profile", use_container_width=True, key="_btn_create_cred"):
+                if _new_name and _new_site and _new_user and _new_pass:
+                    _cresult, _cerr2 = create_credential(
+                        backend_url, token, _new_name, _new_site, _new_user, _new_pass,
+                    )
+                    if _cresult:
+                        st.session_state.pop("_vault_creds", None)
+                        st.success("Profile created.")
+                        st.rerun()
+                    else:
+                        st.error(_cerr2 or "Creation failed")
+                else:
+                    st.warning("Fill in all fields.")
+
+    # ------------------------------------------------------------------
+    # Legacy API credentials (when NOT signed in)
+    # ------------------------------------------------------------------
+    if not token:
+        st.divider()
+        st.caption("API CONNECTION")
+
+        try:
+            _dd_secrets = st.secrets.get("dandomain", {})
+        except Exception:
+            _dd_secrets = {}
+
+        api_username = st.text_input(
+            "API username",
+            value=_dd_secrets.get("username", os.environ.get("DANDOMAIN_API_USERNAME", "")),
+            placeholder="api-user@example.com",
+        )
+        api_password = st.text_input(
+            "API password",
+            value=_dd_secrets.get("password", os.environ.get("DANDOMAIN_API_PASSWORD", "")),
+            type="password",
+        )
+        site_id = st.number_input(
+            "Site ID",
+            min_value=1,
+            max_value=100,
+            value=_dd_secrets.get("site_id", 1),
+            help="Language / site ID in your webshop (default: 1).",
+        )
+    else:
+        # In vault mode, credentials come from the vault — set empty
+        api_username = ""
+        api_password = ""
+        # Site ID from selected credential profile
+        _sel_cred_data = next(
+            (c for c in _vault_creds if str(c["id"]) == credential_id),
+            None,
+        ) if credential_id else None
+        site_id = int(_sel_cred_data["site_id"]) if _sel_cred_data else 1
+
+    dry_run = st.checkbox(
+        "Dry-run (simulate only)",
+        value=True,
+        help="When checked, push-to-shop shows what would be sent but makes no API calls.",
+    )
+
+    api_ready = bool(token and credential_id) or bool(api_username and api_password)
 
     st.divider()
     _active_beautify = st.session_state.get("_cc_beautify_digit", BEAUTIFY_LAST_DIGIT)
@@ -132,4 +275,6 @@ elif page == "Price Optimizer":
         site_id=site_id,
         dry_run=dry_run,
         backend_url=backend_url,
+        token=token,
+        credential_id=credential_id,
     )

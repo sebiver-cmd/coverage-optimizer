@@ -95,10 +95,12 @@ def create_manifest(
 def apply_batch(
     backend_url: str,
     batch_id: str,
-    api_username: str,
-    api_password: str,
+    api_username: str = "",
+    api_password: str = "",
     site_id: int = 1,
     timeout: float = _APPLY_TIMEOUT,
+    token: str | None = None,
+    credential_id: str | None = None,
 ) -> tuple[dict | None, str | None]:
     """Call ``POST /apply-prices/apply`` to apply a previously created batch.
 
@@ -110,12 +112,19 @@ def apply_batch(
         UUID returned by :func:`create_manifest` (or the dry-run endpoint).
     api_username:
         DanDomain API username (forwarded to backend, never logged here).
+        Ignored in vault mode.
     api_password:
         DanDomain API password (forwarded to backend, never logged here).
+        Ignored in vault mode.
     site_id:
         DanDomain site/language ID (default ``1``).
     timeout:
         Seconds before the HTTP request times out.
+    token:
+        JWT access token.  When set, ``Authorization`` header is sent.
+    credential_id:
+        UUID of a stored vault credential.  When set together with
+        *token*, plaintext credentials are omitted from the payload.
 
     Returns
     -------
@@ -123,19 +132,24 @@ def apply_batch(
         ``(response_dict, None)`` on success or
         ``(None, error_message)`` on failure.
     """
+    from ui.vault_helpers import build_apply_payload, get_auth_headers
+
     base = normalize_base_url(backend_url)
     url = f"{base}/apply-prices/apply"
 
-    payload = {
-        "batch_id": batch_id,
-        "confirm": True,
-        "api_username": api_username,
-        "api_password": api_password,
-        "site_id": site_id,
-    }
+    payload = build_apply_payload(
+        batch_id=batch_id,
+        site_id=site_id,
+        credential_id=credential_id,
+        token_present=bool(token),
+        api_username=api_username,
+        api_password=api_password,
+    )
+
+    headers = get_auth_headers(token)
 
     try:
-        resp = requests.post(url, json=payload, timeout=timeout)
+        resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
         resp.raise_for_status()
         return resp.json(), None
     except requests.HTTPError as exc:
