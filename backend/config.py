@@ -270,6 +270,7 @@ class Settings(BaseSettings):
         (CORS middleware will simply not be added).
         """
         raw = self.cors_allowed_origins or self.cors_origins or ""
+        # cors_allowed_origins takes precedence; cors_origins is legacy fallback
         origins = [o.strip() for o in raw.split(",") if o.strip()]
         if not origins and self.sboptima_env == "dev":
             origins = ["http://localhost:8501"]
