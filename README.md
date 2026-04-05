@@ -1,48 +1,36 @@
-# Product Coverage Rate Optimizer 🚀
+# SB-Optima — DanDomain Price Optimizer 🚀
 
-This is a Streamlit web app designed to process product CSV files, calculate coverage rates (profit margins), and automatically adjust sales prices to ensure at least a 50% margin. It also "beautifies" the final prices so they end in a 9 (e.g., converting 856 to 859).
+Multi-tenant SaaS application for DanDomain price optimisation.
+
+## Architecture
+
+| Layer | Technology | Directory |
+|---|---|---|
+| **Frontend** | Next.js 16 + TypeScript + Tailwind | `frontend/` |
+| **Backend** | FastAPI + SQLAlchemy + Alembic | `backend/` |
+| **Domain** | Pure Python business logic | `domain/` |
+| **Database** | PostgreSQL 16 | via Docker Compose |
+| **Cache/Queue** | Redis 7 + Arq | via Docker Compose |
+| **Billing** | Stripe subscriptions | `backend/billing_api.py` |
 
 ## Features
-- Calculates `PRICE_EX_VAT` assuming a 25% Danish VAT.
-- Calculates current `COVERAGE_RATE`.
-- Identifies products with < 50% margin and adjusts their prices up.
-- Beautifies prices to end in 9 without dropping the margin.
-- Exports a clean, formatted CSV ready for upload.
 
-## Write Path — All Writes go through the Backend
-
-Since **SaaS Roadmap Task 1.1**, the Streamlit UI no longer writes directly to
-HostedShop / DanDomain via SOAP.  All price-apply writes are routed through the
-FastAPI backend's guarded endpoints:
-
-1. **`POST /apply-prices/create-manifest`** — The UI submits its pre-computed
-   list of price changes (including `variant_id`, `product_id`, buy-price
-   deltas).  The backend persists a batch manifest and returns a `batch_id`.
-2. **`POST /apply-prices/apply`** — The UI confirms with `batch_id` +
-   credentials.  The backend enforces all guardrails (env gating, per-row
-   safety, audit log, idempotency) before writing to the shop.
-
-### Escape hatch (deprecated)
-
-Setting the environment variable `SB_OPTIMA_ALLOW_UI_DIRECT_PUSH=true` re-enables
-the legacy direct-SOAP write path in the UI.  **This is deprecated and should
-not be used in production.**  The UI will display a warning whenever this flag
-is active.
+- **Multi-tenant** with JWT authentication and RBAC (owner/admin/operator/viewer).
+- Calculates coverage rates (profit margins) and adjusts sales prices.
+- Price beautification (ending in 9/5/0) while respecting margin constraints.
+- Encrypted credential vault (Fernet) for DanDomain API keys.
+- Async job queue for optimization runs.
+- Dry-run preview and guarded real-apply with audit trail.
+- Stripe billing integration with plan-based quotas.
+- Prometheus metrics, structured JSON logging, request correlation.
 
 ## How to Run Locally
-1. Clone this repository.
-2. Install the requirements: `pip install -r requirements.txt`
-3. Run the app: `streamlit run app.py`
-
-## Local dev with Docker
-
-A Docker Compose stack is provided under `infra/` that starts the FastAPI
-backend, Postgres 16, and Redis 7 with a single command.
 
 ### Prerequisites
 
+- [Node.js](https://nodejs.org/) 18+ (for the frontend)
 - [Docker](https://docs.docker.com/get-docker/) and
-  [Docker Compose](https://docs.docker.com/compose/) (v2+).
+  [Docker Compose](https://docs.docker.com/compose/) (v2+)
 
 ### Quick start
 
@@ -50,66 +38,66 @@ backend, Postgres 16, and Redis 7 with a single command.
 # 1. Create your local env file (edit as needed)
 cp .env.example .env
 
-# 2. Start all services (FastAPI + Postgres + Redis)
+# 2. Start backend services (FastAPI + Postgres + Redis)
 docker compose -f infra/docker-compose.yml up --build
 
 # 3. Verify the backend is running
 curl http://localhost:8000/health
 # → {"status":"ok"}
 
-# 4. In a separate terminal, run Streamlit locally
-SB_OPTIMA_BACKEND_URL=http://localhost:8000 streamlit run app.py
+# 4. In a separate terminal, start the Next.js frontend
+cd frontend
+npm install
+npm run dev
+# → http://localhost:3000
 ```
 
-### Database migrations (Alembic)
+The frontend reads `NEXT_PUBLIC_API_URL` from `.env.local` (defaults to
+`http://localhost:8000`).
 
-The project uses [Alembic](https://alembic.sqlalchemy.org/) for database
-schema migrations.  `DATABASE_URL` is already set in `.env.example` for the
-Docker Compose Postgres instance.
+### Database migrations (Alembic)
 
 ```bash
 # Apply all pending migrations (run from repo root)
 DATABASE_URL=postgresql+psycopg2://sboptima:sboptima@localhost:5432/sboptima \
   alembic upgrade head
 
-# Create a new auto-generated migration after adding/changing models
+# Create a new auto-generated migration
 DATABASE_URL=postgresql+psycopg2://sboptima:sboptima@localhost:5432/sboptima \
   alembic revision --autogenerate -m "describe your change"
 ```
 
-> **Tip:** If Docker Compose is running, Postgres is reachable at
-> `localhost:5432` with the credentials from `.env`.
-
 ### Stopping / cleaning up
 
 ```bash
-# Stop and remove containers
 docker compose -f infra/docker-compose.yml down
-
-# Also remove persistent volumes (Postgres data, Redis data)
-docker compose -f infra/docker-compose.yml down -v
+docker compose -f infra/docker-compose.yml down -v   # also remove volumes
 ```
 
-### Notes
+## Running Tests
 
-- **Streamlit is not containerized** — run it on your host so hot-reload works
-  normally. Point it at the dockerized backend via `SB_OPTIMA_BACKEND_URL`.
-- **No secrets are baked into images** — credentials are passed via `.env`
-  (git-ignored) or environment variables.
-- **Existing tests do not require Docker** — `python -m pytest` works as before.
+```bash
+pip install -r requirements.txt
+pip install pytest httpx fastapi fpdf2
+python -m pytest tests/ -v
+```
+
+## Write Path — All Writes go through the Backend
+
+All price-apply writes are routed through the FastAPI backend's guarded endpoints:
+
+1. **`POST /apply-prices/create-manifest`** — submit price changes; backend
+   persists a batch manifest and returns a `batch_id`.
+2. **`POST /apply-prices/apply`** — confirm with `batch_id`; backend enforces
+   guardrails (env gating, per-row safety, audit log, idempotency).
 
 ## SOAP rate limiting
 
-All SOAP calls routed through `DanDomainClient` are rate-limited when a
-`caller_key` is set on the client (the backend endpoints do this
-automatically).  The limiter is per-caller (keyed by a hashed
-username+site combination) so that one tenant cannot starve another.
+All SOAP calls routed through `DanDomainClient` are rate-limited per caller
+so that one tenant cannot starve another.
 
 | Env var | Default | Description |
 |---|---|---|
 | `SOAP_MAX_CONCURRENT` | `3` | Maximum concurrent SOAP calls per caller. |
 | `SOAP_CALL_DELAY_S` | `0.2` | Minimum seconds between successive SOAP calls per caller. |
-| `SOAP_RATE_LIMIT_PER_S` | `5.0` | Reserved for future token-bucket rate (currently unused). |
-
-The limiter lives in `backend/soap_limiter.py` and uses in-process
-`threading.Semaphore` / `threading.Lock` — no Redis required.
+| `SOAP_RATE_LIMIT_PER_S` | `5.0` | Reserved for future token-bucket rate. |

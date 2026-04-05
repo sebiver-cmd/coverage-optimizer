@@ -183,45 +183,20 @@ Pure business logic; aim to keep this side‑effect‑free where possible.
 
 ---
 
-## 5. Streamlit UI (`app.py`, `ui/`)
+## 5. Next.js Frontend (`frontend/`)
 
-The Streamlit layer is the **primary human interface** to the optimizer and apply pipeline.
+The Next.js app is the **primary human interface** to the optimizer.
 
-- `app.py`
-  - Main Streamlit entrypoint: `streamlit run app.py`.
-  - Sets up:
-    - Overall page layout.
-    - Navigation between pages/tabs (via `ui/pages`).
-    - Connection to backend using helpers in `ui/backend_url.py`.
-    - Pages for:
-      - Uploading or fetching products.
-      - Running optimization.
-      - Viewing result summaries.
-      - Risk view (largest decreases, near‑cost, histogram).
-      - Dry‑run preview and batch inspection.
-      - Real apply (when enabled).
-
-- `ui/backend_url.py`
-  - Centralizes **backend URL handling**:
-    - Default backend URL (127.0.0.1, etc.).
-    - Normalization of user‑entered URLs.
-    - Connectivity probes:
-      - Prefer calling `/health` (see Task 4.3) with short timeout.
-      - Derive status indicator (ok / error + message) for the UI.
-  - All Streamlit code should use this helper instead of constructing URLs manually.
-
-- `ui/styles.py`
-  - Shared visual configuration:
-    - Colors, layout helpers, common CSS.
-    - Reusable components for consistent look and feel.
-
-- `ui/pages/`
-  - Individual Streamlit pages (standard `st` multi‑page pattern):
-    - Price optimizer.
-    - Result summary + top increases/decreases.
-    - Risk view.
-    - Apply/dry‑run views.
-    - Any additional analysis or tools.
+- `frontend/src/app/` — App Router pages:
+  - `/login`, `/signup` — Authentication pages.
+  - `/dashboard` — Tenant dashboard with plan, usage, credentials.
+  - `/optimizer` — Price Optimizer (brand selector, async jobs, results table,
+    risk view, dry-run + apply flow, CSV export).
+  - `/history` — Jobs, batches, audit event history with filters.
+  - `/billing` — Plan info, billing status, Stripe checkout.
+- `frontend/src/lib/api.ts` — API client for all backend communication.
+- `frontend/src/lib/auth-context.tsx` — JWT auth context/provider.
+- `frontend/src/components/` — Shared components (Navbar, RequireAuth, PageShell).
 
 ---
 
