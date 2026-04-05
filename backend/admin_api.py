@@ -1,4 +1,4 @@
-"""Admin diagnostics API for SB-Optima (Task 9.2).
+"""Admin diagnostics API for SB-Optima (Tasks 9.2 & 10.2).
 
 Provides admin-only endpoints that expose operational information without
 leaking secrets or PII:
@@ -6,6 +6,7 @@ leaking secrets or PII:
 - ``GET /admin/diagnostics`` — app health, config flags, DB latency, counts.
 - ``GET /admin/tenants``     — paginated tenant list (metadata only).
 - ``GET /admin/tenant/{tenant_id}`` — single tenant detail + limits + usage.
+- ``GET /admin/tenant/{tenant_id}/export`` — tenant data export (metadata only).
 
 All endpoints require ``admin+`` role when auth is enabled.
 When auth is disabled (``SBOPTIMA_AUTH_REQUIRED=false``), all endpoints
@@ -14,6 +15,7 @@ return **503** to prevent accidental exposure.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -308,5 +310,170 @@ def admin_get_tenant(
             user_count=user_count,
             credential_count=cred_count,
         )
+    finally:
+        _close_db(db_gen)
+
+
+# ---------------------------------------------------------------------------
+# GET /admin/tenant/{tenant_id}/export  (Task 10.2)
+# ---------------------------------------------------------------------------
+
+#: Maximum rows per collection in a tenant export (cap for safety).
+_EXPORT_CAP = 10_000
+
+#: Fields that must NEVER appear in an export payload.
+_EXPORT_REDACT_FIELDS = frozenset(
+    {
+        "password_hash",
+        "api_username_enc",
+        "api_password_enc",
+        "encryption_key",
+        "stripe_secret_key",
+        "stripe_webhook_secret",
+    }
+)
+
+
+def _safe_export_row(row: Any) -> dict:
+    """Convert a model instance to a JSON-safe dict, redacting secret fields."""
+    d: dict[str, Any] = {}
+    for col in row.__table__.columns:
+        key = col.name
+        if key in _EXPORT_REDACT_FIELDS:
+            continue
+        val = getattr(row, key, None)
+        if isinstance(val, uuid.UUID):
+            val = str(val)
+        elif isinstance(val, datetime):
+            val = val.isoformat()
+        d[key] = val
+    return d
+
+
+@router.get(
+    "/tenant/{tenant_id}/export",
+    dependencies=[Depends(require_role("admin"))],
+)
+def admin_export_tenant(
+    tenant_id: uuid.UUID,
+    request: Request,
+) -> dict[str, Any]:
+    """Export a tenant's data (metadata only) as a JSON bundle.
+
+    Returns tenant info, users (no password hashes, no email/PII), jobs,
+    batches, and audit events.  Credentials are excluded entirely.  Each
+    collection is capped at 10 000 rows; if truncated a ``truncated`` flag
+    is set.
+    """
+    _require_auth_enabled()
+
+    db, db_gen = _get_db_session(request)
+    try:
+        from backend.models import (
+            ApplyBatch,
+            AuditEvent,
+            OptimizationJob,
+            Tenant,
+            User,
+        )
+
+        tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+        if tenant is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Tenant not found",
+            )
+
+        # Tenant metadata (safe subset)
+        tenant_data = {
+            "id": str(tenant.id),
+            "name": tenant.name,
+            "plan": tenant.plan,
+            "status": tenant.status,
+            "billing_status": tenant.billing_status,
+            "created_at": _safe_isoformat(tenant.created_at),
+        }
+
+        # Users — omit password_hash
+        user_rows = (
+            db.query(User)
+            .filter(User.tenant_id == tenant_id)
+            .order_by(User.created_at.desc())
+            .limit(_EXPORT_CAP + 1)
+            .all()
+        )
+        users_truncated = len(user_rows) > _EXPORT_CAP
+        users = [
+            {
+                "id": str(u.id),
+                "role": u.role.value if hasattr(u.role, "value") else u.role,
+                "created_at": _safe_isoformat(u.created_at),
+            }
+            for u in user_rows[:_EXPORT_CAP]
+        ]
+
+        # Jobs
+        job_rows = (
+            db.query(OptimizationJob)
+            .filter(OptimizationJob.tenant_id == tenant_id)
+            .order_by(OptimizationJob.created_at.desc())
+            .limit(_EXPORT_CAP + 1)
+            .all()
+        )
+        jobs_truncated = len(job_rows) > _EXPORT_CAP
+        jobs = [_safe_export_row(j) for j in job_rows[:_EXPORT_CAP]]
+
+        # Batches
+        batch_rows = (
+            db.query(ApplyBatch)
+            .filter(ApplyBatch.tenant_id == tenant_id)
+            .order_by(ApplyBatch.created_at.desc())
+            .limit(_EXPORT_CAP + 1)
+            .all()
+        )
+        batches_truncated = len(batch_rows) > _EXPORT_CAP
+        batches = [_safe_export_row(b) for b in batch_rows[:_EXPORT_CAP]]
+
+        # Audit events
+        audit_rows = (
+            db.query(AuditEvent)
+            .filter(AuditEvent.tenant_id == tenant_id)
+            .order_by(AuditEvent.created_at.desc())
+            .limit(_EXPORT_CAP + 1)
+            .all()
+        )
+        audit_truncated = len(audit_rows) > _EXPORT_CAP
+        audit = [_safe_export_row(a) for a in audit_rows[:_EXPORT_CAP]]
+
+        # Emit audit event for the export action
+        db.add(
+            AuditEvent(
+                tenant_id=tenant_id,
+                user_id=None,
+                event_type="admin.tenant.exported",
+                created_at=datetime.now(timezone.utc),
+                meta_json=json.dumps({"tenant_id": str(tenant_id)}),
+            )
+        )
+        db.commit()
+
+        result: dict[str, Any] = {
+            "tenant": tenant_data,
+            "users": users,
+            "jobs": jobs,
+            "batches": batches,
+            "audit": audit,
+        }
+        # Add truncation flags
+        if users_truncated:
+            result["users_truncated"] = True
+        if jobs_truncated:
+            result["jobs_truncated"] = True
+        if batches_truncated:
+            result["batches_truncated"] = True
+        if audit_truncated:
+            result["audit_truncated"] = True
+
+        return result
     finally:
         _close_db(db_gen)

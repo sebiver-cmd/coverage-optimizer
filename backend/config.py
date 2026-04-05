@@ -162,6 +162,24 @@ class Settings(BaseSettings):
         ),
     )
 
+    # -- Data retention (Task 10.2) ----------------------------------------
+    retention_enabled: bool = Field(
+        default=True,
+        description="Master switch for automatic data retention pruning.",
+    )
+    retention_jobs_days: int = Field(
+        default=30,
+        description="Delete optimization_jobs older than this many days.",
+    )
+    retention_batches_days: int = Field(
+        default=30,
+        description="Delete apply_batches older than this many days.",
+    )
+    retention_audit_days: int = Field(
+        default=90,
+        description="Delete audit_events older than this many days.",
+    )
+
     # -- Security hardening (Task 10.1) ------------------------------------
     cors_allowed_origins: str = Field(
         default="",
