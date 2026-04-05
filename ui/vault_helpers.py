@@ -397,3 +397,122 @@ def _extract_detail(exc: requests.HTTPError) -> str:
         return str(body.get("detail", exc.response.text))
     except Exception:
         return exc.response.text or str(exc)
+
+
+# ---------------------------------------------------------------------------
+# History / dashboard helpers (Task 6.2)
+# ---------------------------------------------------------------------------
+
+
+def list_jobs(
+    backend_url: str,
+    token: str,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    status: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    timeout: float = _AUTH_TIMEOUT,
+) -> tuple[dict | None, str | None]:
+    """Fetch paginated job list via ``GET /jobs``."""
+    base = normalize_base_url(backend_url)
+    params: dict[str, Any] = {"limit": limit, "offset": offset}
+    if status:
+        params["status"] = status
+    if since:
+        params["since"] = since
+    if until:
+        params["until"] = until
+    try:
+        resp = requests.get(
+            f"{base}/jobs",
+            params=params,
+            headers=get_auth_headers(token),
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return resp.json(), None
+    except requests.HTTPError as exc:
+        return None, f"Error {exc.response.status_code}: {_extract_detail(exc)}"
+    except requests.ConnectionError:
+        return None, "Backend unreachable."
+    except requests.RequestException as exc:
+        return None, f"Request failed: {exc}"
+
+
+def list_batches(
+    backend_url: str,
+    token: str,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    status: str | None = None,
+    mode: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    timeout: float = _AUTH_TIMEOUT,
+) -> tuple[dict | None, str | None]:
+    """Fetch paginated batch list via ``GET /apply-prices/batches``."""
+    base = normalize_base_url(backend_url)
+    params: dict[str, Any] = {"limit": limit, "offset": offset}
+    if status:
+        params["status"] = status
+    if mode:
+        params["mode"] = mode
+    if since:
+        params["since"] = since
+    if until:
+        params["until"] = until
+    try:
+        resp = requests.get(
+            f"{base}/apply-prices/batches",
+            params=params,
+            headers=get_auth_headers(token),
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return resp.json(), None
+    except requests.HTTPError as exc:
+        return None, f"Error {exc.response.status_code}: {_extract_detail(exc)}"
+    except requests.ConnectionError:
+        return None, "Backend unreachable."
+    except requests.RequestException as exc:
+        return None, f"Request failed: {exc}"
+
+
+def list_audit(
+    backend_url: str,
+    token: str,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    event_type: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    timeout: float = _AUTH_TIMEOUT,
+) -> tuple[dict | None, str | None]:
+    """Fetch paginated audit event list via ``GET /audit``."""
+    base = normalize_base_url(backend_url)
+    params: dict[str, Any] = {"limit": limit, "offset": offset}
+    if event_type:
+        params["event_type"] = event_type
+    if since:
+        params["since"] = since
+    if until:
+        params["until"] = until
+    try:
+        resp = requests.get(
+            f"{base}/audit",
+            params=params,
+            headers=get_auth_headers(token),
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return resp.json(), None
+    except requests.HTTPError as exc:
+        return None, f"Error {exc.response.status_code}: {_extract_detail(exc)}"
+    except requests.ConnectionError:
+        return None, "Backend unreachable."
+    except requests.RequestException as exc:
+        return None, f"Request failed: {exc}"

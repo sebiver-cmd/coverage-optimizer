@@ -95,16 +95,33 @@ def list_batches(
     tenant_id: uuid.UUID,
     limit: int = 50,
     offset: int = 0,
-) -> list[ApplyBatch]:
-    """List batches for a tenant, newest first."""
-    return (
-        db.query(ApplyBatch)
-        .filter(ApplyBatch.tenant_id == tenant_id)
-        .order_by(ApplyBatch.created_at.desc())
+    status: str | None = None,
+    mode: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> tuple[int, list[ApplyBatch]]:
+    """List batches for a tenant, newest first, with optional filters.
+
+    Returns ``(total_count, items)`` where *total_count* is the number
+    of rows matching the filters (before limit/offset).
+    """
+    q = db.query(ApplyBatch).filter(ApplyBatch.tenant_id == tenant_id)
+    if status is not None:
+        q = q.filter(ApplyBatch.status == status)
+    if mode is not None:
+        q = q.filter(ApplyBatch.mode == mode)
+    if since is not None:
+        q = q.filter(ApplyBatch.created_at >= since)
+    if until is not None:
+        q = q.filter(ApplyBatch.created_at <= until)
+    total = q.count()
+    items = (
+        q.order_by(ApplyBatch.created_at.desc())
         .offset(offset)
         .limit(limit)
         .all()
     )
+    return total, items
 
 
 def emit_batch_audit(

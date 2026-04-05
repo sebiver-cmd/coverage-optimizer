@@ -11,7 +11,7 @@ import streamlit as st
 
 from domain.pricing import MIN_COVERAGE_RATE, BEAUTIFY_LAST_DIGIT
 from ui.styles import DASHBOARD_CSS
-from ui.pages import home, price_optimizer
+from ui.pages import home, price_optimizer, history
 from ui.backend_url import normalize_base_url, check_backend_connected
 from ui.vault_helpers import (
     login as vault_login,
@@ -34,6 +34,7 @@ st.markdown(DASHBOARD_CSS, unsafe_allow_html=True)
 _PAGES = [
     "Dashboard",
     "Price Optimizer",
+    "History",
 ]
 
 # ---------------------------------------------------------------------------
@@ -277,4 +278,10 @@ elif page == "Price Optimizer":
         backend_url=backend_url,
         token=token,
         credential_id=credential_id,
+    )
+
+elif page == "History":
+    history.render(
+        backend_url=backend_url,
+        token=token,
     )
