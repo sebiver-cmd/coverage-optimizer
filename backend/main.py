@@ -101,6 +101,12 @@ app = FastAPI(
 )
 
 
+# Fields whose ``input`` value must be stripped from 422 validation-error
+# responses to prevent plaintext credentials appearing in API responses.
+# Add names here if new sensitive fields are introduced (e.g. ``new_password``).
+_SENSITIVE_VALIDATION_FIELDS = {"password"}
+
+
 @app.exception_handler(RequestValidationError)
 async def _validation_error_handler(request, exc: RequestValidationError) -> JSONResponse:
     """Return 422 validation errors, stripping sensitive input values.
@@ -108,9 +114,10 @@ async def _validation_error_handler(request, exc: RequestValidationError) -> JSO
     Pydantic v2 includes the raw ``input`` value in each error dict by
     default.  For ``password`` fields this would leak plaintext credentials
     in the response body.  We strip ``input`` only for errors whose ``loc``
-    contains the string ``"password"``; non-sensitive fields (e.g.
-    ``tenant_name``, ``email``) retain their ``input`` value so that client
-    developers can still correlate the error to the submitted value.
+    contains a name listed in :data:`_SENSITIVE_VALIDATION_FIELDS`;
+    non-sensitive fields (e.g. ``tenant_name``, ``email``) retain their
+    ``input`` value so that client developers can still correlate the error
+    to the submitted value.
 
     We strip ``url`` from all errors globally — it is a Pydantic-docs link
     with no functional value for API clients.
@@ -118,11 +125,10 @@ async def _validation_error_handler(request, exc: RequestValidationError) -> JSO
     The ``ctx`` dict may contain non-serialisable exception objects, so we
     convert its values to strings.
     """
-    _sensitive = {"password"}
     errors = []
     for err in exc.errors():
         loc = err.get("loc", ())
-        is_sensitive = any(part in _sensitive for part in loc)
+        is_sensitive = any(part in _SENSITIVE_VALIDATION_FIELDS for part in loc)
         safe_err = {}
         for k, v in err.items():
             if k == "url":
