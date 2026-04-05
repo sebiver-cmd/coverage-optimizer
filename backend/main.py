@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -40,7 +40,7 @@ from backend.middleware.request_id import RequestIDMiddleware
 from backend.middleware.access_log import AccessLogMiddleware
 from backend.middleware.security_headers import SecurityHeadersMiddleware
 from backend.middleware.request_size_limit import RequestSizeLimitMiddleware
-from backend.rbac import require_role
+
 
 # Activate structured JSON logging as early as possible.
 setup_logging()
@@ -173,19 +173,19 @@ def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/health", dependencies=[Depends(require_role("viewer"))])
+@app.get("/health")
 def health_check() -> dict[str, str]:
     """Readiness probe — returns basic status plus optional DB ping.
 
-    Unlike :func:`healthz` (unauthenticated liveness probe), this endpoint
-    requires at least the ``viewer`` role and checks database connectivity.
+    No authentication required so that external monitors and simple ``curl``
+    checks can verify service readiness without a token.
 
     * ``db: skipped`` when ``DATABASE_URL`` is not configured.
     * ``db: ok`` when the database responds to ``SELECT 1``.
     * ``db: error`` on connection failure.
 
     The endpoint **never** returns a non-200 status due to DB state so that
-    container orchestrators can always reach the liveness check.
+    container orchestrators can always reach the readiness check.
     """
     return {"status": "ok", "db": check_db()}
 
