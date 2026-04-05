@@ -21,6 +21,14 @@ services:
       - SB_OPTIMA_ENABLE_APPLY=false
       - DATABASE_URL=postgresql+psycopg2://sboptima:sboptima@postgres:5432/sboptima
       - REDIS_URL=redis://redis:6379/0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      # Allow time for Alembic migrations + uvicorn startup before
+      # the first health probe fires.
+      start_period: 15s
     depends_on:
       postgres:
         condition: service_healthy
@@ -57,7 +65,8 @@ services:
       # Override in production with your real API domain.
       - NEXT_PUBLIC_API_URL=http://localhost:8000
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
   # ---- Postgres 16 ----
   postgres:
