@@ -1,6 +1,6 @@
 # SB-Optima — SaaS Migration Roadmap
 
-> Last updated: 2026-04-04 — aligned with actual codebase scan.
+> Last updated: 2026-04-05 — automated codebase audit with per-task evidence.
 
 This roadmap migrates **SB-Optima / Coverage Optimizer** from a single-tenant
 Streamlit + FastAPI tool into a **multi-tenant, paid SaaS web application**
@@ -211,8 +211,8 @@ When configuring:
 
 ## Phase 0 — Planning & ADR
 
-### Task 0.1 — Architecture Decision Record
-- [x] Task 0.1
+### Task 0.1 — Architecture Decision Record ✅
+- [x] Task 0.1 — Updated: 2026-04-05
 
 **Objective**: Write `docs/adr/0001-saas-architecture.md` locking the stack
 choices listed above, with component diagram, data flow, security model, tenant
@@ -231,12 +231,15 @@ isolation strategy, and deployment plan.
 **Risks**: bikeshedding on auth provider. Mitigation: default to custom JWT; note
 external-provider alternative.
 
+**Evidence**:
+- `docs/adr/0001-saas-architecture.md` — Accepted ADR covering FastAPI, PostgreSQL 16 + SQLAlchemy, Redis 7, Arq, custom JWT + bcrypt, Stripe (deferred), Next.js (deferred), Fernet encryption, sboptima.dk/sboptima.com domain plan.
+
 ---
 
 ## Phase 1 — Safety Prerequisites (consolidate write paths)
 
-### Task 1.1 — Retire Streamlit direct SOAP writes
-- [x] Task 1.1
+### Task 1.1 — Retire Streamlit direct SOAP writes ✅
+- [x] Task 1.1 — Updated: 2026-04-05
 
 **Objective**: Remove the direct `DanDomainClient.update_prices_batch()` call
 from `ui/pages/price_optimizer.py` and route all writes through the backend
@@ -270,8 +273,14 @@ from `ui/pages/price_optimizer.py` and route all writes through the backend
 - Streamlit dry-run toggle must map to backend dry-run. **Mitigation**: use
   existing `/apply-prices/dry-run` endpoint.
 
-### Task 1.2 — Backend becomes sole product fetcher for UI
-- [x] Task 1.2
+**Evidence**:
+- `grep -rn "DanDomainClient" ui/` returns zero hits — confirmed.
+- `ui/backend_client.py` — `apply_batch()` calls `POST /apply-prices/apply`; `create_manifest()` calls `POST /apply-prices/create-manifest`.
+- `ui/pages/price_optimizer.py` — `_execute_backend_push()` and `_apply_batch()` route all writes through backend HTTP.
+- Tests: `tests/test_task_1_1_retire_direct_soap.py`.
+
+### Task 1.2 — Backend becomes sole product fetcher for UI ✅
+- [x] Task 1.2 — Updated: 2026-04-05
 
 **Objective**: Remove direct `DanDomainClient` read calls from the Streamlit UI
 where feasible (product fetch, brand fetch already use backend; ensure no
@@ -292,12 +301,18 @@ remaining direct calls).
 **Risks**: test-connection latency via backend. **Mitigation**: `/test-connection`
 already exists in `backend/main.py`.
 
+**Evidence**:
+- `grep -rn "from dandomain_api import" ui/` returns zero hits — confirmed.
+- `grep -rn "DanDomainClient" ui/` returns zero hits — confirmed.
+- `ui/pages/price_optimizer.py` — `_fetch_brands_from_backend()`, `_fetch_catalog_products()`, `_test_connection_via_backend()` all use backend HTTP.
+- Tests: `tests/test_task_1_2_no_ui_soap.py`.
+
 ---
 
 ## Phase 2 — Foundations (Docker + DB + config)
 
-### Task 2.1 — Docker Compose for local dev
-- [x] Task 2.1
+### Task 2.1 — Docker Compose for local dev ✅
+- [x] Task 2.1 — Updated: 2026-04-05
 
 **Objective**: One-command local dev environment with FastAPI, Postgres, and
 Redis.
@@ -320,8 +335,14 @@ Redis.
 **Risks**: zeep needs outbound HTTPS to fetch WSDL.
 **Mitigation**: document that Docker network needs outbound access; tests mock SOAP.
 
-### Task 2.2 — Postgres + Alembic scaffolding
-- [x] Task 2.2
+**Evidence**:
+- `infra/docker-compose.yml` — Services: `api` (FastAPI, port 8000), `postgres` (PostgreSQL 16, health check), `redis` (Redis 7, health check).
+- `infra/Dockerfile.api` — `python:3.12-slim`, non-root user `appuser`, `uvicorn backend.main:app`.
+- `.env.example` — 82 documented env vars covering all phases.
+- `GET /health` — Returns `{"status": "ok", "db": "ok|error|skipped"}` (backend/main.py).
+
+### Task 2.2 — Postgres + Alembic scaffolding ✅
+- [x] Task 2.2 — Updated: 2026-04-05
 
 **Objective**: Database connection and migration framework, ready for models.
 
@@ -342,8 +363,14 @@ Redis.
 **Risks**: import-time side effects from SQLAlchemy engine.
 **Mitigation**: lazy engine init guarded by `DATABASE_URL` presence.
 
-### Task 2.3 — Env var convention + config module
-- [x] Task 2.3
+**Evidence**:
+- `backend/db.py` — `init_engine()`, `get_db()` (session dependency), `check_db()` (SELECT 1 health probe). Lazy init via `DATABASE_URL`.
+- `alembic/` — `alembic.ini`, `env.py`, 5 migration files in `alembic/versions/`.
+- `GET /health` reports `db: ok|error|skipped`.
+- Tests: `tests/test_db.py`, `tests/test_migrations_sqlite.py` (schema, linear chain, importable, unique IDs).
+
+### Task 2.3 — Env var convention + config module ✅
+- [x] Task 2.3 — Updated: 2026-04-05
 
 **Objective**: Centralise all configuration into one Pydantic `Settings` class.
 
@@ -364,12 +391,18 @@ Redis.
 **Risks**: breaking existing `os.environ` reads.
 **Mitigation**: `Settings` reads from env — transparent to existing code.
 
+**Evidence**:
+- `backend/config.py` — Pydantic `Settings(BaseSettings)` with `@lru_cache` singleton. 35+ config flags covering all phases.
+- `backend/config.py:to_safe_dict()` — Secrets redacted for safe logging.
+- `.env.example` — All vars documented.
+- Tests: `tests/test_config.py`.
+
 ---
 
 ## Phase 3 — Background Jobs + Caching (early)
 
-### Task 3.1 — Arq worker + async optimize
-- [x] Task 3.1
+### Task 3.1 — Arq worker + async optimize ✅
+- [x] Task 3.1 — Updated: 2026-04-05
 
 **Objective**: Long-running optimisation runs as a background job instead of
 blocking HTTP.
@@ -396,8 +429,16 @@ blocking HTTP.
 **Mitigation**: document `arq backend.worker.WorkerSettings` command; Docker Compose
 adds worker service.
 
-### Task 3.2 — Per-tenant product cache (Redis)
-- [x] Task 3.2
+**Evidence**:
+- `backend/worker.py` — Arq `WorkerSettings`, `run_optimization_job`.
+- `backend/jobs_api.py` — `POST /jobs/optimize` (operator+), `GET /jobs/{job_id}` (operator+), `GET /jobs/` (viewer+, paginated).
+- `backend/repositories/jobs_repo.py` — `create_job()`, `list_jobs()`, `get_job()`, `update_job_status()`.
+- Redis key: `sboptima:job:<job_id>`. Config: `JOB_RESULT_TTL_S` (default 3600s).
+- DB persistence: `OptimizationJob` rows when `SBOPTIMA_AUTH_REQUIRED=true`.
+- Tests: `tests/test_jobs_api.py`, `tests/test_jobs_integration.py`.
+
+### Task 3.2 — Per-tenant product cache (Redis) ✅
+- [x] Task 3.2 — Updated: 2026-04-05
 
 **Objective**: Cache product data in Redis to avoid re-fetching from SOAP on
 every optimisation call.
@@ -425,8 +466,15 @@ every optimisation call.
 **Risks**: stale data after external shop changes.
 **Mitigation**: short TTL + manual invalidation endpoint `POST /cache/invalidate`.
 
-### Task 3.3 — SOAP rate limiting + variant-enrichment batching
-- [x] Task 3.3
+**Evidence**:
+- `backend/cache.py` — `get_redis()`, `build_caller_key()` (SHA-256 hash, no plaintext creds), `get_cached_products()`, `set_cached_products()`, `invalidate_products_cache()`. Gzipped JSON serialisation.
+- Cache keys: `products:{caller_key}:{site_id}`, `products_enriched:{caller_key}:{site_id}`.
+- Config: `PRODUCT_CACHE_TTL_S` (default 900s / 15 min), `CACHE_KEY_SALT`, `CACHE_MAX_PAYLOAD_KB` (5120 KB).
+- Silent no-op when Redis unavailable.
+- Tests: `tests/test_cache.py`.
+
+### Task 3.3 — SOAP rate limiting + variant-enrichment batching ✅
+- [x] Task 3.3 — Updated: 2026-04-05
 
 **Objective**: Prevent N+1 variant enrichment from overwhelming HostedShop;
 add per-caller rate limiting.
@@ -449,12 +497,18 @@ add per-caller rate limiting.
 **Risks**: increased total enrichment time.
 **Mitigation**: cache enriched variants (Redis); only re-enrich on cache miss.
 
+**Evidence**:
+- `backend/soap_limiter.py` — `soap_limit(caller_key)` context manager. Threading.Semaphore for bounded concurrency + threading.Lock for inter-call delay.
+- Config: `SOAP_MAX_CONCURRENT` (default 3), `SOAP_CALL_DELAY_S` (default 0.2s).
+- Records `backend.metrics.record_soap_call()` on every SOAP call.
+- Tests: `tests/test_soap_limiter.py`.
+
 ---
 
 ## Phase 4 — Multi-Tenancy + Auth + RBAC
 
-### Task 4.1 — Tenant + User models
-- [x] Task 4.1
+### Task 4.1 — Tenant + User models ✅
+- [x] Task 4.1 — Updated: 2026-04-05
 
 **Objective**: Core DB models for multi-tenancy.
 
@@ -475,8 +529,13 @@ add per-caller rate limiting.
 **Risks**: UUID vs integer PK.
 **Mitigation**: use UUID (standard for SaaS; avoids enumeration).
 
-### Task 4.2 — Authentication (JWT)
-- [x] Task 4.2
+**Evidence**:
+- `backend/models.py` — `Tenant` (UUID PK, name, created_at, stripe fields, plan, status, daily limits), `User` (UUID PK, tenant_id FK, email, password_hash, role enum, created_at). `Role` enum: owner/admin/operator/viewer. Unique(tenant_id, email).
+- `alembic/versions/0001_add_tenants_and_users.py` — Creates `tenants` + `users` tables.
+- Tests: `tests/test_tenant_user_models.py`.
+
+### Task 4.2 — Authentication (JWT) ✅
+- [x] Task 4.2 — Updated: 2026-04-05
 
 **Objective**: Signup, login, JWT issuance, tenant-scoped middleware.
 
@@ -500,8 +559,15 @@ add per-caller rate limiting.
 **Risks**: password handling.
 **Mitigation**: use `passlib[bcrypt]`; never store plaintext.
 
-### Task 4.3 — RBAC middleware
-- [x] Task 4.3
+**Evidence**:
+- `backend/auth.py` — `hash_password()` (bcrypt), `verify_password()`, `create_access_token()` (HS256 JWT), `decode_token()`, `get_current_user()` (HTTPBearer dependency), `get_optional_current_user()` (respects `SBOPTIMA_AUTH_REQUIRED`).
+- `backend/auth_api.py` — `POST /auth/signup`, `POST /auth/login`, `POST /auth/refresh`, `GET /auth/me`.
+- JWT payload: `{sub, tenant_id, role, iat, exp}`.
+- Config: `JWT_SECRET`, `JWT_ALGORITHM` (HS256), `JWT_ACCESS_TOKEN_EXP_MINUTES` (60), `SBOPTIMA_AUTH_REQUIRED`.
+- Tests: `tests/test_auth.py`.
+
+### Task 4.3 — RBAC middleware ✅
+- [x] Task 4.3 — Updated: 2026-04-05
 
 **Objective**: Role-based access control on all API routes.
 
@@ -526,12 +592,17 @@ add per-caller rate limiting.
 **Mitigation**: add a `SBOPTIMA_AUTH_REQUIRED=false` env var that disables auth
 for local dev / migration period.
 
+**Evidence**:
+- `backend/rbac.py` — `ROLE_ORDER` (viewer:0, operator:1, admin:2, owner:3), `require_role(min_role)` FastAPI dependency. No-op when `SBOPTIMA_AUTH_REQUIRED=false`.
+- Applied to all routers in `backend/main.py`: 15 routers with appropriate role requirements.
+- Tests: `tests/test_rbac.py`.
+
 ---
 
 ## Phase 5 — Credential Vault + Secret Handling
 
-### Task 5.1 — Encrypted credential storage
-- [x] Task 5.1
+### Task 5.1 — Encrypted credential storage ✅
+- [x] Task 5.1 — Updated: 2026-04-05
 
 **Objective**: Store DanDomain SOAP credentials per tenant, encrypted at rest.
 
@@ -560,8 +631,17 @@ for local dev / migration period.
 **Mitigation**: document rotation procedure (re-encrypt all blobs); add
 `key_version` column for future multi-key support.
 
-### Task 5.2 — Remove credentials from request payloads
-- [x] Task 5.2
+**Evidence**:
+- `backend/crypto.py` — `encrypt_str()`, `decrypt_str()` using Fernet.
+- `backend/credentials_api.py` — `POST /credentials/` (admin+), `GET /credentials/` (admin+), `DELETE /credentials/{id}` (admin+). Response: `CredentialOut` (metadata only, no secrets).
+- `backend/models.py:HostedShopCredential` — `api_username_enc`, `api_password_enc` (Fernet-encrypted), `site_id`, `name`. Unique(tenant_id, name).
+- `alembic/versions/0002_add_hostedshop_credentials.py` — Creates `hostedshop_credentials` table.
+- Returns 503 when auth disabled. Requires `ENCRYPTION_KEY`.
+- Config: `ENCRYPTION_KEY`, `CREDENTIAL_CIPHER` (fernet), `ALLOW_REQUEST_CREDENTIALS_WHEN_AUTHED`.
+- Tests: `tests/test_credentials.py`.
+
+### Task 5.2 — Remove credentials from request payloads ✅
+- [x] Task 5.2 — Updated: 2026-04-05
 
 **Objective**: Backend reads credentials from vault instead of requiring them in
 every request body.
@@ -588,8 +668,14 @@ every request body.
 **Risks**: breaking Streamlit during migration.
 **Mitigation**: backward-compat fallback + `SBOPTIMA_AUTH_REQUIRED=false` flag.
 
-### Task 5.3 — LLM key management
-- [ ] Task 5.3
+**Evidence**:
+- `backend/credential_resolver.py` — `resolve_hostedshop_credentials()` resolves from vault (by credential_id) or request payload (fallback with deprecation warning).
+- `ui/vault_helpers.py` — `build_optimize_payload()`, `build_catalog_payload()`, `build_apply_payload()`, `build_brands_params()` prefer `credential_id` when vault active; no plaintext credentials included.
+- Config: `ALLOW_REQUEST_CREDENTIALS_WHEN_AUTHED` (default false).
+- Tests: `tests/test_ui_vault_mode.py`, `tests/test_credentials.py`.
+
+### Task 5.3 — LLM key management ⛔
+- [ ] Task 5.3 — Updated: 2026-04-05
 
 **Objective**: Decide and implement how `OPENAI_API_KEY` is handled in SaaS
 context.
@@ -609,12 +695,25 @@ context.
 **Risks**: cost blowup.
 **Mitigation**: add `OPENAI_MONTHLY_TOKEN_LIMIT` env var; reject calls above limit.
 
+**Evidence**:
+- `backend/config.py` — `openai_api_key` and `openai_base_url` exist, but **no** `OPENAI_MONTHLY_TOKEN_LIMIT`.
+- `domain/invoice_ean.py` — `_default_llm_call()` makes OpenAI requests directly. **No** tenant_id or token count logging.
+- `domain/supplier.py` — LLM calls via injected `llm_call` parameter. **No** tenant_id or token tracking.
+- Domain-layer LLM functions are tenant-unaware.
+
+**Remaining work**:
+- Add `tenant_id` parameter to LLM call functions in `domain/invoice_ean.py` and `domain/supplier.py`.
+- Log `{tenant_id, tokens_used, model}` after each LLM call.
+- Add `OPENAI_MONTHLY_TOKEN_LIMIT` to `backend/config.py` with enforcement.
+- Add tenant isolation for LLM usage visibility.
+- Add unit test for LLM usage logging with tenant_id.
+
 ---
 
 ## Phase 6 — DB Migration of Batches + Audit (preserve guardrails)
 
-### Task 6.1 — Batch manifest + audit tables
-- [x] Task 6.1
+### Task 6.1 — Batch manifest + audit tables ✅
+- [x] Task 6.1 — Updated: 2026-04-05
 
 **Objective**: Postgres tables for batch manifests and audit, replacing
 `data/apply_batches/` and `data/apply_audit.log`.
@@ -645,8 +744,17 @@ context.
 **Mitigation**: dual-write (file + DB) during transition; remove file path once
 verified.
 
-### Task 6.2 — Apply endpoint uses DB (guardrails preserved) + Tenant Dashboards
-- [x] Task 6.2
+**Evidence**:
+- `backend/models.py` — `OptimizationJob`, `ApplyBatch`, `AuditEvent` models with full tenant scoping.
+- `backend/repositories/jobs_repo.py` — CRUD for OptimizationJob.
+- `backend/repositories/batches_repo.py` — CRUD for ApplyBatch.
+- `backend/repositories/audit_repo.py` — Query layer for AuditEvent.
+- `alembic/versions/0003_add_jobs_and_batches.py` — Creates `optimization_jobs`, `apply_batches`, `audit_events` tables.
+- Dual-write: file + DB when auth enabled; file-only fallback when auth disabled.
+- Tests: `tests/test_task_6_1_batches_audit.py`.
+
+### Task 6.2 — Apply endpoint uses DB (guardrails preserved) + Tenant Dashboards ✅
+- [x] Task 6.2 — Updated: 2026-04-05
 
 **Objective**: `POST /apply-prices/apply` reads manifest from DB, writes audit
 to DB, uses DB status for idempotency. Additionally, tenant dashboard list
@@ -670,12 +778,21 @@ Streamlit History page added for tenant-scoped job/batch/audit history.
 **Risks**: data loss during transition.
 **Mitigation**: keep file writes as fallback until stable; document removal.
 
+**Evidence**:
+- `backend/apply_prices_api.py` — `POST /apply-prices/dry-run`, `POST /apply-prices/create-manifest`, `GET /apply-prices/batches` (viewer+, paginated, filtered, tenant-scoped), `GET /apply-prices/batch/{batch_id}`.
+- `backend/apply_real_api.py` — Updates `ApplyBatch.status` + `ApplyBatch.summary_json` in DB. All guardrails preserved.
+- `backend/audit_api.py` — `GET /audit` (viewer+, paginated, filtered, tenant-scoped).
+- `backend/jobs_api.py` — `GET /jobs/` (viewer+, paginated, filtered, tenant-scoped).
+- `ui/pages/history.py` — Streamlit History page with tabs: jobs, batches, audit events.
+- Auth-off: all list endpoints return 503.
+- Tests: `tests/test_task_6_2_dashboards.py`, `tests/test_apply_real.py`, `tests/test_apply_prices_dry_run.py`.
+
 ---
 
 ## Phase 7 — Billing + Plans (Stripe)
 
-### Task 7.1 — Stripe integration
-- [ ] Task 7.1
+### Task 7.1 — Stripe integration 🟡
+- [ ] Task 7.1 — Updated: 2026-04-05
 
 **Objective**: Paid subscriptions with plan-based gating.
 
@@ -695,8 +812,24 @@ Streamlit History page added for tenant-scoped job/batch/audit history.
 **Risks**: webhook reliability.
 **Mitigation**: idempotent webhook handler; Stripe event deduplication.
 
-### Task 7.2 — Plans + billing scaffolding (Stripe-ready)
-- [x] Task 7.2
+**Evidence**:
+- `backend/stripe_billing.py` — `is_billing_configured()`, `create_or_get_customer()`, `create_checkout_session()`, `parse_and_verify_webhook()`, `handle_webhook_event()`. Handles `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.payment_succeeded`.
+- `backend/billing_api.py` — `POST /billing/checkout` (admin+), `GET /billing/status` (viewer+), `POST /billing/webhook` (signature-verified).
+- `backend/models.py:Tenant` — `stripe_customer_id`, `stripe_subscription_id`, `billing_status` columns.
+- `alembic/versions/0005_add_stripe_fields.py` — Adds Stripe columns.
+- Config: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID_PRO`, `STRIPE_PRICE_ID_ENTERPRISE`, `BILLING_ENABLED`.
+- UI: `ui/pages/billing.py` — Plan display, billing status, Stripe checkout.
+- Tests: `tests/test_billing.py`, `tests/test_ui_billing.py`.
+- ✅ Checkout flow creates Stripe customer.
+- ✅ Webhook updates tenant plan/status.
+- ❌ **Missing**: Billing gate middleware — no 402 returned for expired/inactive subscriptions on `/optimize` or `/apply`.
+
+**Remaining work**:
+- Implement billing gate middleware: check `tenant.billing_status` before `/optimize`, `/apply-prices/apply`, `/jobs/optimize`; return 402 for inactive/canceled/past_due subscriptions.
+- Add billing gate test (parameterised by billing_status × endpoint).
+
+### Task 7.2 — Plans + billing scaffolding (Stripe-ready) 🟡
+- [ ] Task 7.2 — Updated: 2026-04-05
 
 **Objective**: Track optimisation runs and applies per tenant for usage-based
 billing.
@@ -709,12 +842,29 @@ billing.
 
 **Tests**: unit test for event recording.
 
+**Evidence**:
+- `backend/plans.py` — `Plan` dataclass, `PLANS` dict (free/pro/enterprise), `get_plan()`, `list_plans()`.
+- `backend/plan_api.py` — `GET /plans` (viewer+), `GET /tenant/plan` (viewer+), `PUT /tenant/plan` (admin+).
+- `backend/quotas.py` — `check_quota()`, `get_usage()`, `get_limits()`. Counts existing `OptimizationJob` / `ApplyBatch` rows (not separate usage_events table). Raises 429 `QuotaExceeded`.
+- `backend/usage_api.py` — `GET /usage` (viewer+) returns daily usage vs limits.
+- `alembic/versions/0004_add_tenant_limits.py` — Adds `daily_*_limit` columns to tenants.
+- ✅ Plans defined with limits (free/pro/enterprise).
+- ✅ Quota enforcement works via existing operational tables.
+- ❌ **Missing**: Dedicated `usage_events` table (roadmap requirement).
+- ❌ **Missing**: Stripe usage record reporting (metered plan integration).
+
+**Remaining work**:
+- Create `usage_events` table (tenant_id, event_type, timestamp, metadata) via Alembic migration.
+- Record explicit usage events for every optimize + apply call.
+- Add Stripe usage record reporting (`stripe.UsageRecord.create()`) for metered plans.
+- Tests: `tests/test_plans.py`, `tests/test_quotas.py` (existing, covering current implementation).
+
 ---
 
 ## Phase 8 — Web Frontend (Next.js) + Deprecate Streamlit
 
-### Task 8.1 — Next.js scaffold + auth UI
-- [ ] Task 8.1
+### Task 8.1 — Next.js scaffold + auth UI ⛔
+- [ ] Task 8.1 — Updated: 2026-04-05
 
 **Objective**: Minimal Next.js app with login, tenant dashboard, and navigation.
 
@@ -728,8 +878,16 @@ billing.
 - Login then JWT then dashboard renders.
 - Cookie domain works for `.sboptima.dk`.
 
-### Task 8.2 — Price Optimizer page (web)
-- [ ] Task 8.2
+**Evidence**: No `frontend/` directory exists. Not started.
+
+**Remaining work**:
+- Scaffold Next.js app with TypeScript in `frontend/`.
+- Login/signup pages connected to `POST /auth/signup`, `POST /auth/login`.
+- Tenant dashboard skeleton.
+- CORS configuration for `sboptima.dk` + localhost.
+
+### Task 8.2 — Price Optimizer page (web) ⛔
+- [ ] Task 8.2 — Updated: 2026-04-05
 
 **Objective**: Port the Streamlit Price Optimizer to Next.js.
 
@@ -738,8 +896,12 @@ filters, risk view, dry-run + apply flow, CSV export.
 
 **Acceptance criteria**: feature parity with Streamlit Price Optimizer page.
 
-### Task 8.3 — Deprecate Streamlit
-- [ ] Task 8.3
+**Evidence**: No `frontend/` directory exists. Depends on Task 8.1.
+
+**Remaining work**: Port Streamlit Price Optimizer (2925 lines) to Next.js with brand selector, async job trigger, results table, risk view, dry-run + apply flow, CSV export.
+
+### Task 8.3 — Deprecate Streamlit ⛔
+- [ ] Task 8.3 — Updated: 2026-04-05
 
 **Objective**: Remove Streamlit UI code once Next.js has feature parity.
 
@@ -747,6 +909,77 @@ filters, risk view, dry-run + apply flow, CSV export.
 
 **Acceptance criteria**: `app.py` and `ui/` removed; all tests pass; README
 points to Next.js frontend.
+
+**Evidence**: `app.py` and `ui/` still active. Depends on Tasks 8.1 + 8.2.
+
+**Remaining work**: Delete `app.py`, `ui/`, update README once Next.js reaches feature parity.
+
+---
+
+## Implemented but not in roadmap
+
+> The following features are implemented in code but have no corresponding task
+> in this roadmap. They are noted here for completeness — no new tasks are
+> created.
+
+### Observability hardening
+- `backend/middleware/request_id.py` — X-Request-ID correlation (UUID-4).
+- `backend/middleware/access_log.py` — Structured HTTP access logs with `duration_ms`, `tenant_id`, `user_id`.
+- `backend/logging_config.py` — `JSONFormatter`, `redact_dict()`, `setup_logging()`. Sensitive keys (password, jwt_secret, stripe keys, etc.) redacted.
+- `backend/metrics.py` — Prometheus `/metrics` endpoint (admin-gated, `METRICS_ENABLED` flag). Metrics: `http_requests_total`, `http_request_duration_seconds`, `soap_calls_total`, `quota_exceeded_total`, `billing_webhook_events_total`.
+- Tests: `tests/test_observability.py`.
+
+### Operational safety
+- `backend/admin_api.py` — `GET /admin/diagnostics` (health, config flags, DB latency, row counts), `GET /admin/tenants` (paginated, filtered), `GET /admin/tenant/{id}` (detail + limits + usage). All admin+ and 503 when auth disabled.
+- `tests/test_migrations_sqlite.py` — Schema, linear chain, importable, unique IDs checks (5 tests).
+- `docs/ops/migrations.md` — Alembic migration discipline.
+- `docs/ops/backups.md` — PostgreSQL backup/restore procedures.
+- Tests: `tests/test_admin_api.py`.
+
+### Security hardening
+- `backend/middleware/security_headers.py` — `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Content-Security-Policy`, `Permissions-Policy`, `Strict-Transport-Security` (HSTS).
+- `backend/middleware/request_size_limit.py` — Content-Length limit (default 1 MB, 413 on exceed).
+- CORS: explicit origins from `CORS_ALLOWED_ORIGINS` / `CORS_ALLOWED_ORIGIN_REGEX` (no wildcard).
+- Config: `SECURITY_HEADERS_ENABLED`, `HSTS_ENABLED`, `MAX_REQUEST_BODY_BYTES`.
+- Tests: `tests/test_security_hardening.py`.
+
+### Data retention + tenant export
+- `backend/retention.py` — `prune_jobs()`, `prune_batches()`, `prune_audit()`, `run_retention()`. Configurable cutoffs.
+- `scripts/run_retention.py` — CLI script for scheduled retention.
+- `backend/admin_api.py` — `GET /admin/tenant/{id}/export` (admin+, 503 auth-off, no secrets/PII, capped 10k rows, emits audit).
+- Config: `RETENTION_ENABLED`, `RETENTION_JOBS_DAYS` (30), `RETENTION_BATCHES_DAYS` (30), `RETENTION_AUDIT_DAYS` (90).
+- Tests: `tests/test_retention_and_export.py`.
+
+---
+
+## Audit Summary (2026-04-05)
+
+| Phase | Task | Status | Notes |
+|---|---|---|---|
+| 0 | 0.1 — ADR | ✅ | `docs/adr/0001-saas-architecture.md` |
+| 1 | 1.1 — Retire UI SOAP writes | ✅ | No DanDomainClient in ui/ |
+| 1 | 1.2 — Backend sole fetcher | ✅ | No dandomain_api in ui/ |
+| 2 | 2.1 — Docker Compose | ✅ | `infra/docker-compose.yml` |
+| 2 | 2.2 — Postgres + Alembic | ✅ | `backend/db.py`, 5 migrations |
+| 2 | 2.3 — Config module | ✅ | `backend/config.py`, 35+ flags |
+| 3 | 3.1 — Arq worker | ✅ | `backend/worker.py`, `jobs_api.py` |
+| 3 | 3.2 — Product cache | ✅ | `backend/cache.py`, Redis |
+| 3 | 3.3 — SOAP limiter | ✅ | `backend/soap_limiter.py` |
+| 4 | 4.1 — Tenant + User models | ✅ | `backend/models.py`, migration 0001 |
+| 4 | 4.2 — Auth (JWT) | ✅ | `backend/auth.py`, `auth_api.py` |
+| 4 | 4.3 — RBAC | ✅ | `backend/rbac.py` |
+| 5 | 5.1 — Credential vault | ✅ | `backend/crypto.py`, `credentials_api.py`, migration 0002 |
+| 5 | 5.2 — Remove creds from payloads | ✅ | `backend/credential_resolver.py` |
+| 5 | 5.3 — LLM key management | ⛔ | No tenant-aware LLM logging; no `OPENAI_MONTHLY_TOKEN_LIMIT` |
+| 6 | 6.1 — Batch + audit tables | ✅ | Migration 0003, repos |
+| 6 | 6.2 — DB apply + dashboards | ✅ | List endpoints, History page |
+| 7 | 7.1 — Stripe integration | 🟡 | Checkout + webhook work; **billing gate missing** |
+| 7 | 7.2 — Plans + billing scaffolding | 🟡 | Plans + quotas work; **`usage_events` table + Stripe usage missing** |
+| 8 | 8.1 — Next.js scaffold | ⛔ | No `frontend/` directory |
+| 8 | 8.2 — Price Optimizer (web) | ⛔ | Depends on 8.1 |
+| 8 | 8.3 — Deprecate Streamlit | ⛔ | Depends on 8.1 + 8.2 |
+
+**Total**: 14 ✅ · 2 🟡 · 5 ⛔
 
 ---
 
