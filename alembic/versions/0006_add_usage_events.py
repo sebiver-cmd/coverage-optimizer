@@ -22,10 +22,10 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.create_table(
         "usage_events",
-        sa.Column("id", sa.CHAR(32), primary_key=True),
+        sa.Column("id", sa.dialects.postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column(
             "tenant_id",
-            sa.CHAR(32),
+            sa.dialects.postgresql.UUID(as_uuid=True),
             sa.ForeignKey("tenants.id", ondelete="CASCADE"),
             nullable=False,
             index=True,
