@@ -6,6 +6,9 @@ change) **without writing anything** to HostedShop / DanDomain.
 
 This module intentionally does **not** import any write/push/update
 functions.
+
+When ``SBOPTIMA_AUTH_REQUIRED=true``, batch records are persisted to the
+database (durable, tenant-scoped) in addition to disk manifests.
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from backend.optimizer_api import OptimizeRequest, run_optimization
@@ -130,7 +133,7 @@ router = APIRouter(tags=["apply-prices"])
 
 
 @router.post("/apply-prices/dry-run", response_model=DryRunResponse, dependencies=[Depends(require_role("operator"))])
-def dry_run_apply(payload: DryRunRequest) -> DryRunResponse:
+def dry_run_apply(payload: DryRunRequest, request: Request) -> DryRunResponse:
     """Compute a dry-run change set without writing to the webshop.
 
     Delegates to the existing ``run_optimization`` function for the
@@ -200,6 +203,9 @@ def dry_run_apply(payload: DryRunRequest) -> DryRunResponse:
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     logger.info("Persisted dry-run manifest: %s", manifest_path)
 
+    # Persist to DB when auth is enabled
+    _persist_batch_to_db(request, batch_id, "dry_run", manifest, summary.model_dump())
+
     return DryRunResponse(
         batch_id=batch_id,
         changes=changes,
@@ -208,15 +214,26 @@ def dry_run_apply(payload: DryRunRequest) -> DryRunResponse:
 
 
 @router.get("/apply-prices/batch/{batch_id}", dependencies=[Depends(require_role("viewer"))])
-def get_batch(batch_id: str) -> dict:
+def get_batch(batch_id: str, request: Request) -> dict:
     """Return a previously persisted dry-run manifest.
 
     ``batch_id`` is strictly validated as a UUID-4 string to prevent
     path-traversal attacks.
+
+    When auth is enabled, reads from DB (tenant-scoped) first.
     """
     if not UUID_RE.match(batch_id):
         raise HTTPException(status_code=422, detail="Invalid batch_id format.")
 
+    # When auth is enabled, try reading from DB first (tenant-scoped)
+    from backend.config import get_settings as _get_settings
+    settings = _get_settings()
+    if settings.sboptima_auth_required:
+        db_result = _get_batch_from_db(request, batch_id)
+        if db_result is not None:
+            return db_result
+
+    # Legacy: read from disk
     manifest_path = BATCH_DIR / f"{batch_id}.json"
     if not manifest_path.is_file():
         raise HTTPException(status_code=404, detail="Batch not found.")
@@ -225,7 +242,7 @@ def get_batch(batch_id: str) -> dict:
 
 
 @router.post("/apply-prices/create-manifest", response_model=CreateManifestResponse, dependencies=[Depends(require_role("operator"))])
-def create_manifest(payload: CreateManifestRequest) -> CreateManifestResponse:
+def create_manifest(payload: CreateManifestRequest, request: Request) -> CreateManifestResponse:
     """Persist a pre-computed change set as a batch manifest.
 
     Accepts the list of change entries already computed by the UI,
@@ -269,8 +286,118 @@ def create_manifest(payload: CreateManifestRequest) -> CreateManifestResponse:
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     logger.info("Persisted UI-created manifest: %s", manifest_path)
 
+    # Persist to DB when auth is enabled
+    _persist_batch_to_db(request, batch_id, "create_manifest", manifest, summary.model_dump())
+
     return CreateManifestResponse(
         batch_id=batch_id,
         changes=changes,
         summary=summary,
     )
+
+
+# ---------------------------------------------------------------------------
+# DB persistence helpers
+# ---------------------------------------------------------------------------
+
+
+def _persist_batch_to_db(
+    request: Request,
+    batch_id: str,
+    mode: str,
+    manifest: dict,
+    summary: dict,
+) -> None:
+    """Write an ApplyBatch row when auth is enabled (best-effort)."""
+    try:
+        from backend.config import get_settings as _get_settings
+        settings = _get_settings()
+        if not settings.sboptima_auth_required:
+            return
+
+        from backend.db import get_db
+        from backend.repositories import batches_repo
+
+        user = getattr(request.state, "user", None)
+        tenant_id = getattr(request.state, "tenant_id", None)
+        if tenant_id is None:
+            return
+
+        get_db_fn = request.app.dependency_overrides.get(get_db, get_db)
+        db_gen = get_db_fn()
+        db = next(db_gen)
+        try:
+            # Sanitize: strip credentials from stored manifest
+            safe_manifest = {k: v for k, v in manifest.items()
+                            if k not in ("api_password", "api_username")}
+
+            batch = batches_repo.create_batch(
+                db,
+                batch_id=uuid.UUID(batch_id),
+                tenant_id=tenant_id,
+                user_id=user.id if user else None,
+                mode=mode,
+                manifest_meta=safe_manifest,
+            )
+            batches_repo.update_batch_status(
+                db,
+                batch_id=uuid.UUID(batch_id),
+                tenant_id=tenant_id,
+                status="completed",
+                finished_at=datetime.now(timezone.utc),
+                summary=summary,
+            )
+            batches_repo.emit_batch_audit(
+                db,
+                tenant_id=tenant_id,
+                user_id=user.id if user else None,
+                event_type=f"apply.{mode}.completed",
+                meta={"batch_id": batch_id},
+            )
+        finally:
+            try:
+                next(db_gen, None)
+            except StopIteration:
+                pass
+    except Exception:
+        logger.debug("Failed to persist batch to DB (non-fatal)", exc_info=True)
+
+
+def _get_batch_from_db(request: Request, batch_id: str) -> dict | None:
+    """Read batch from DB, scoped to the current tenant. Returns None on miss."""
+    try:
+        from backend.db import get_db
+        from backend.repositories import batches_repo
+
+        tenant_id = getattr(request.state, "tenant_id", None)
+        if tenant_id is None:
+            return None
+
+        get_db_fn = request.app.dependency_overrides.get(get_db, get_db)
+        db_gen = get_db_fn()
+        db = next(db_gen)
+        try:
+            batch = batches_repo.get_batch(
+                db, batch_id=uuid.UUID(batch_id), tenant_id=tenant_id
+            )
+            if batch is None:
+                raise HTTPException(status_code=404, detail="Batch not found.")
+            result: dict = {}
+            if batch.manifest_json:
+                result = json.loads(batch.manifest_json)
+            result["batch_id"] = str(batch.id)
+            result["status"] = batch.status
+            result["mode"] = batch.mode
+            if batch.summary_json:
+                result["summary"] = json.loads(batch.summary_json)
+            return result
+        finally:
+            try:
+                next(db_gen, None)
+            except StopIteration:
+                pass
+    except HTTPException:
+        raise
+    except Exception:
+        logger.debug("Failed to read batch from DB (non-fatal)", exc_info=True)
+        return None

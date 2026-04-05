@@ -9,6 +9,9 @@ Endpoints
     Poll job status/result from Redis.
 
 When ``REDIS_URL`` is not configured both endpoints return **503**.
+
+When ``SBOPTIMA_AUTH_REQUIRED=true``, job records are persisted to the
+database (durable, tenant-scoped) in addition to Redis (fast polling).
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from backend.config import get_settings
@@ -167,7 +170,7 @@ router = APIRouter(prefix="/jobs", tags=["jobs"], dependencies=[Depends(require_
 
 
 @router.post("/optimize", response_model=EnqueueResponse)
-async def enqueue_optimize(payload: OptimizeRequest) -> EnqueueResponse:
+async def enqueue_optimize(payload: OptimizeRequest, request: Request) -> EnqueueResponse:
     """Enqueue an async optimisation job and return its ``job_id``."""
     settings = get_settings()
     if not settings.redis_url:
@@ -185,13 +188,17 @@ async def enqueue_optimize(payload: OptimizeRequest) -> EnqueueResponse:
     job_id = str(uuid.uuid4())
 
     try:
-        # Persist initial job record
+        # Persist initial job record in Redis (fast polling)
         record = build_job_record(job_id, JobStatus.queued)
         await r.set(
             _redis_key(job_id),
             json.dumps(record),
             ex=settings.job_result_ttl_s,
         )
+
+        # When auth is enabled, persist to DB as durable record
+        if settings.sboptima_auth_required:
+            _persist_job_to_db(request, job_id, payload)
 
         # Enqueue via Arq
         await pool.enqueue_job(
@@ -207,12 +214,63 @@ async def enqueue_optimize(payload: OptimizeRequest) -> EnqueueResponse:
     return EnqueueResponse(job_id=job_id)
 
 
+def _persist_job_to_db(request: Request, job_id: str, payload: OptimizeRequest) -> None:
+    """Write an OptimizationJob row when auth is enabled."""
+    try:
+        from backend.db import get_db
+        from backend.repositories import jobs_repo
+
+        user = getattr(request.state, "user", None)
+        tenant_id = getattr(request.state, "tenant_id", None)
+        if tenant_id is None:
+            return
+
+        get_db_fn = request.app.dependency_overrides.get(get_db, get_db)
+        db_gen = get_db_fn()
+        db = next(db_gen)
+        try:
+            # Sanitize: strip credentials from stored request
+            meta = payload.model_dump()
+            for secret_field in ("api_password", "api_username"):
+                meta.pop(secret_field, None)
+
+            jobs_repo.create_job(
+                db,
+                job_id=uuid.UUID(job_id),
+                tenant_id=tenant_id,
+                user_id=user.id if user else None,
+                request_meta=meta,
+            )
+            jobs_repo.emit_job_audit(
+                db,
+                tenant_id=tenant_id,
+                user_id=user.id if user else None,
+                event_type="job.enqueued",
+                meta={"job_id": job_id},
+            )
+        finally:
+            try:
+                next(db_gen, None)
+            except StopIteration:
+                pass
+    except Exception:
+        logger.debug("Failed to persist job to DB (non-fatal)", exc_info=True)
+
+
 @router.get("/{job_id}", response_model=JobStatusResponse)
-async def get_job_status(job_id: str) -> JobStatusResponse:
+async def get_job_status(job_id: str, request: Request) -> JobStatusResponse:
     """Return the current status (and result when completed) of a job."""
     _validate_uuid(job_id)
 
     settings = get_settings()
+
+    # When auth is enabled, try DB first (durable, tenant-scoped)
+    if settings.sboptima_auth_required:
+        db_response = _get_job_from_db(request, job_id)
+        if db_response is not None:
+            return db_response
+
+    # Fall back to Redis (legacy or fast-polling)
     if not settings.redis_url:
         raise _service_unavailable()
 
@@ -230,3 +288,44 @@ async def get_job_status(job_id: str) -> JobStatusResponse:
 
     data: dict = json.loads(raw)
     return JobStatusResponse(**data)
+
+
+def _get_job_from_db(request: Request, job_id: str) -> JobStatusResponse | None:
+    """Read job from DB, scoped to the current tenant. Returns None on miss."""
+    try:
+        from backend.db import get_db
+        from backend.repositories import jobs_repo
+
+        tenant_id = getattr(request.state, "tenant_id", None)
+        if tenant_id is None:
+            return None
+
+        get_db_fn = request.app.dependency_overrides.get(get_db, get_db)
+        db_gen = get_db_fn()
+        db = next(db_gen)
+        try:
+            job = jobs_repo.get_job(db, job_id=uuid.UUID(job_id), tenant_id=tenant_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail="Job not found.")
+            return JobStatusResponse(
+                job_id=str(job.id),
+                status=JobStatus(job.status),
+                created_at=job.created_at.isoformat() if job.created_at else None,
+                updated_at=job.finished_at.isoformat() if job.finished_at else (
+                    job.started_at.isoformat() if job.started_at else (
+                        job.created_at.isoformat() if job.created_at else None
+                    )
+                ),
+                result=json.loads(job.result_json) if job.result_json else None,
+                error=job.error,
+            )
+        finally:
+            try:
+                next(db_gen, None)
+            except StopIteration:
+                pass
+    except HTTPException:
+        raise
+    except Exception:
+        logger.debug("Failed to read job from DB (non-fatal)", exc_info=True)
+        return None

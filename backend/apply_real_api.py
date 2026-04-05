@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from dandomain_api import DanDomainClient
@@ -167,7 +167,7 @@ def apply_status() -> dict[str, bool]:
 
 
 @router.post("/apply-prices/apply", response_model=ApplyResponse, dependencies=[Depends(require_role("admin"))])
-def apply_prices(payload: ApplyRequest) -> ApplyResponse:
+def apply_prices(payload: ApplyRequest, request: Request) -> ApplyResponse:
     """Apply a previously created batch manifest to the webshop.
 
     Validates guardrails, delegates writes to
@@ -276,6 +276,18 @@ def apply_prices(payload: ApplyRequest) -> ApplyResponse:
 
     finished_at = datetime.now(timezone.utc).isoformat()
 
+    # 6b. Persist apply batch to DB when auth enabled -------------------
+    _persist_apply_batch_to_db(
+        request,
+        payload.batch_id,
+        applied_count=applied_count,
+        skipped_count=len(skipped),
+        failed_count=len(failed),
+        total_rows=len(changes),
+        started_at_str=started_at,
+        finished_at_str=finished_at,
+    )
+
     # 7. Write audit log line (JSONL) -----------------------------------
     audit_entry = {
         "timestamp": finished_at,
@@ -309,3 +321,81 @@ def apply_prices(payload: ApplyRequest) -> ApplyResponse:
         started_at=started_at,
         finished_at=finished_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# DB persistence helper for real apply
+# ---------------------------------------------------------------------------
+
+
+def _persist_apply_batch_to_db(
+    request: Request,
+    batch_id: str,
+    *,
+    applied_count: int,
+    skipped_count: int,
+    failed_count: int,
+    total_rows: int,
+    started_at_str: str,
+    finished_at_str: str,
+) -> None:
+    """Write an ApplyBatch row for the real apply operation (best-effort)."""
+    try:
+        settings = get_settings()
+        if not settings.sboptima_auth_required:
+            return
+
+        from backend.db import get_db
+        from backend.repositories import batches_repo
+
+        user = getattr(request.state, "user", None)
+        tenant_id = getattr(request.state, "tenant_id", None)
+        if tenant_id is None:
+            return
+
+        import uuid as _uuid
+
+        get_db_fn = request.app.dependency_overrides.get(get_db, get_db)
+        db_gen = get_db_fn()
+        db = next(db_gen)
+        try:
+            started_at_dt = datetime.fromisoformat(started_at_str)
+            finished_at_dt = datetime.fromisoformat(finished_at_str)
+
+            batch = batches_repo.create_batch(
+                db,
+                batch_id=_uuid.UUID(batch_id),
+                tenant_id=tenant_id,
+                user_id=user.id if user else None,
+                mode="apply",
+            )
+            summary = {
+                "total_rows": total_rows,
+                "applied_count": applied_count,
+                "skipped_count": skipped_count,
+                "failed_count": failed_count,
+            }
+            status = "completed" if failed_count == 0 else "completed"
+            batches_repo.update_batch_status(
+                db,
+                batch_id=_uuid.UUID(batch_id),
+                tenant_id=tenant_id,
+                status=status,
+                started_at=started_at_dt,
+                finished_at=finished_at_dt,
+                summary=summary,
+            )
+            batches_repo.emit_batch_audit(
+                db,
+                tenant_id=tenant_id,
+                user_id=user.id if user else None,
+                event_type="apply.apply.completed",
+                meta={"batch_id": batch_id, **summary},
+            )
+        finally:
+            try:
+                next(db_gen, None)
+            except StopIteration:
+                pass
+    except Exception:
+        logger.debug("Failed to persist apply batch to DB (non-fatal)", exc_info=True)
