@@ -162,6 +162,9 @@ def healthz() -> dict[str, str]:
 def health_check() -> dict[str, str]:
     """Readiness probe — returns basic status plus optional DB ping.
 
+    Unlike :func:`healthz` (unauthenticated liveness probe), this endpoint
+    requires at least the ``viewer`` role and checks database connectivity.
+
     * ``db: skipped`` when ``DATABASE_URL`` is not configured.
     * ``db: ok`` when the database responds to ``SELECT 1``.
     * ``db: error`` on connection failure.

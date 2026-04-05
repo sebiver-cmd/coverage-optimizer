@@ -26,6 +26,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+      # Allow time for Alembic migrations + uvicorn startup before
+      # the first health probe fires.
       start_period: 15s
     depends_on:
       postgres:
