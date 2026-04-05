@@ -916,39 +916,198 @@ points to Next.js frontend.
 
 ---
 
-## Implemented but not in roadmap
+## Phase 9 — Observability + Operational Safety
 
-> The following features are implemented in code but have no corresponding task
-> in this roadmap. They are noted here for completeness — no new tasks are
-> created.
+### Task 9.1 — Observability hardening (request IDs, structured logs, Prometheus) ✅
+- [x] Task 9.1 — Updated: 2026-04-05
 
-### Observability hardening
-- `backend/middleware/request_id.py` — X-Request-ID correlation (UUID-4).
-- `backend/middleware/access_log.py` — Structured HTTP access logs with `duration_ms`, `tenant_id`, `user_id`.
-- `backend/logging_config.py` — `JSONFormatter`, `redact_dict()`, `setup_logging()`. Sensitive keys (password, jwt_secret, stripe keys, etc.) redacted.
-- `backend/metrics.py` — Prometheus `/metrics` endpoint (admin-gated, `METRICS_ENABLED` flag). Metrics: `http_requests_total`, `http_request_duration_seconds`, `soap_calls_total`, `quota_exceeded_total`, `billing_webhook_events_total`.
-- Tests: `tests/test_observability.py`.
+**Objective**: Production-grade observability with request correlation, structured
+JSON logging with sensitive-key redaction, and Prometheus metrics for HTTP,
+SOAP, quota, and billing events.
 
-### Operational safety
-- `backend/admin_api.py` — `GET /admin/diagnostics` (health, config flags, DB latency, row counts), `GET /admin/tenants` (paginated, filtered), `GET /admin/tenant/{id}` (detail + limits + usage). All admin+ and 503 when auth disabled.
-- `tests/test_migrations_sqlite.py` — Schema, linear chain, importable, unique IDs checks (5 tests).
-- `docs/ops/migrations.md` — Alembic migration discipline.
+**Scope**:
+- `RequestIDMiddleware` — attach or generate `X-Request-ID` (UUID-4) per request;
+  echo on response; store in `request.state.request_id`.
+- `AccessLogMiddleware` — structured JSON log per request with `method`, `path`,
+  `status_code`, `duration_ms`, `request_id`, `tenant_id`, `user_id`; record
+  HTTP metrics.
+- `JSONFormatter` in `logging_config.py` — single-line JSON logs with contextual
+  extras; `redact_dict()` scrubs authorization, api_password, password,
+  jwt_secret, encryption_key, stripe_secret_key, stripe_webhook_secret, cookie,
+  x-api-key (case-insensitive, nested).
+- `setup_logging()` — configure root logger to use `JSONFormatter`.
+- Prometheus `/metrics` endpoint — gated by `METRICS_ENABLED` config flag (503
+  when disabled); admin-only RBAC when auth enabled. Custom registry with:
+  `http_requests_total`, `http_request_duration_seconds`, `soap_calls_total`,
+  `quota_exceeded_total`, `billing_webhook_events_total`.
+- Helper functions: `record_http_request()`, `record_soap_call()`,
+  `record_quota_exceeded()`, `record_billing_webhook()`.
+
+**Acceptance criteria**:
+- ✅ Every response includes `X-Request-ID` header (caller-provided or generated).
+- ✅ Access log emits structured JSON with tenant/user correlation per request.
+- ✅ `redact_dict()` removes all sensitive keys (case-insensitive, nested dicts).
+- ✅ `GET /metrics` returns Prometheus exposition format when enabled; 503 when
+  disabled; admin-gated when auth enabled.
+- ✅ All five Prometheus counters/histograms are populated.
+- ✅ 18 tests pass covering request ID, redaction, metrics endpoint, and
+  structured logging.
+
+**Tests**: `tests/test_observability.py` — 18 tests.
+
+**Evidence**:
+- `backend/middleware/request_id.py` — `RequestIDMiddleware`.
+- `backend/middleware/access_log.py` — `AccessLogMiddleware` + `record_http_request` calls.
+- `backend/logging_config.py` — `JSONFormatter`, `redact_dict()`, `setup_logging()`.
+- `backend/metrics.py` — Prometheus registry, five metrics, `GET /metrics` router, helper functions.
+- `backend/config.py` — `metrics_enabled` flag (default `False`).
+- Tests: `tests/test_observability.py` (18 tests).
+
+---
+
+### Task 9.2 — Operational safety (admin diagnostics, migration tests, ops docs) ✅
+- [x] Task 9.2 — Updated: 2026-04-05
+
+**Objective**: Admin-only diagnostics and tenant-management endpoints for
+platform operators; CI-safe migration validation; operational runbooks for
+database migrations and backups.
+
+**Scope**:
+- `GET /admin/diagnostics` — app version, git SHA, config flags
+  (`auth_required`, `billing_enabled`, `metrics_enabled`), DB status + latency,
+  row counts (tenants, users, jobs). Admin+ RBAC; 503 when auth disabled.
+- `GET /admin/tenants` — paginated list (limit 1–200, offset, optional `plan`
+  filter). Returns metadata only (id, name, plan, status, created_at,
+  billing_status). Admin+ RBAC; 503 when auth disabled.
+- `GET /admin/tenant/{id}` — detail view with limits dict, usage dict,
+  user_count, credential_count, billing booleans. Admin+ RBAC; 503 when auth
+  disabled. 404 for unknown tenant.
+- `tests/test_migrations_sqlite.py` — 5 tests: ORM schema creates all 6 core
+  tables, all tables have PKs, Alembic revision chain is linear, all migration
+  files importable with valid upgrade/downgrade, revision IDs unique.
+- `docs/ops/migrations.md` — Alembic migration discipline: naming convention,
+  review checklist, development/staging/production commands, CI safety via
+  `test_migrations_sqlite.py`, best practices.
+- `docs/ops/backups.md` — PostgreSQL backup/restore procedures: recommended
+  cadence (daily + pre-deploy prod, weekly staging), `pg_dump`/`pg_restore`
+  commands, post-restore steps, sensitive table inventory, security guidance.
+
+**Acceptance criteria**:
+- ✅ `GET /admin/diagnostics` returns health, config flags, DB latency, row
+  counts; no secrets leaked.
+- ✅ `GET /admin/tenants` supports pagination + plan filter; no PII.
+- ✅ `GET /admin/tenant/{id}` returns limits + usage; no secrets; 404 for
+  unknown.
+- ✅ All admin endpoints return 503 when auth disabled; 403 for viewer/operator.
+- ✅ Migration tests validate schema, linearity, importability, uniqueness.
+- ✅ Ops docs cover migrations and backups with actionable runbooks.
+- ✅ 20 admin API tests + 5 migration tests pass.
+
+**Tests**: `tests/test_admin_api.py` — 20 tests; `tests/test_migrations_sqlite.py` — 5 tests.
+
+**Evidence**:
+- `backend/admin_api.py` — `GET /admin/diagnostics`, `GET /admin/tenants`, `GET /admin/tenant/{id}`.
+- `backend/main.py` — Admin router mounted at `/admin`.
+- `tests/test_admin_api.py` — 20 tests (503, RBAC, diagnostics shape, tenant list, tenant detail).
+- `tests/test_migrations_sqlite.py` — 5 tests (schema, linear chain, importable, unique IDs).
+- `docs/ops/migrations.md` — Alembic migration discipline and CI safety.
 - `docs/ops/backups.md` — PostgreSQL backup/restore procedures.
-- Tests: `tests/test_admin_api.py`.
 
-### Security hardening
-- `backend/middleware/security_headers.py` — `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Content-Security-Policy`, `Permissions-Policy`, `Strict-Transport-Security` (HSTS).
-- `backend/middleware/request_size_limit.py` — Content-Length limit (default 1 MB, 413 on exceed).
-- CORS: explicit origins from `CORS_ALLOWED_ORIGINS` / `CORS_ALLOWED_ORIGIN_REGEX` (no wildcard).
-- Config: `SECURITY_HEADERS_ENABLED`, `HSTS_ENABLED`, `MAX_REQUEST_BODY_BYTES`.
-- Tests: `tests/test_security_hardening.py`.
+---
 
-### Data retention + tenant export
-- `backend/retention.py` — `prune_jobs()`, `prune_batches()`, `prune_audit()`, `run_retention()`. Configurable cutoffs.
-- `scripts/run_retention.py` — CLI script for scheduled retention.
-- `backend/admin_api.py` — `GET /admin/tenant/{id}/export` (admin+, 503 auth-off, no secrets/PII, capped 10k rows, emits audit).
-- Config: `RETENTION_ENABLED`, `RETENTION_JOBS_DAYS` (30), `RETENTION_BATCHES_DAYS` (30), `RETENTION_AUDIT_DAYS` (90).
-- Tests: `tests/test_retention_and_export.py`.
+## Phase 10 — Security Hardening + Data Retention
+
+### Task 10.1 — Security hardening (CORS, security headers, request size limits) ✅
+- [x] Task 10.1 — Updated: 2026-04-05
+
+**Objective**: Defence-in-depth HTTP hardening — explicit CORS (no wildcards),
+standard security response headers, HSTS (opt-in), and request body size
+limits to prevent abuse.
+
+**Scope**:
+- CORS: explicit origins from `CORS_ALLOWED_ORIGINS` (comma-separated) or
+  `CORS_ALLOWED_ORIGIN_REGEX`; no wildcard `*`; dev defaults to
+  `http://localhost:8501`.
+- `SecurityHeadersMiddleware` — when `SECURITY_HEADERS_ENABLED=true` (default):
+  `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy: strict-origin-when-cross-origin`,
+  `Content-Security-Policy: default-src 'none'`,
+  `Permissions-Policy: camera=(), microphone=(), geolocation=()`.
+- `Strict-Transport-Security` header — only when `HSTS_ENABLED=true`:
+  `max-age=63072000; includeSubDomains`.
+- `RequestSizeLimitMiddleware` — checks `Content-Length` against
+  `MAX_REQUEST_BODY_BYTES` (default 1 MB); returns 413 Content Too Large with
+  JSON error body on exceed; non-numeric headers pass through.
+- Webhook endpoint (`POST /billing/webhook`) does not require JWT but is
+  subject to request size limit.
+
+**Acceptance criteria**:
+- ✅ Only explicitly configured origins are reflected in CORS `Access-Control-Allow-Origin`; no wildcard.
+- ✅ `CORS_ALLOWED_ORIGIN_REGEX` enables dynamic pattern matching.
+- ✅ Security headers present on all responses when enabled; absent when disabled.
+- ✅ HSTS header present only when `HSTS_ENABLED=true`.
+- ✅ Oversized requests receive 413; normal requests pass through.
+- ✅ Webhook endpoint is protected by size limit but not by JWT.
+- ✅ 13 tests pass covering CORS, headers, size limits, and webhook protections.
+
+**Tests**: `tests/test_security_hardening.py` — 13 tests.
+
+**Evidence**:
+- `backend/middleware/security_headers.py` — `SecurityHeadersMiddleware` (6 headers).
+- `backend/middleware/request_size_limit.py` — `RequestSizeLimitMiddleware` (413 on exceed).
+- `backend/main.py` — CORS configuration with `cors_allowed_origins` / `cors_allowed_origin_regex`.
+- `backend/config.py` — `cors_allowed_origins`, `cors_allowed_origin_regex`, `security_headers_enabled` (default `True`), `hsts_enabled` (default `False`), `max_request_body_bytes` (default 1 MB).
+- Tests: `tests/test_security_hardening.py` (13 tests: 5 CORS, 4 headers, 2 size limit, 2 webhook).
+
+---
+
+### Task 10.2 — Data retention + tenant export ✅
+- [x] Task 10.2 — Updated: 2026-04-05
+
+**Objective**: Automated data retention pruning for old jobs, batches, and audit
+events; admin-only tenant data export endpoint with PII/secret redaction and
+row caps.
+
+**Scope**:
+- `backend/retention.py`:
+  - `prune_jobs(db, cutoff_dt)` — delete `optimization_jobs` older than cutoff.
+  - `prune_batches(db, cutoff_dt)` — delete `apply_batches` older than cutoff.
+  - `prune_audit(db, cutoff_dt)` — delete `audit_events` older than cutoff.
+  - `run_retention(db, settings, now_utc)` — orchestrate all three; emit
+    `maintenance.retention` audit event; return dict with cutoffs + pruned
+    counts. No-op when `RETENTION_ENABLED=false`.
+- `scripts/run_retention.py` — CLI entrypoint for scheduled retention
+  (`python scripts/run_retention.py`); exits 0 on success/disabled, 1 on error.
+- `GET /admin/tenant/{id}/export` — admin+ RBAC; 503 when auth disabled; returns
+  tenant data bundle (tenant info, users, jobs, batches, audit events); each
+  collection capped at 10,000 rows with truncation flags; redacts
+  `password_hash`, `api_username_enc`, `api_password_enc`, `encryption_key`,
+  `stripe_secret_key`, `stripe_webhook_secret`; emits `admin.tenant.exported`
+  audit event.
+- Config: `RETENTION_ENABLED` (default `True`), `RETENTION_JOBS_DAYS` (30),
+  `RETENTION_BATCHES_DAYS` (30), `RETENTION_AUDIT_DAYS` (90).
+
+**Acceptance criteria**:
+- ✅ `prune_jobs`, `prune_batches`, `prune_audit` delete only records older than
+  configured cutoff; leave newer records untouched.
+- ✅ `run_retention` orchestrates all three and emits maintenance audit event.
+- ✅ Retention is a no-op when `RETENTION_ENABLED=false`.
+- ✅ `scripts/run_retention.py` works as standalone CLI.
+- ✅ Export endpoint returns tenant data with no secrets/PII; capped at 10k rows.
+- ✅ Export is tenant-scoped (no cross-tenant data leakage).
+- ✅ Export emits `admin.tenant.exported` audit event.
+- ✅ Export returns 503 when auth disabled; 403 for non-admin roles; 404 for
+  unknown tenant.
+- ✅ 17 tests pass (7 retention + 10 export).
+
+**Tests**: `tests/test_retention_and_export.py` — 17 tests.
+
+**Evidence**:
+- `backend/retention.py` — `prune_jobs()`, `prune_batches()`, `prune_audit()`, `run_retention()`.
+- `scripts/run_retention.py` — CLI entrypoint for scheduled retention.
+- `backend/admin_api.py` — `GET /admin/tenant/{id}/export` (admin+, 503 auth-off, 10k cap, PII redaction, audit event).
+- `backend/config.py` — `retention_enabled`, `retention_jobs_days`, `retention_batches_days`, `retention_audit_days`.
+- Tests: `tests/test_retention_and_export.py` (17 tests: 7 retention, 10 export).
 
 ---
 
@@ -978,8 +1137,12 @@ points to Next.js frontend.
 | 8 | 8.1 — Next.js scaffold | ⛔ | No `frontend/` directory |
 | 8 | 8.2 — Price Optimizer (web) | ⛔ | Depends on 8.1 |
 | 8 | 8.3 — Deprecate Streamlit | ⛔ | Depends on 8.1 + 8.2 |
+| 9 | 9.1 — Observability hardening | ✅ | Request IDs, JSON logs, redaction, Prometheus metrics (18 tests) |
+| 9 | 9.2 — Operational safety | ✅ | Admin diagnostics/tenants endpoints, migration tests, ops docs (25 tests) |
+| 10 | 10.1 — Security hardening | ✅ | CORS, security headers, HSTS, request size limits (13 tests) |
+| 10 | 10.2 — Data retention + export | ✅ | Retention pruning, CLI script, tenant export endpoint (17 tests) |
 
-**Total**: 14 ✅ · 2 🟡 · 5 ⛔
+**Total**: 18 ✅ · 2 🟡 · 5 ⛔
 
 ---
 
