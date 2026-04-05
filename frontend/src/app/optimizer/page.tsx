@@ -127,7 +127,7 @@ function RiskView({ products }: { products: ProductRow[] }) {
 function MiniTable({ rows }: { rows: ProductRow[] }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-xs">
+      <table aria-label="Risk view products" className="w-full text-xs">
         <thead>
           <tr className="text-left text-gray-500 border-b">
             <th className="pb-1 pr-2">Product</th>
@@ -199,13 +199,13 @@ function OptimizerContent() {
     listCredentials(token).then((c) => {
       setCredentials(c);
       if (c.length > 0) setSelectedCred(c[0].id);
-    }).catch(() => {});
+    }).catch((e) => setError(e instanceof Error ? e.message : "Failed to load credentials"));
   }, [token]);
 
   /* Load brands when a credential is selected */
   useEffect(() => {
     if (!token || !selectedCred) return;
-    listBrands(token).then(setBrands).catch(() => {});
+    listBrands(token).then(setBrands).catch((e) => setError(e instanceof Error ? e.message : "Failed to load brands"));
   }, [token, selectedCred]);
 
   /* Poll job status */
@@ -347,8 +347,9 @@ function OptimizerContent() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
           {/* Credential selector */}
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Credential Profile</label>
+            <label htmlFor="opt-credential" className="block text-xs font-medium text-gray-500 mb-1">Credential Profile</label>
             <select
+              id="opt-credential"
               value={selectedCred}
               onChange={(e) => setSelectedCred(e.target.value)}
               className="w-full border rounded px-2 py-1.5 text-sm"
@@ -364,8 +365,9 @@ function OptimizerContent() {
 
           {/* Brand filter */}
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Brand Filter</label>
+            <label htmlFor="opt-brand" className="block text-xs font-medium text-gray-500 mb-1">Brand Filter</label>
             <select
+              id="opt-brand"
               multiple
               value={selectedBrands}
               onChange={(e) =>
@@ -383,10 +385,11 @@ function OptimizerContent() {
 
           {/* Min coverage */}
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">
+            <label htmlFor="opt-min-coverage" className="block text-xs font-medium text-gray-500 mb-1">
               Min Coverage Rate (%)
             </label>
             <input
+              id="opt-min-coverage"
               type="number"
               min={0}
               max={100}
@@ -398,8 +401,9 @@ function OptimizerContent() {
 
           {/* Beautify digit */}
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Beautify Digit</label>
+            <label htmlFor="opt-beautify" className="block text-xs font-medium text-gray-500 mb-1">Beautify Digit</label>
             <select
+              id="opt-beautify"
               value={beautifyDigit ?? ""}
               onChange={(e) =>
                 setBeautifyDigit(e.target.value === "" ? null : Number(e.target.value))
@@ -472,7 +476,7 @@ function OptimizerContent() {
       )}
 
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 rounded p-3 mb-4 text-sm">
+        <div role="alert" aria-live="polite" className="bg-red-50 border border-red-200 text-red-700 rounded p-3 mb-4 text-sm">
           {error}
         </div>
       )}
@@ -522,13 +526,17 @@ function OptimizerContent() {
           <div className="bg-white rounded-b-lg rounded-r-lg shadow p-4">
             {/* Search filter */}
             {(tab === "all" || tab === "adjusted") && (
-              <input
-                type="text"
-                placeholder="Filter by product number, name, or brand…"
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-                className="w-full border rounded px-3 py-2 text-sm mb-4"
-              />
+              <>
+                <label htmlFor="opt-product-filter" className="sr-only">Filter products</label>
+                <input
+                  id="opt-product-filter"
+                  type="text"
+                  placeholder="Filter by product number, name, or brand…"
+                  value={filter}
+                  onChange={(e) => setFilter(e.target.value)}
+                  className="w-full border rounded px-3 py-2 text-sm mb-4"
+                />
+              </>
             )}
 
             {/* Tab content */}
@@ -620,7 +628,7 @@ function ApplySection({
       </div>
 
       <div className="overflow-x-auto max-h-64">
-        <table className="w-full text-xs">
+        <table aria-label="Dry run price changes" className="w-full text-xs">
           <thead>
             <tr className="text-left text-gray-500 border-b">
               <th className="pb-1 pr-2">Product</th>
@@ -649,7 +657,7 @@ function ApplySection({
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 rounded p-3 text-sm">
+        <div role="alert" aria-live="polite" className="bg-red-50 border border-red-200 text-red-700 rounded p-3 text-sm">
           {error}
         </div>
       )}
@@ -659,13 +667,17 @@ function ApplySection({
           Type <strong>APPLY</strong> to confirm writing {dryRunResult.summary.total} price changes to DanDomain:
         </p>
         <div className="flex gap-3">
-          <input
-            type="text"
-            value={confirmText}
-            onChange={(e) => setConfirmText(e.target.value)}
-            placeholder="Type APPLY"
-            className="border rounded px-3 py-1.5 text-sm w-32"
-          />
+          <div>
+            <label htmlFor="apply-confirm" className="sr-only">Confirmation text</label>
+            <input
+              id="apply-confirm"
+              type="text"
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder="Type APPLY"
+              className="border rounded px-3 py-1.5 text-sm w-32"
+            />
+          </div>
           <button
             onClick={onApply}
             disabled={confirmText !== "APPLY" || applyLoading}
@@ -688,7 +700,7 @@ function ProductTable({ rows }: { rows: ProductRow[] }) {
 
   return (
     <div className="overflow-x-auto max-h-[500px]">
-      <table className="w-full text-xs">
+      <table aria-label="Optimised products" className="w-full text-xs">
         <thead className="sticky top-0 bg-white">
           <tr className="text-left text-gray-500 border-b">
             <th className="pb-1 pr-2">Product #</th>

@@ -1158,7 +1158,7 @@ row caps.
 ## Phase 11 — Frontend Resilience & Error Handling
 
 ### Task 11.1 — React error boundaries + global error/not-found pages
-- [ ] Task 11.1
+- [x] Task 11.1
 
 **Objective**: Prevent white-screen crashes by adding React error boundaries and
 Next.js App Router error/not-found handlers, and fix silent error swallowing on
@@ -1181,17 +1181,17 @@ Dashboard and History pages so users always see feedback when something fails.
 - Ensure all pages surface API errors visibly.
 
 **Acceptance criteria**:
-- [ ] `frontend/src/app/error.tsx` exists and renders error UI with reset action.
-- [ ] `frontend/src/app/not-found.tsx` exists and renders 404 UI.
-- [ ] `ErrorBoundary` component wraps app content in `providers.tsx`.
-- [ ] Dashboard page shows red error banner on API failure (not silent).
-- [ ] History page shows red error banner on API failure (not silent).
-- [ ] `npm run build` succeeds with zero errors.
+- [x] `frontend/src/app/error.tsx` exists and renders error UI with reset action.
+- [x] `frontend/src/app/not-found.tsx` exists and renders 404 UI.
+- [x] `ErrorBoundary` component wraps app content in `providers.tsx`.
+- [x] Dashboard page shows red error banner on API failure (not silent).
+- [x] History page shows red error banner on API failure (not silent).
+- [x] `npm run build` succeeds with zero errors.
 
 ---
 
 ### Task 11.2 — Accessibility improvements (semantic HTML + ARIA)
-- [ ] Task 11.2
+- [x] Task 11.2
 
 **Objective**: Bring the frontend to baseline WCAG 2.1 Level A compliance by
 adding semantic HTML elements, ARIA labels, and focus management.
@@ -1211,13 +1211,13 @@ adding semantic HTML elements, ARIA labels, and focus management.
 - Skip-to-content link at top of `layout.tsx`.
 
 **Acceptance criteria**:
-- [ ] `<nav>` wraps navbar; `<main>` wraps page content.
-- [ ] All form inputs have associated `<label>` elements.
-- [ ] All tables have `aria-label` or `<caption>`.
-- [ ] Status/error banners have `aria-live="polite"`.
-- [ ] Visible focus indicators on all interactive elements.
-- [ ] Skip-to-content link present.
-- [ ] `npm run build` succeeds.
+- [x] `<nav>` wraps navbar; `<main>` wraps page content.
+- [x] All form inputs have associated `<label>` elements.
+- [x] All tables have `aria-label` or `<caption>`.
+- [x] Status/error banners have `aria-live="polite"`.
+- [x] Visible focus indicators on all interactive elements.
+- [x] Skip-to-content link present.
+- [x] `npm run build` succeeds.
 
 ---
 
