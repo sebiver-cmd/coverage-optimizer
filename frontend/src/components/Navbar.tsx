@@ -1,0 +1,51 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useAuth } from "@/lib/auth-context";
+
+const NAV_ITEMS = [
+  { href: "/dashboard", label: "Dashboard" },
+  { href: "/optimizer", label: "Price Optimizer" },
+  { href: "/history", label: "History" },
+  { href: "/billing", label: "Billing" },
+];
+
+export default function Navbar() {
+  const { user, logout } = useAuth();
+  const path = usePathname();
+
+  if (!user) return null;
+
+  return (
+    <nav className="bg-gray-900 text-white px-6 py-3 flex items-center gap-6 text-sm">
+      <Link href="/dashboard" className="font-bold text-lg tracking-tight mr-4">
+        SB‑Optima
+      </Link>
+
+      {NAV_ITEMS.map((n) => (
+        <Link
+          key={n.href}
+          href={n.href}
+          className={`hover:text-blue-300 transition-colors ${
+            path.startsWith(n.href) ? "text-blue-400 font-semibold" : "text-gray-300"
+          }`}
+        >
+          {n.label}
+        </Link>
+      ))}
+
+      <div className="ml-auto flex items-center gap-4">
+        <span className="text-gray-400 text-xs">
+          {user.email} ({user.role})
+        </span>
+        <button
+          onClick={logout}
+          className="text-gray-400 hover:text-white text-xs underline"
+        >
+          Sign out
+        </button>
+      </div>
+    </nav>
+  );
+}

@@ -300,7 +300,7 @@ class Settings(BaseSettings):
         # cors_allowed_origins takes precedence; cors_origins is legacy fallback
         origins = [o.strip() for o in raw.split(",") if o.strip()]
         if not origins and self.sboptima_env == "dev":
-            origins = ["http://localhost:8501"]
+            origins = ["http://localhost:8501", "http://localhost:3000"]
         return origins
 
     def get_jwt_secret(self) -> str:
