@@ -40,7 +40,7 @@ def _get_fernet() -> Fernet:
     except Exception as exc:
         raise ValueError(
             "ENCRYPTION_KEY is not a valid Fernet key. "
-            "Generate one with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
+            "Generate one with: python3 -c \"import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())\""
         ) from exc
 
 

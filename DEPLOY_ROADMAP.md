@@ -214,7 +214,8 @@ In dev mode it uses defaults, but in production these **must** be set.
 
 2. **Generate a Fernet encryption key** (used to encrypt stored credentials):
    ```bash
-   python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   # No external packages needed — uses Python stdlib only:
+   python3 -c "import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"
    ```
    Copy the output — this is your `ENCRYPTION_KEY`.
 
