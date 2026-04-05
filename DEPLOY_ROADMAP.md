@@ -25,6 +25,9 @@ Everything below is built, tested, and working locally:
 
 ## Phase 14 — Fix Docker Compose for Production
 
+> Phases 0–13 (the application code) are complete — see `SAAS_ROADMAP.md`.
+> This roadmap picks up at Phase 14 with infrastructure and deployment.
+>
 > These are small code changes to the repo that are needed before deploying.
 
 ### Task 14.1 — Add the Arq Worker to Docker Compose
@@ -627,7 +630,7 @@ and Fly.io auto-deploy on push to `main`.
 | `REDIS_URL` | ✅ | `redis://host:6379/0` |
 | `JWT_SECRET` | ✅ | (generated in Task 16.1) |
 | `ENCRYPTION_KEY` | ✅ | (generated in Task 16.1) |
-| `CORS_ALLOWED_ORIGINS` | ✅ | `https://sboptima.dk,https://www.sboptima.dk,https://sboptima.com` |
+| `CORS_ALLOWED_ORIGINS` | ✅ | `https://sboptima.dk,https://www.sboptima.dk,https://sboptima.com,https://www.sboptima.com` |
 | `SECURITY_HEADERS_ENABLED` | ✅ | `true` |
 | `HSTS_ENABLED` | ✅ | `true` |
 | `NEXT_PUBLIC_API_URL` | ✅ | `https://api.sboptima.dk` |
