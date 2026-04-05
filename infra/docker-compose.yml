@@ -60,12 +60,13 @@ services:
       dockerfile: infra/Dockerfile.frontend
       args:
         # Baked into the client bundle at build time (NEXT_PUBLIC_* vars).
-        NEXT_PUBLIC_API_URL: "https://api.sboptima.dk"
+        # Override by setting NEXT_PUBLIC_API_URL in the host environment or .env.
+        NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-https://api.sboptima.dk}"
     ports:
       - "3000:3000"
     environment:
-      # Also set at runtime for any SSR/server-side usage.
-      - NEXT_PUBLIC_API_URL=https://api.sboptima.dk
+      # Also set at runtime for SSR usage; mirrors the build arg above.
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-https://api.sboptima.dk}
     depends_on:
       api:
         condition: service_healthy
