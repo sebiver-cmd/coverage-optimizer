@@ -50,9 +50,11 @@ class TestDefaults:
 
     def test_default_cors_origins(self, monkeypatch):
         monkeypatch.delenv("CORS_ORIGINS", raising=False)
+        monkeypatch.delenv("CORS_ALLOWED_ORIGINS", raising=False)
         s = Settings()
         assert s.cors_origins == ""
-        assert s.get_cors_origins_list() == []
+        # In dev mode (default), empty origins fall back to localhost:8501
+        assert s.get_cors_origins_list() == ["http://localhost:8501"]
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +104,15 @@ class TestCorsOriginsParsing:
 
     def test_empty_string(self, monkeypatch):
         monkeypatch.setenv("CORS_ORIGINS", "")
+        monkeypatch.delenv("CORS_ALLOWED_ORIGINS", raising=False)
+        s = Settings()
+        # In dev mode (default), empty origins fall back to localhost:8501
+        assert s.get_cors_origins_list() == ["http://localhost:8501"]
+
+    def test_empty_string_prod(self, monkeypatch):
+        monkeypatch.setenv("CORS_ORIGINS", "")
+        monkeypatch.delenv("CORS_ALLOWED_ORIGINS", raising=False)
+        monkeypatch.setenv("SBOPTIMA_ENV", "prod")
         s = Settings()
         assert s.get_cors_origins_list() == []
 
