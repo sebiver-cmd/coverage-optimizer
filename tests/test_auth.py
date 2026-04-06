@@ -523,3 +523,115 @@ class TestAuthConfig:
         get_settings.cache_clear()
         settings = get_settings()
         assert settings.jwt_access_token_exp_minutes == 60
+
+
+# ===========================================================================
+# Password byte-length validation (bcrypt 72-byte limit)
+# ===========================================================================
+
+
+class TestPasswordByteLimit:
+    """Ensure passwords longer than 72 UTF-8 bytes are rejected with 422, not 500."""
+
+    # A string of 73 ASCII characters is also 73 bytes.
+    _LONG_ASCII_PASSWORD = "A" * 73
+    # A string using 2-byte UTF-8 characters that exceeds 72 bytes with fewer chars.
+    # "é" is 2 bytes in UTF-8, so 37 × "é" = 74 bytes.
+    _LONG_UNICODE_PASSWORD = "é" * 37
+
+    def test_signup_over_72_byte_ascii_password_returns_422(self, client: TestClient):
+        resp = client.post(
+            "/auth/signup",
+            json={
+                "tenant_name": "ByteTest",
+                "email": "bytetest@example.com",
+                "password": self._LONG_ASCII_PASSWORD,
+            },
+        )
+        assert resp.status_code == 422
+
+    def test_signup_over_72_byte_unicode_password_returns_422(self, client: TestClient):
+        resp = client.post(
+            "/auth/signup",
+            json={
+                "tenant_name": "UnicodeTest",
+                "email": "unicode@example.com",
+                "password": self._LONG_UNICODE_PASSWORD,
+            },
+        )
+        assert resp.status_code == 422
+
+    def test_signup_exactly_72_byte_password_succeeds(self, client: TestClient):
+        """A password of exactly 72 ASCII bytes is within the limit."""
+        password_exactly_72_bytes = "A" * 72  # 72 ASCII chars = 72 UTF-8 bytes
+        resp = client.post(
+            "/auth/signup",
+            json={
+                "tenant_name": "Boundary72",
+                "email": "boundary72@example.com",
+                "password": password_exactly_72_bytes,
+            },
+        )
+        assert resp.status_code == 201
+
+    def test_signup_normal_password_returns_201(self, client: TestClient):
+        """A standard short password produces a successful signup."""
+        resp = client.post(
+            "/auth/signup",
+            json={
+                "tenant_name": "Normal",
+                "email": "normal@example.com",
+                "password": "Str0ngP@ss!",
+            },
+        )
+        assert resp.status_code == 201
+        assert "access_token" in resp.json()
+
+    def test_login_over_72_byte_password_returns_401(self, client: TestClient, db_session: Session):
+        """A >72-byte password on login must return 401 (invalid credentials), not 422 or 500.
+
+        Returning 422 for login would leak information about server-side
+        byte-length validation.  Login should treat any unverifiable password
+        as plain invalid credentials.
+        """
+        _seed_user(db_session, email="longpwd@example.com", password="ValidPass1!")
+        resp = client.post(
+            "/auth/login",
+            json={"email": "longpwd@example.com", "password": self._LONG_ASCII_PASSWORD},
+        )
+        assert resp.status_code == 401
+
+    def test_error_response_does_not_echo_password(self, client: TestClient):
+        """The 422 error body must not contain the submitted password."""
+        resp = client.post(
+            "/auth/signup",
+            json={
+                "tenant_name": "NoLeak",
+                "email": "noleak@example.com",
+                "password": self._LONG_ASCII_PASSWORD,
+            },
+        )
+        assert resp.status_code == 422
+        assert self._LONG_ASCII_PASSWORD not in resp.text
+
+    def test_non_password_422_includes_input(self, client: TestClient):
+        """Non-sensitive field validation errors still include ``input`` for debuggability.
+
+        The RequestValidationError handler only strips ``input`` for the
+        ``password`` field; other fields keep their input so developers can
+        identify what value triggered the error.
+        """
+        resp = client.post(
+            "/auth/signup",
+            json={
+                "tenant_name": "",  # too short — min_length=1
+                "email": "ok@example.com",
+                "password": "Str0ngP@ss!",
+            },
+        )
+        assert resp.status_code == 422
+        body = resp.json()
+        errors = body["detail"]
+        tenant_errors = [e for e in errors if "tenant_name" in e.get("loc", [])]
+        assert tenant_errors, "expected a validation error for tenant_name"
+        assert "input" in tenant_errors[0]  # non-sensitive field keeps input

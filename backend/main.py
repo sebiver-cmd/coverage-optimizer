@@ -14,7 +14,9 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from dandomain_api import DanDomainClient, DanDomainAPIError
@@ -97,6 +99,48 @@ app = FastAPI(
     version="0.1.0",
     lifespan=_lifespan,
 )
+
+
+# Fields whose ``input`` value must be stripped from 422 validation-error
+# responses to prevent plaintext credentials appearing in API responses.
+# Add names here if new sensitive fields are introduced (e.g. ``new_password``).
+_SENSITIVE_VALIDATION_FIELDS = {"password"}
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_handler(request, exc: RequestValidationError) -> JSONResponse:
+    """Return 422 validation errors, stripping sensitive input values.
+
+    Pydantic v2 includes the raw ``input`` value in each error dict by
+    default.  For ``password`` fields this would leak plaintext credentials
+    in the response body.  We strip ``input`` only for errors whose ``loc``
+    contains a name listed in :data:`_SENSITIVE_VALIDATION_FIELDS`;
+    non-sensitive fields (e.g. ``tenant_name``, ``email``) retain their
+    ``input`` value so that client developers can still correlate the error
+    to the submitted value.
+
+    We strip ``url`` from all errors globally — it is a Pydantic-docs link
+    with no functional value for API clients.
+
+    The ``ctx`` dict may contain non-serialisable exception objects, so we
+    convert its values to strings.
+    """
+    errors = []
+    for err in exc.errors():
+        loc = err.get("loc", ())
+        is_sensitive = any(part in _SENSITIVE_VALIDATION_FIELDS for part in loc)
+        safe_err = {}
+        for k, v in err.items():
+            if k == "url":
+                continue
+            if k == "input" and is_sensitive:
+                continue
+            if k == "ctx" and isinstance(v, dict):
+                safe_err[k] = {ck: str(cv) for ck, cv in v.items()}
+            else:
+                safe_err[k] = v
+        errors.append(safe_err)
+    return JSONResponse(status_code=422, content={"detail": errors})
 
 app.include_router(optimizer_router)
 app.include_router(brands_router)
